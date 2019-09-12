@@ -45,10 +45,10 @@ mod node_id;
 
 use crate::enr_keypair::{EnrKeypair, EnrPublicKey};
 use base64;
-use indexmap::IndexMap;
 use libp2p_core::identity::{ed25519, Keypair, PublicKey};
 use log::debug;
 use rlp::{Decodable, DecoderError, Encodable, Rlp, RlpStream};
+use std::collections::BTreeMap;
 
 #[cfg(feature = "serde")]
 use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
@@ -76,9 +76,9 @@ pub struct Enr {
     /// The `NodeId` of the ENR record.
     node_id: NodeId,
 
-    /// Key-value contents of the ENR. An IndexMap is used to preserve the order of keys, which is
+    /// Key-value contents of the ENR. A BTreeMap is used to get the keys in sorted order, which is
     /// important for verifying the signature of the ENR.
-    content: IndexMap<String, Vec<u8>>,
+    content: BTreeMap<String, Vec<u8>>,
 
     /// The signature of the ENR record, stored as bytes.
     signature: Vec<u8>,
@@ -498,7 +498,7 @@ pub struct EnrBuilder {
     seq: u64,
 
     /// The key-value pairs for the ENR record.
-    content: IndexMap<String, Vec<u8>>,
+    content: BTreeMap<String, Vec<u8>>,
 }
 
 impl EnrBuilder {
@@ -506,7 +506,7 @@ impl EnrBuilder {
     pub fn new() -> Self {
         EnrBuilder {
             seq: 1,
-            content: IndexMap::new(),
+            content: BTreeMap::new(),
         }
     }
 
@@ -656,7 +656,7 @@ impl Decodable for Enr {
         seq[8 - seq_bytes.len()..].copy_from_slice(&seq_bytes);
         let seq = u64::from_be_bytes(seq);
 
-        let mut content = IndexMap::new();
+        let mut content = BTreeMap::new();
         for _ in 0..decoded_list.len() / 2 {
             let key = decoded_list.remove(0);
             let value = decoded_list.remove(0);
