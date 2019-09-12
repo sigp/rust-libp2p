@@ -280,10 +280,11 @@ impl Enr {
         s.drain()
     }
 
-    /// Provides the URL-safe base64 encoded "text" version of the ENR.
+    /// Provides the URL-safe base64 encoded "text" version of the ENR prefixed by "enr:".
     pub fn to_base64(&self) -> String {
         let cloned_self = self.clone();
-        base64::encode_config(&cloned_self.encode(), base64::URL_SAFE)
+        let hex = base64::encode_config(&cloned_self.encode(), base64::URL_SAFE);
+        format!("enr:{}", hex)
     }
 
     /// Returns the current size of the ENR.
@@ -456,7 +457,7 @@ impl std::fmt::Display for Enr {
 
 impl std::fmt::Debug for Enr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "ENR: {}", self.to_base64())
+        write!(f, "{}", self.to_base64())
     }
 }
 
@@ -465,6 +466,7 @@ impl FromStr for Enr {
     type Err = String;
 
     fn from_str(base64_string: &str) -> Result<Self, Self::Err> {
+        let base64_string = base64_string.split_at(4).1;
         let bytes = base64::decode_config(base64_string, base64::URL_SAFE)
             .map_err(|_| "Invalid base64 encoding")?;
         rlp::decode::<Enr>(&bytes).map_err(|e| format!("Invalid ENR: {:?}", e))
