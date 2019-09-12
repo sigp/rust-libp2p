@@ -15,7 +15,6 @@ bs58 = "0.2.2"
 base64 = "0.10.1"
 rand = "0.6.5"
 hex = "0.3.2"
-indexmap = "1.0.2"
 serde = { version = "1.0.93", optional = true }
 
 [dev-dependencies]
