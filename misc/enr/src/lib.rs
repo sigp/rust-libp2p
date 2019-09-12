@@ -102,8 +102,8 @@ impl Enr {
         self.seq
     }
 
-    /// Returns a list of multiaddrs if the ENR has an `ip` and either a `tcp` or `udp` key. The
-    /// vector remains empty if these fields are not defined.
+    /// Returns a list of multiaddrs if the ENR has an `ip` and either a `tcp` or `udp` key **or** an `ip6` and either a `tcp6` or `udp6`.
+    /// The vector remains empty if these fields are not defined.
     pub fn multiaddr(&self) -> Vec<Multiaddr> {
         let mut multiaddrs: Vec<Multiaddr> = Vec::new();
         if let Some(ip) = self.ip() {
@@ -119,10 +119,24 @@ impl Enr {
                 multiaddrs.push(multiaddr);
             }
         }
+        if let Some(ip6) = self.ip6() {
+            if let Some(udp6) = self.udp6() {
+                let mut multiaddr: Multiaddr = ip6.into();
+                multiaddr.push(Protocol::Udp(udp6));
+                multiaddrs.push(multiaddr);
+            }
+
+            if let Some(tcp6) = self.tcp6() {
+                let mut multiaddr: Multiaddr = ip6.into();
+                multiaddr.push(Protocol::Tcp(tcp6));
+                multiaddrs.push(multiaddr);
+            }
+        }
         multiaddrs
     }
 
-    /// Returns the IP address of the ENR record if it is defined.
+    /// Returns the IPv4 address of the ENR record if it is defined.
+    /// TODO: check if need to return Ipv4Addr instead of IpAddr.
     pub fn ip(&self) -> Option<IpAddr> {
         if let Some(ip_bytes) = self.content.get("ip") {
             return match ip_bytes.len() {
@@ -131,6 +145,17 @@ impl Enr {
                     ip.copy_from_slice(ip_bytes);
                     Some(IpAddr::from(ip))
                 }
+                _ => None,
+            };
+        }
+        None
+    }
+
+    /// Returns the IPv6 address of the ENR record if it is defined.
+    /// TODO: check if need to return Ipv6Addr instead of IpAddr.
+    pub fn ip6(&self) -> Option<IpAddr> {
+        if let Some(ip_bytes) = self.content.get("ip6") {
+            return match ip_bytes.len() {
                 16 => {
                     let mut ip = [0u8; 16];
                     ip.copy_from_slice(ip_bytes);
@@ -162,9 +187,33 @@ impl Enr {
         None
     }
 
+    /// Returns the IPv6-specific TCP port of ENR record if it is defined.
+    pub fn tcp6(&self) -> Option<u16> {
+        if let Some(tcp_bytes) = self.content.get("tcp6") {
+            if tcp_bytes.len() <= 2 {
+                let mut tcp = [0u8; 2];
+                tcp[2 - tcp_bytes.len()..].copy_from_slice(tcp_bytes);
+                return Some(u16::from_be_bytes(tcp));
+            }
+        }
+        None
+    }
+
     /// Returns the UDP port of ENR record if it is defined.
     pub fn udp(&self) -> Option<u16> {
         if let Some(udp_bytes) = self.content.get("udp") {
+            if udp_bytes.len() <= 2 {
+                let mut udp = [0u8; 2];
+                udp[2 - udp_bytes.len()..].copy_from_slice(udp_bytes);
+                return Some(u16::from_be_bytes(udp));
+            }
+        }
+        None
+    }
+
+    /// Returns the IPv6-specific UDP port of ENR record if it is defined.
+    pub fn udp6(&self) -> Option<u16> {
+        if let Some(udp_bytes) = self.content.get("udp6") {
             if udp_bytes.len() <= 2 {
                 let mut udp = [0u8; 2];
                 udp[2 - udp_bytes.len()..].copy_from_slice(udp_bytes);
@@ -180,6 +229,12 @@ impl Enr {
         if let Some(ip) = self.ip() {
             if let Some(udp) = self.udp() {
                 return Some(SocketAddr::new(ip, udp));
+            }
+        }
+        // TODO: check order of preference for Ipv6 and Ipv4.
+        if let Some(ip6) = self.ip6() {
+            if let Some(udp6) = self.udp6() {
+                return Some(SocketAddr::new(ip6, udp6));
             }
         }
         None
@@ -297,19 +352,26 @@ impl Enr {
     }
 
     pub fn set_ip(&mut self, ip: IpAddr, keypair: &Keypair) -> Result<bool, EnrError> {
-        let ip_bytes = match ip {
-            IpAddr::V4(addr) => addr.octets().to_vec(),
-            IpAddr::V6(addr) => addr.octets().to_vec(),
-        };
-        self.add_key("ip", ip_bytes, keypair)
+        match ip {
+            IpAddr::V4(addr) => self.add_key("ip", addr.octets().to_vec(), keypair),
+            IpAddr::V6(addr) => self.add_key("ip6", addr.octets().to_vec(), keypair),
+        }
     }
 
     pub fn set_udp(&mut self, udp: u16, keypair: &Keypair) -> Result<bool, EnrError> {
         self.add_key("udp", udp.to_be_bytes().to_vec(), keypair)
     }
 
+    pub fn set_udp6(&mut self, udp: u16, keypair: &Keypair) -> Result<bool, EnrError> {
+        self.add_key("udp6", udp.to_be_bytes().to_vec(), keypair)
+    }
+
     pub fn set_tcp(&mut self, tcp: u16, keypair: &Keypair) -> Result<bool, EnrError> {
         self.add_key("tcp", tcp.to_be_bytes().to_vec(), keypair)
+    }
+
+    pub fn set_tcp6(&mut self, tcp: u16, keypair: &Keypair) -> Result<bool, EnrError> {
+        self.add_key("tcp6", tcp.to_be_bytes().to_vec(), keypair)
     }
 
     /// Sets the ip and udp port in a single update with a single increment in sequence number.
@@ -318,14 +380,18 @@ impl Enr {
         socket: SocketAddr,
         keypair: &Keypair,
     ) -> Result<bool, EnrError> {
-        let ip_bytes = match socket.ip() {
-            IpAddr::V4(addr) => addr.octets().to_vec(),
-            IpAddr::V6(addr) => addr.octets().to_vec(),
+        match socket.ip() {
+            IpAddr::V4(addr) => {
+                self.content.insert("ip".into(), addr.octets().to_vec());
+                self.content
+                    .insert("udp".into(), socket.port().to_be_bytes().to_vec());
+            }
+            IpAddr::V6(addr) => {
+                self.content.insert("ip6".into(), addr.octets().to_vec());
+                self.content
+                    .insert("udp6".into(), socket.port().to_be_bytes().to_vec());
+            }
         };
-
-        self.content.insert("ip".into(), ip_bytes);
-        self.content
-            .insert("udp".into(), socket.port().to_be_bytes().to_vec());
 
         let enr_keypair = EnrKeypair::from(keypair.clone());
         let public_key = enr_keypair.public();
@@ -458,13 +524,14 @@ impl EnrBuilder {
 
     /// Adds an `ip` field to the `ENRBuilder`.
     pub fn ip(&mut self, ip: IpAddr) -> &mut Self {
-        let key = String::from("ip");
         match ip {
             IpAddr::V4(addr) => {
-                self.content.insert(key, addr.octets().to_vec());
+                self.content
+                    .insert(String::from("ip"), addr.octets().to_vec());
             }
             IpAddr::V6(addr) => {
-                self.content.insert(key, addr.octets().to_vec());
+                self.content
+                    .insert(String::from("ip6"), addr.octets().to_vec());
             }
         }
         self
@@ -483,10 +550,24 @@ impl EnrBuilder {
         self
     }
 
+    /// Adds a `tcp6` field to the `ENRBuilder`.
+    pub fn tcp6(&mut self, tcp: u16) -> &mut Self {
+        self.content
+            .insert("tcp6".into(), tcp.to_be_bytes().to_vec());
+        self
+    }
+
     /// Adds a `udp` field to the `ENRBuilder`.
     pub fn udp(&mut self, udp: u16) -> &mut Self {
         self.content
             .insert("udp".into(), udp.to_be_bytes().to_vec());
+        self
+    }
+
+    /// Adds a `udp` field to the `ENRBuilder`.
+    pub fn udp6(&mut self, udp: u16) -> &mut Self {
+        self.content
+            .insert("udp6".into(), udp.to_be_bytes().to_vec());
         self
     }
 
