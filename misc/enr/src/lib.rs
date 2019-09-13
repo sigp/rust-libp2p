@@ -136,7 +136,6 @@ impl Enr {
     }
 
     /// Returns the IPv4 address of the ENR record if it is defined.
-    /// TODO: check if need to return Ipv4Addr instead of IpAddr.
     pub fn ip(&self) -> Option<Ipv4Addr> {
         if let Some(ip_bytes) = self.content.get("ip") {
             return match ip_bytes.len() {
@@ -152,7 +151,6 @@ impl Enr {
     }
 
     /// Returns the IPv6 address of the ENR record if it is defined.
-    /// TODO: check if need to return Ipv6Addr instead of IpAddr.
     pub fn ip6(&self) -> Option<Ipv6Addr> {
         if let Some(ip_bytes) = self.content.get("ip6") {
             return match ip_bytes.len() {
