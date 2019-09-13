@@ -662,19 +662,18 @@ impl Decodable for Enr {
         let seq = u64::from_be_bytes(seq);
 
         let mut content = BTreeMap::new();
-        let mut keys = Vec::new();
+        let mut prev: Option<String> = None;
         for _ in 0..decoded_list.len() / 2 {
             let key = decoded_list.remove(0);
             let value = decoded_list.remove(0);
 
             let key = String::from_utf8_lossy(&key);
-            keys.push(key.to_string());
+            // TODO: add tests for this error case
+            if prev.is_some() && prev >= Some(key.to_string()) {
+                return Err(DecoderError::Custom("Unsorted keys"));
+            }
+            prev = Some(key.to_string());
             content.insert(key.to_string(), value);
-        }
-        // Keys of content map need to be in sorted order
-        // TODO: add tests for this error case
-        if !keys.windows(2).all(|w| w[0] <= w[1]) {
-            return Err(DecoderError::Custom("Unsorted keys"));
         }
 
         // verify we know the signature type
