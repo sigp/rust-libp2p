@@ -52,7 +52,7 @@ use std::collections::BTreeMap;
 
 #[cfg(feature = "serde")]
 use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
 use libp2p_core::{
@@ -137,13 +137,13 @@ impl Enr {
 
     /// Returns the IPv4 address of the ENR record if it is defined.
     /// TODO: check if need to return Ipv4Addr instead of IpAddr.
-    pub fn ip(&self) -> Option<IpAddr> {
+    pub fn ip(&self) -> Option<Ipv4Addr> {
         if let Some(ip_bytes) = self.content.get("ip") {
             return match ip_bytes.len() {
                 4 => {
                     let mut ip = [0u8; 4];
                     ip.copy_from_slice(ip_bytes);
-                    Some(IpAddr::from(ip))
+                    Some(Ipv4Addr::from(ip))
                 }
                 _ => None,
             };
@@ -153,13 +153,13 @@ impl Enr {
 
     /// Returns the IPv6 address of the ENR record if it is defined.
     /// TODO: check if need to return Ipv6Addr instead of IpAddr.
-    pub fn ip6(&self) -> Option<IpAddr> {
+    pub fn ip6(&self) -> Option<Ipv6Addr> {
         if let Some(ip_bytes) = self.content.get("ip6") {
             return match ip_bytes.len() {
                 16 => {
                     let mut ip = [0u8; 16];
                     ip.copy_from_slice(ip_bytes);
-                    Some(IpAddr::from(ip))
+                    Some(Ipv6Addr::from(ip))
                 }
                 _ => None,
             };
@@ -228,13 +228,12 @@ impl Enr {
     pub fn udp_socket(&self) -> Option<SocketAddr> {
         if let Some(ip) = self.ip() {
             if let Some(udp) = self.udp() {
-                return Some(SocketAddr::new(ip, udp));
+                return Some(SocketAddr::new(IpAddr::V4(ip), udp));
             }
         }
-        // TODO: check order of preference for Ipv6 and Ipv4.
         if let Some(ip6) = self.ip6() {
             if let Some(udp6) = self.udp6() {
-                return Some(SocketAddr::new(ip6, udp6));
+                return Some(SocketAddr::new(IpAddr::V6(ip6), udp6));
             }
         }
         None
@@ -466,7 +465,13 @@ impl FromStr for Enr {
     type Err = String;
 
     fn from_str(base64_string: &str) -> Result<Self, Self::Err> {
-        let base64_string = base64_string.split_at(4).1;
+        if base64_string.len() < 4 {
+            return Err("Invalid ENR string".to_string());
+        }
+        let (prefix, base64_string) = base64_string.split_at(4);
+        if prefix != "enr:" {
+            return Err("String is not ENR prefixed".to_string());
+        }
         let bytes = base64::decode_config(base64_string, base64::URL_SAFE)
             .map_err(|_| "Invalid base64 encoding")?;
         rlp::decode::<Enr>(&bytes).map_err(|e| format!("Invalid ENR: {:?}", e))
@@ -659,12 +664,19 @@ impl Decodable for Enr {
         let seq = u64::from_be_bytes(seq);
 
         let mut content = BTreeMap::new();
+        let mut keys = Vec::new();
         for _ in 0..decoded_list.len() / 2 {
             let key = decoded_list.remove(0);
             let value = decoded_list.remove(0);
 
             let key = String::from_utf8_lossy(&key);
+            keys.push(key.to_string());
             content.insert(key.to_string(), value);
+        }
+        // Keys of content map need to be in sorted order
+        // TODO: add tests for this error case
+        if !keys.windows(2).all(|w| w[0] <= w[1]) {
+            return Err(DecoderError::Custom("Unsorted keys"));
         }
 
         // verify we know the signature type
@@ -733,7 +745,7 @@ mod tests {
             _ => None,
         };
 
-        assert_eq!(enr.ip(), Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+        assert_eq!(enr.ip(), Some(Ipv4Addr::new(127, 0, 0, 1)));
         assert_eq!(enr.id(), Some(String::from("v4")));
         assert_eq!(enr.udp(), Some(30303));
         assert_eq!(enr.tcp(), None);
@@ -756,7 +768,7 @@ mod tests {
             _ => None,
         };
 
-        assert_eq!(enr.ip(), Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+        assert_eq!(enr.ip(), Some(Ipv4Addr::new(127, 0, 0, 1)));
         assert_eq!(enr.ip6(), None);
         assert_eq!(enr.id(), Some(String::from("v4")));
         assert_eq!(enr.udp(), Some(30303));
