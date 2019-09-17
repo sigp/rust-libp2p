@@ -247,6 +247,10 @@ impl<TSubstream> Discv5<TSubstream> {
                     .send_response(src, &node_id, response)
                     .map_err(|e| warn!("Failed to send rpc request. Error: {:?}", e));
             }
+            rpc::Request::Ticket { topic } => unimplemented!(),
+            rpc::Request::RegisterTopic { ticket } => unimplemented!(),
+            rpc::Request::TopicQuery { topic } => unimplemented!(),
+
             _ => {} //TODO: Implement all RPC methods
         }
     }
@@ -328,6 +332,8 @@ impl<TSubstream> Discv5<TSubstream> {
                         }
                     }
                 }
+                rpc::Response::Ticket { ticket, wait_time } => unimplemented!(),
+                rpc::Response::RegisterTopic { registered } => unimplemented!(),
                 _ => {} //TODO: Implement all RPC methods
             }
         } else {
