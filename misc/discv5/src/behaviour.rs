@@ -17,6 +17,7 @@ use crate::query::{Query, QueryConfig, QueryState, ReturnPeer};
 use crate::rpc;
 use crate::service::MAX_PACKET_SIZE;
 use crate::session_service::{SessionEvent, SessionService};
+use crate::topic::GlobalTopicQueue;
 use enr::{Enr, NodeId};
 use fnv::FnvHashMap;
 use futures::prelude::*;
@@ -87,6 +88,9 @@ pub struct Discv5<TSubstream> {
     /// The time between pings to ensure connectivity amongst connected nodes.
     ping_delay: Duration,
 
+    /// Storage of topic advertisements and tickets.
+    topics:  GlobalTopicQueue<PeerId>, // PeerId or NodeId?
+
     /// Marker to pin the generics.
     marker: PhantomData<TSubstream>,
 }
@@ -118,6 +122,7 @@ impl<TSubstream> Discv5<TSubstream> {
             query_config,
             service,
             ping_delay: Duration::from_secs(300),
+            topics: GlobalTopicQueue::new(),
             marker: PhantomData,
         })
     }
