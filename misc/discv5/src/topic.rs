@@ -9,15 +9,6 @@ const MAX_ENTRIES: usize = 1000;
 const MAX_ENTRIES_PER_TOPIC: usize = 50;
 
 pub type TopicHash = [u8; 32];
-pub type Topic = String;
-
-fn hash256_to_fixed_array(s: &str) -> [u8; 32] {
-    let mut hasher = Keccak256::new();
-    hasher.input(s);
-    let mut result: [u8; 32] = std::default::Default::default();
-    result.clone_from_slice(hasher.result().as_slice());
-    result
-}
 
 /// Representation of a ticket issued to peer for topic registration.
 #[derive(Debug, Clone)]
@@ -45,32 +36,28 @@ impl<TPeerId> Ticket<TPeerId> {
 }
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord, Clone)]
-pub struct TopicInfo {
-    /// Topic name.
-    topic: Topic,
-    /// Hash of topic for topic search.
-    hash: TopicHash,
-}
-impl TopicInfo {
-    pub fn new(topic: String) -> Self {
-        TopicInfo {
-            topic: topic.clone(),
-            hash: hash256_to_fixed_array(&topic),
-        }
+pub struct Topic(String);
+
+impl Topic {
+    pub fn get_topic_hash(&self) -> TopicHash {
+        let mut hasher = Keccak256::new();
+        hasher.input(&self.0);
+        let mut result: [u8; 32] = std::default::Default::default();
+        result.clone_from_slice(hasher.result().as_slice());
+        result
     }
 }
 
 #[derive(Debug)]
 pub struct TopicQueue<TPeerId> {
-    topic: TopicInfo,
+    topic: Topic,
     queue: VecDeque<(TPeerId, Instant)>,
 }
 
 impl<TPeerId> TopicQueue<TPeerId> {
-    pub fn new(topic: String) -> Self {
-        let topic_info = TopicInfo::new(topic);
+    pub fn new(topic: Topic) -> Self {
         TopicQueue {
-            topic: topic_info,
+            topic,
             queue: VecDeque::with_capacity(MAX_ENTRIES_PER_TOPIC),
         }
     }
@@ -120,8 +107,7 @@ impl<TPeerId> GlobalTopicQueue<TPeerId> {
         }
         if let Some(queue) = self.topic_map.get_mut(&topic) {
             queue.add_to_queue(peer);
-        }
-        else {
+        } else {
             let mut tq = TopicQueue::new(topic.clone());
             tq.add_to_queue(peer);
             self.topic_map.insert(topic, tq);
