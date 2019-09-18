@@ -11,25 +11,28 @@ const MAX_ENTRIES_PER_TOPIC: usize = 50;
 pub type TopicHash = [u8; 32];
 
 /// TODO: change to some unique identifier type
-pub type TicketId = String;
+pub type TicketId = Vec<u8>;
 
 /// Representation of a ticket issued to peer for topic registration.
 #[derive(Debug, Clone)]
 pub struct Ticket<TPeerId> {
     /// Unique identifier for ticket.
-    id: TicketId,
+    pub id: TicketId,
+    /// Topic hash for ticket.
+    pub topic_hash: TopicHash,
     /// Id of peer to which ticket is issued.
-    peer_id: TPeerId,
+    pub peer_id: TPeerId,
     /// Wait time for ticket to be allowed for topic registration.
-    wait_time: Duration,
+    pub wait_time: Duration,
     /// Time instant at which ticket was registered
-    created_time: Instant,
+    pub created_time: Instant,
 }
 
 impl<TPeerId> Ticket<TPeerId> {
-    pub fn new(peer: TPeerId, wait_time: u64) -> Self {
+    pub fn new(topic_hash: TopicHash, peer: TPeerId, wait_time: u64) -> Self {
         Ticket {
-            id: String::from("test"), // TODO
+            id: Vec::default(), // TODO
+            topic_hash,
             peer_id: peer,
             wait_time: Duration::from_secs(wait_time),
             created_time: Instant::now(),
@@ -61,12 +64,12 @@ impl Topic {
 
 #[derive(Debug)]
 pub struct TopicQueue<TPeerId> {
-    topic: Topic,
+    topic: TopicHash,
     queue: VecDeque<(TPeerId, Instant)>,
 }
 
 impl<TPeerId> TopicQueue<TPeerId> {
-    pub fn new(topic: Topic) -> Self {
+    pub fn new(topic: TopicHash) -> Self {
         TopicQueue {
             topic,
             queue: VecDeque::with_capacity(MAX_ENTRIES_PER_TOPIC),
@@ -100,7 +103,7 @@ impl<TPeerId> TopicQueue<TPeerId> {
 /// TODO: Change name to something less atrocious
 #[derive(Debug)]
 pub struct GlobalTopicQueue<TPeerId> {
-    topic_map: BTreeMap<Topic, TopicQueue<TPeerId>>,
+    topic_map: BTreeMap<TopicHash, TopicQueue<TPeerId>>,
     tickets: BTreeMap<TicketId, Ticket<TPeerId>>,
 }
 
@@ -122,18 +125,20 @@ where
 
     /// Add a peer to the topic queue.
     /// Returns None if ticket doesn't exist or wait time hasn't elapsed.
-    pub fn add_to_queue(&mut self, peer: TPeerId, topic: Topic, ticket: &TicketId) -> Option<()> {
+    pub fn add_to_queue(&mut self, peer: &TPeerId, ticket: &TicketId) -> Option<()> {
         if !self.is_ticket_valid(ticket) {
             return None;
         }
+        let topic = self.tickets.get(ticket)?.topic_hash.clone();
+
         if self.get_queue_size() == MAX_ENTRIES {
             self.remove_from_queue();
         }
         if let Some(queue) = self.topic_map.get_mut(&topic) {
-            queue.add_to_queue(peer);
+            queue.add_to_queue(peer.clone());
         } else {
             let mut tq = TopicQueue::new(topic.clone());
-            tq.add_to_queue(peer);
+            tq.add_to_queue(peer.clone());
             self.topic_map.insert(topic, tq);
         };
         Some(())
@@ -144,15 +149,15 @@ where
         unimplemented!()
     }
 
-    pub fn issue_ticket(&mut self, peer: TPeerId, topic: Topic) -> TicketId {
+    pub fn issue_ticket(&mut self, peer: &TPeerId, topic: TopicHash) -> (TicketId, u64) {
         let wait_time = self
             .topic_map
             .get(&topic)
             .map(|v| v.get_wait_time())
             .unwrap_or(0);
-        let ticket = Ticket::new(peer, wait_time);
+        let ticket = Ticket::new(topic, peer.clone(), wait_time);
         self.tickets.insert(ticket.id.clone(), ticket.clone());
-        ticket.id
+        (ticket.id, wait_time)
     }
 
     /// Checks if ticket is registered in map and the wait time has elapsed.

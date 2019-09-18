@@ -89,7 +89,7 @@ pub struct Discv5<TSubstream> {
     ping_delay: Duration,
 
     /// Storage of topic advertisements and tickets.
-    topics:  GlobalTopicQueue<PeerId>, // PeerId or NodeId?
+    topics: GlobalTopicQueue<NodeId>,
 
     /// Marker to pin the generics.
     marker: PhantomData<TSubstream>,
@@ -252,8 +252,40 @@ impl<TSubstream> Discv5<TSubstream> {
                     .send_response(src, &node_id, response)
                     .map_err(|e| warn!("Failed to send rpc request. Error: {:?}", e));
             }
-            rpc::Request::Ticket { topic } => unimplemented!(),
-            rpc::Request::RegisterTopic { ticket } => unimplemented!(),
+            rpc::Request::Ticket { topic } => {
+                let (ticket, wait_time) = self.topics.issue_ticket(&node_id, topic);
+                let response = rpc::ProtocolMessage {
+                    id: rpc_id,
+                    body: rpc::RpcType::Response(rpc::Response::Ticket {
+                        ticket: ticket,
+                        wait_time,
+                    }),
+                };
+                debug!("Sending Ticket to node: {}", node_id);
+                let _ = self
+                    .service
+                    .send_response(src, &node_id, response)
+                    .map_err(|e| warn!("Failed to send Ticket response. Error: {:?}", e));
+            }
+            rpc::Request::RegisterTopic { ticket } => {
+                let is_valid = self.topics.is_ticket_valid(&ticket);
+                let response = rpc::ProtocolMessage {
+                    id: rpc_id,
+                    body: rpc::RpcType::Response(rpc::Response::RegisterTopic {
+                        registered: is_valid,
+                    }),
+                };
+
+                if is_valid {
+                    // TODO: fix unsafe unwrap
+                    self.topics.add_to_queue(&node_id, &ticket).unwrap();
+                }
+                debug!("Sending RegisterTopic response to node: {}", node_id);
+                let _ = self
+                    .service
+                    .send_response(src, &node_id, response)
+                    .map_err(|e| warn!("Failed to send RegisterTopic response. Error: {:?}", e));
+            }
             rpc::Request::TopicQuery { topic } => unimplemented!(),
 
             _ => {} //TODO: Implement all RPC methods
