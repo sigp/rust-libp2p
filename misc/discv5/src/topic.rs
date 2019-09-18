@@ -29,9 +29,9 @@ pub struct Ticket<TPeerId> {
 }
 
 impl<TPeerId> Ticket<TPeerId> {
-    pub fn new(topic_hash: TopicHash, peer: TPeerId, wait_time: u64) -> Self {
+    pub fn new(topic_hash: TopicHash, peer: TPeerId, wait_time: u64, id: Option<TicketId>) -> Self {
         Ticket {
-            id: Vec::default(), // TODO
+            id: id.unwrap_or(Vec::default()), // TODO
             topic_hash,
             peer_id: peer,
             wait_time: Duration::from_secs(wait_time),
@@ -89,11 +89,13 @@ impl<TPeerId> TopicQueue<TPeerId> {
     }
 
     /// Remove element from queue according to some policy
+    /// TODO
     pub fn remove_from_queue(&mut self) {
         unimplemented!()
     }
 
     /// Get wait time for queue.
+    /// TODO
     pub fn get_wait_time(&self) -> u64 {
         unimplemented!()
     }
@@ -104,7 +106,10 @@ impl<TPeerId> TopicQueue<TPeerId> {
 #[derive(Debug)]
 pub struct GlobalTopicQueue<TPeerId> {
     topic_map: BTreeMap<TopicHash, TopicQueue<TPeerId>>,
-    tickets: BTreeMap<TicketId, Ticket<TPeerId>>,
+    /// Tickets that were issued by us to other peers.
+    sent_tickets: BTreeMap<TicketId, Ticket<TPeerId>>,
+    /// Tickets that we received from other peers.
+    received_tickets: BTreeMap<TicketId, Ticket<TPeerId>>,
 }
 
 impl<TPeerId> GlobalTopicQueue<TPeerId>
@@ -114,7 +119,8 @@ where
     pub fn new() -> Self {
         GlobalTopicQueue {
             topic_map: BTreeMap::new(),
-            tickets: BTreeMap::new(),
+            sent_tickets: BTreeMap::new(),
+            received_tickets: BTreeMap::new(),
         }
     }
 
@@ -129,7 +135,7 @@ where
         if !self.is_ticket_valid(ticket) {
             return None;
         }
-        let topic = self.tickets.get(ticket)?.topic_hash.clone();
+        let topic = self.sent_tickets.get(ticket)?.topic_hash.clone();
 
         if self.get_queue_size() == MAX_ENTRIES {
             self.remove_from_queue();
@@ -144,7 +150,8 @@ where
         Some(())
     }
 
-    /// Remove element from one of the queues according to some policy
+    /// Remove element from one of the topic queues according to some policy
+    /// TODO
     pub fn remove_from_queue(&mut self) {
         unimplemented!()
     }
@@ -155,16 +162,42 @@ where
             .get(&topic)
             .map(|v| v.get_wait_time())
             .unwrap_or(0);
-        let ticket = Ticket::new(topic, peer.clone(), wait_time);
-        self.tickets.insert(ticket.id.clone(), ticket.clone());
+        let ticket = Ticket::new(topic, peer.clone(), wait_time, None);
+        self.sent_tickets.insert(ticket.id.clone(), ticket.clone());
         (ticket.id, wait_time)
     }
 
     /// Checks if ticket is registered in map and the wait time has elapsed.
     pub fn is_ticket_valid(&self, ticket_id: &TicketId) -> bool {
-        if let Some(ticket) = self.tickets.get(ticket_id) {
+        if let Some(ticket) = self.sent_tickets.get(ticket_id) {
             ticket.has_wait_elapsed();
         }
         false
+    }
+
+    /// Add received ticket to map.
+    pub fn register_received_ticket(
+        &mut self,
+        topic: TopicHash,
+        ticket_id: Vec<u8>,
+        wait_time: u64,
+        peer: TPeerId,
+    ) {
+        let ticket = Ticket::new(topic, peer, wait_time, Some(ticket_id.clone()));
+        // TODO: check if ticket already present and handle appropriately.
+        self.received_tickets.insert(ticket_id, ticket);
+    }
+
+    /// Return all received tickets for which wait time has elapsed.
+    /// Function should be run periodically to send RegisterTopic requests
+    /// TODO: Periodically call function or figure out a way for ticket to call RegisterTopic
+    /// once its wait_time elapses.
+    pub fn get_elapsed_tickets(&self) -> Vec<Ticket<TPeerId>> {
+        self.received_tickets
+            .iter()
+            .map(|(_, v)| v)
+            .cloned()
+            .filter(|v| v.has_wait_elapsed())
+            .collect()
     }
 }

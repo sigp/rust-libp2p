@@ -287,8 +287,6 @@ impl<TSubstream> Discv5<TSubstream> {
                     .map_err(|e| warn!("Failed to send RegisterTopic response. Error: {:?}", e));
             }
             rpc::Request::TopicQuery { topic } => unimplemented!(),
-
-            _ => {} //TODO: Implement all RPC methods
         }
     }
 
@@ -369,7 +367,14 @@ impl<TSubstream> Discv5<TSubstream> {
                         }
                     }
                 }
-                rpc::Response::Ticket { ticket, wait_time } => unimplemented!(),
+                rpc::Response::Ticket { ticket, wait_time } => match request {
+                    // Register received ticket if response is for valid request
+                    rpc::Request::Ticket { topic } => self
+                        .topics
+                        .register_received_ticket(topic, ticket, wait_time, node_id),
+                    // Should an error be raised if response type is invalid?
+                    _ => (),
+                },
                 rpc::Response::RegisterTopic { registered } => unimplemented!(),
                 _ => {} //TODO: Implement all RPC methods
             }
