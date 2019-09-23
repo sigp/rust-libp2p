@@ -401,6 +401,14 @@ impl<TSubstream> Discv5<TSubstream> {
         }
     }
 
+    fn send_register_topic(&mut self, node_id: &NodeId, ticket: Vec<u8>) {
+        let req = rpc::Request::RegisterTopic {
+            ticket: ticket,
+        };
+        self.send_rpc_request(node_id, req, None);
+    }
+
+
     /// Request an external node's ENR.
     // This logic doesn't fit into a standard request - We likely don't know the ENR,
     // and would like to send this as a response, with request logic built in.
@@ -940,6 +948,11 @@ where
                 }
 
                 return Async::NotReady;
+            }
+            // Send topic registrations
+            while let Ok(Async::Ready(Some(ticket))) = self.topics.received_tickets.poll() {
+                let ticket = ticket.into_inner();
+                self.send_register_topic(&ticket.peer_id, ticket.id);
             }
         }
     }
