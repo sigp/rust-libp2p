@@ -2,6 +2,7 @@ use sha3::{Digest, Keccak256};
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
+use tokio::timer::DelayQueue;
 
 /// Max allowed node entries across all topics.
 const MAX_ENTRIES: usize = 1000;
@@ -20,7 +21,7 @@ pub struct Ticket<TPeerId> {
     pub id: TicketId,
     /// Topic hash for ticket.
     pub topic_hash: TopicHash,
-    /// Id of peer to which ticket is issued.
+    /// Peer id that sent the ticket or we sent the ticket to.
     pub peer_id: TPeerId,
     /// Wait time for ticket to be allowed for topic registration.
     pub wait_time: Duration,
@@ -105,11 +106,11 @@ impl<TPeerId> TopicQueue<TPeerId> {
 /// TODO: Change name to something less atrocious
 #[derive(Debug)]
 pub struct GlobalTopicQueue<TPeerId> {
-    topic_map: BTreeMap<TopicHash, TopicQueue<TPeerId>>,
+    pub topic_map: BTreeMap<TopicHash, TopicQueue<TPeerId>>,
     /// Tickets that were issued by us to other peers.
-    sent_tickets: BTreeMap<TicketId, Ticket<TPeerId>>,
+    pub sent_tickets: BTreeMap<TicketId, Ticket<TPeerId>>,
     /// Tickets that we received from other peers.
-    received_tickets: BTreeMap<TicketId, Ticket<TPeerId>>,
+    pub received_tickets: DelayQueue<Ticket<TPeerId>>,
 }
 
 impl<TPeerId> GlobalTopicQueue<TPeerId>
@@ -120,7 +121,7 @@ where
         GlobalTopicQueue {
             topic_map: BTreeMap::new(),
             sent_tickets: BTreeMap::new(),
-            received_tickets: BTreeMap::new(),
+            received_tickets: DelayQueue::new(),
         }
     }
 
@@ -185,19 +186,6 @@ where
     ) {
         let ticket = Ticket::new(topic, peer, wait_time, Some(ticket_id.clone()));
         // TODO: check if ticket already present and handle appropriately.
-        self.received_tickets.insert(ticket_id, ticket);
-    }
-
-    /// Return all received tickets for which wait time has elapsed.
-    /// Function should be run periodically to send RegisterTopic requests
-    /// TODO: Periodically call function or figure out a way for ticket to call RegisterTopic
-    /// once its wait_time elapses.
-    pub fn get_elapsed_tickets(&self) -> Vec<Ticket<TPeerId>> {
-        self.received_tickets
-            .iter()
-            .map(|(_, v)| v)
-            .cloned()
-            .filter(|v| v.has_wait_elapsed())
-            .collect()
+        self.received_tickets.insert(ticket, Duration::from_secs(wait_time));
     }
 }
