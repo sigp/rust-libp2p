@@ -188,12 +188,17 @@ where
     /// Add received ticket to map.
     pub fn register_received_ticket(
         &mut self,
-        topic: TopicHash,
-        ticket_id: Vec<u8>,
+        topic: &TopicHash,
+        ticket_id: &Vec<u8>,
         wait_time: u64,
-        peer: TNodeId,
+        peer: &TNodeId,
     ) {
-        let ticket = Ticket::new(topic, peer, wait_time, Some(ticket_id.clone()));
+        let ticket = Ticket::new(
+            topic.clone(),
+            peer.clone(),
+            wait_time,
+            Some(ticket_id.clone()),
+        );
         // TODO: check if ticket already present and handle appropriately.
         self.received_tickets
             .insert(ticket, Duration::from_secs(wait_time));

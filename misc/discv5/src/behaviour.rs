@@ -381,7 +381,7 @@ impl<TSubstream> Discv5<TSubstream> {
                             &ticket, &wait_time
                         );
                         self.topics
-                            .register_received_ticket(topic, ticket, wait_time, node_id);
+                            .register_received_ticket(&topic, &ticket, wait_time, &node_id);
                         self.events.push(Discv5Event::TicketIssued {
                             node_id: node_id.clone(),
                             ticket: ticket.clone(),
