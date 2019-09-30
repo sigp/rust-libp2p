@@ -892,12 +892,22 @@ where
                     }
                 }
             }
-
             // Drain queued events
             if !self.events.is_empty() {
                 return Async::Ready(NetworkBehaviourAction::GenerateEvent(self.events.remove(0)));
             }
             self.events.shrink_to_fit();
+
+            // Send topic registrations
+            if let Ok(Async::Ready(Some(ticket))) = self.topics.received_tickets.poll() {
+                let ticket = ticket.into_inner();
+                self.send_register_topic(&ticket.node_id, ticket.id.clone());
+                let event = Discv5Event::TopicRegistrationRequest {
+                    node_id: ticket.node_id,
+                    ticket: ticket.id,
+                };
+                return Async::Ready(NetworkBehaviourAction::GenerateEvent(event));
+            };
 
             // Drain applied pending entries from the routing table.
             if let Some(entry) = self.kbuckets.take_applied_pending() {
@@ -968,11 +978,6 @@ where
 
                 return Async::NotReady;
             }
-            // Send topic registrations
-            while let Ok(Async::Ready(Some(ticket))) = self.topics.received_tickets.poll() {
-                let ticket = ticket.into_inner();
-                self.send_register_topic(&ticket.node_id, ticket.id);
-            }
         }
     }
 }
@@ -1003,12 +1008,15 @@ pub enum Discv5Event {
         /// List of peers ordered from closest to furthest away.
         closer_peers: Vec<PeerId>,
     },
-    /// Ticket was issued by `node_id` with given `id` and `wait_time`
+    /// Ticket was issued by `node_id` with given `id` and `wait_time`.
     TicketIssued {
         node_id: NodeId,
         ticket: TicketId,
         wait_time: u64,
     },
+    /// Sent request to register topic with `node_id`.
+    TopicRegistrationRequest { node_id: NodeId, ticket: Vec<u8> },
+
     /// Topic has been registered at `node_id` with status.
     TopicRegistered {
         node_id: NodeId,
