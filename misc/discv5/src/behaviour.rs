@@ -292,7 +292,7 @@ impl<TSubstream> Discv5<TSubstream> {
                     .send_response(src, &node_id, response)
                     .map_err(|e| warn!("Failed to send RegisterTopic response. Error: {:?}", e));
             }
-            rpc::Request::TopicQuery { topic } => unimplemented!(),
+            rpc::Request::TopicQuery { topic: _ } => unimplemented!(),
         }
     }
 
@@ -398,7 +398,6 @@ impl<TSubstream> Discv5<TSubstream> {
                         status: registered,
                     });
                 }
-                _ => {} //TODO: Implement all RPC methods
             }
         } else {
             warn!("Received an RPC response which doesn't match a request");

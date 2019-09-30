@@ -127,8 +127,8 @@ fn test_findnode_query() {
 #[test]
 fn test_topic_registration() {
     init();
-    let mut sender = build_swarm(5000);
-    let receiver = build_swarm(5001);
+    let mut sender = build_swarm(10010);
+    let receiver = build_swarm(10011);
     let receiver_node_id = receiver.local_enr().node_id().clone();
     sender.add_enr(receiver.local_enr().clone());
     let mut swarms = vec![receiver, sender];
@@ -147,7 +147,7 @@ fn test_topic_registration() {
                             swarm.request_ticket(&receiver_node_id.clone(), [0; 32]);
                         }
                         Async::Ready(Some(Discv5Event::TicketIssued { wait_time, .. })) => {
-                            println!("Ticket issued with wait_time {}", wait_time);
+                            println!("Ticket issued with wait_time {} sec", wait_time);
                         }
                         Async::Ready(Some(Discv5Event::TopicRegistered { .. })) => {
                             println!("Topic registered {}", node_id);

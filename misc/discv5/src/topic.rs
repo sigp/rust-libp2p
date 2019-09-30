@@ -62,7 +62,7 @@ impl<TNodeId> Ticket<TNodeId> {
 pub struct Topic(String);
 
 impl Topic {
-    pub fn get_topic_hash(&self) -> TopicHash {
+    pub fn _get_topic_hash(&self) -> TopicHash {
         let mut hasher = Keccak256::new();
         hasher.input(&self.0);
         let mut result: [u8; 32] = std::default::Default::default();
