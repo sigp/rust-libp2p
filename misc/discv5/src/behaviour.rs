@@ -971,7 +971,7 @@ where
             // Send topic registrations
             while let Ok(Async::Ready(Some(ticket))) = self.topics.received_tickets.poll() {
                 let ticket = ticket.into_inner();
-                self.send_register_topic(&ticket.peer_id, ticket.id);
+                self.send_register_topic(&ticket.node_id, ticket.id);
             }
         }
     }

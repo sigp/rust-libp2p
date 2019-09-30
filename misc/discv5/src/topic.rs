@@ -1,3 +1,4 @@
+use rand::Rng;
 use sha3::{Digest, Keccak256};
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
@@ -16,25 +17,32 @@ pub type TicketId = Vec<u8>;
 
 /// Representation of a ticket issued to peer for topic registration.
 #[derive(Debug, Clone)]
-pub struct Ticket<TPeerId> {
+pub struct Ticket<TNodeId> {
     /// Unique identifier for ticket.
     pub id: TicketId,
     /// Topic hash for ticket.
     pub topic_hash: TopicHash,
     /// Peer id that sent the ticket or we sent the ticket to.
-    pub peer_id: TPeerId,
+    pub node_id: TNodeId,
     /// Wait time for ticket to be allowed for topic registration.
     pub wait_time: Duration,
     /// Time instant at which ticket was registered
     pub created_time: Instant,
 }
 
-impl<TPeerId> Ticket<TPeerId> {
-    pub fn new(topic_hash: TopicHash, peer: TPeerId, wait_time: u64, id: Option<TicketId>) -> Self {
+impl<TNodeId> Ticket<TNodeId> {
+    pub fn new(
+        topic_hash: TopicHash,
+        node_id: TNodeId,
+        wait_time: u64,
+        id: Option<TicketId>,
+    ) -> Self {
+        let mut rng = rand::thread_rng();
+        let ticket_id: u64 = rng.gen();
         Ticket {
-            id: id.unwrap_or(Vec::default()), // TODO
+            id: id.unwrap_or(ticket_id.to_le_bytes().to_vec()), // TODO
             topic_hash,
-            peer_id: peer,
+            node_id: node_id,
             wait_time: Duration::from_secs(wait_time),
             created_time: Instant::now(),
         }
@@ -64,12 +72,12 @@ impl Topic {
 }
 
 #[derive(Debug)]
-pub struct TopicQueue<TPeerId> {
+pub struct TopicQueue<TNodeId> {
     topic: TopicHash,
-    queue: VecDeque<(TPeerId, Instant)>,
+    queue: VecDeque<(TNodeId, Instant)>,
 }
 
-impl<TPeerId> TopicQueue<TPeerId> {
+impl<TNodeId> TopicQueue<TNodeId> {
     pub fn new(topic: TopicHash) -> Self {
         TopicQueue {
             topic,
@@ -82,7 +90,8 @@ impl<TPeerId> TopicQueue<TPeerId> {
     }
 
     /// Add a peer to the topic queue.
-    pub fn add_to_queue(&mut self, peer: TPeerId) {
+    /// TODO: make queue a set
+    pub fn add_to_queue(&mut self, peer: TNodeId) {
         if self.queue.len() == MAX_ENTRIES_PER_TOPIC {
             self.remove_from_queue();
         }
@@ -105,17 +114,17 @@ impl<TPeerId> TopicQueue<TPeerId> {
 /// Global queue containing all topic queues and issued tickets
 /// TODO: Change name to something less atrocious
 #[derive(Debug)]
-pub struct GlobalTopicQueue<TPeerId> {
-    pub topic_map: BTreeMap<TopicHash, TopicQueue<TPeerId>>,
+pub struct GlobalTopicQueue<TNodeId> {
+    pub topic_map: BTreeMap<TopicHash, TopicQueue<TNodeId>>,
     /// Tickets that were issued by us to other peers.
-    pub sent_tickets: BTreeMap<TicketId, Ticket<TPeerId>>,
+    pub sent_tickets: BTreeMap<TicketId, Ticket<TNodeId>>,
     /// Tickets that we received from other peers.
-    pub received_tickets: DelayQueue<Ticket<TPeerId>>,
+    pub received_tickets: DelayQueue<Ticket<TNodeId>>,
 }
 
-impl<TPeerId> GlobalTopicQueue<TPeerId>
+impl<TNodeId> GlobalTopicQueue<TNodeId>
 where
-    TPeerId: Clone,
+    TNodeId: Clone + std::fmt::Debug,
 {
     pub fn new() -> Self {
         GlobalTopicQueue {
@@ -132,7 +141,7 @@ where
 
     /// Add a peer to the topic queue.
     /// Returns None if ticket doesn't exist or wait time hasn't elapsed.
-    pub fn add_to_queue(&mut self, peer: &TPeerId, ticket: &TicketId) -> Option<()> {
+    pub fn add_to_queue(&mut self, peer: &TNodeId, ticket: &TicketId) -> Option<()> {
         if !self.is_ticket_valid(ticket) {
             return None;
         }
@@ -157,12 +166,12 @@ where
         unimplemented!()
     }
 
-    pub fn issue_ticket(&mut self, peer: &TPeerId, topic: TopicHash) -> (TicketId, u64) {
+    pub fn issue_ticket(&mut self, peer: &TNodeId, topic: TopicHash) -> (TicketId, u64) {
         let wait_time = self
             .topic_map
             .get(&topic)
             .map(|v| v.get_wait_time())
-            .unwrap_or(0);
+            .unwrap_or(5);
         let ticket = Ticket::new(topic, peer.clone(), wait_time, None);
         self.sent_tickets.insert(ticket.id.clone(), ticket.clone());
         (ticket.id, wait_time)
@@ -182,10 +191,11 @@ where
         topic: TopicHash,
         ticket_id: Vec<u8>,
         wait_time: u64,
-        peer: TPeerId,
+        peer: TNodeId,
     ) {
         let ticket = Ticket::new(topic, peer, wait_time, Some(ticket_id.clone()));
         // TODO: check if ticket already present and handle appropriately.
-        self.received_tickets.insert(ticket, Duration::from_secs(wait_time));
+        self.received_tickets
+            .insert(ticket, Duration::from_secs(wait_time));
     }
 }
