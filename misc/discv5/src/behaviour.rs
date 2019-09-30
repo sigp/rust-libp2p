@@ -17,7 +17,7 @@ use crate::query::{Query, QueryConfig, QueryState, ReturnPeer};
 use crate::rpc;
 use crate::service::MAX_PACKET_SIZE;
 use crate::session_service::{SessionEvent, SessionService};
-use crate::topic::GlobalTopicQueue;
+use crate::topic::{GlobalTopicQueue, TicketId, TopicHash};
 use enr::{Enr, NodeId};
 use fnv::FnvHashMap;
 use futures::prelude::*;
@@ -187,6 +187,12 @@ impl<TSubstream> Discv5<TSubstream> {
     /// requested `PeerId`.
     pub fn find_node(&mut self, node_id: NodeId) {
         self.start_query(QueryType::FindNode(node_id));
+    }
+
+    /// Request a ticket for a given topic hash.
+    pub fn request_ticket(&mut self, node_id: &NodeId, topic_hash: TopicHash) {
+        let req = rpc::Request::Ticket { topic: topic_hash };
+        self.send_rpc_request(&node_id, req, None);
     }
 
     // private functions //
@@ -369,13 +375,29 @@ impl<TSubstream> Discv5<TSubstream> {
                 }
                 rpc::Response::Ticket { ticket, wait_time } => match request {
                     // Register received ticket if response is for valid request
-                    rpc::Request::Ticket { topic } => self
-                        .topics
-                        .register_received_ticket(topic, ticket, wait_time, node_id),
+                    rpc::Request::Ticket { topic } => {
+                        info!(
+                            "Registering received ticket: {:?} with wait time {}",
+                            &ticket, &wait_time
+                        );
+                        self.topics
+                            .register_received_ticket(topic, ticket, wait_time, node_id);
+                        self.events.push(Discv5Event::TicketIssued {
+                            node_id: node_id.clone(),
+                            ticket: ticket.clone(),
+                            wait_time: wait_time,
+                        });
+                    }
                     // Should an error be raised if response type is invalid?
                     _ => (),
                 },
-                rpc::Response::RegisterTopic { registered } => unimplemented!(),
+                rpc::Response::RegisterTopic { registered } => {
+                    info!("Received REGTOPIC response: {} {}", &node_id, registered);
+                    self.events.push(Discv5Event::TopicRegistered {
+                        node_id: node_id.clone(),
+                        status: registered,
+                    });
+                }
                 _ => {} //TODO: Implement all RPC methods
             }
         } else {
@@ -980,5 +1002,17 @@ pub enum Discv5Event {
         key: NodeId,
         /// List of peers ordered from closest to furthest away.
         closer_peers: Vec<PeerId>,
+    },
+    /// Ticket was issued by `node_id` with given `id` and `wait_time`
+    TicketIssued {
+        node_id: NodeId,
+        ticket: TicketId,
+        wait_time: u64,
+    },
+    /// Topic has been registered at `node_id` with status.
+    TopicRegistered {
+        node_id: NodeId,
+        // topic: TopicHash,
+        status: bool,
     },
 }
