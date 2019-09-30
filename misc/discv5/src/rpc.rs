@@ -58,7 +58,7 @@ impl Response {
                 }
             }
             Response::RegisterTopic { .. } => {
-                if let Request::TopicQuery { .. } = req {
+                if let Request::RegisterTopic { .. } = req {
                     true
                 } else {
                     false
