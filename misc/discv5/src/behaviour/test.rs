@@ -146,8 +146,9 @@ fn test_topic_registration() {
                         Async::Ready(Some(Discv5Event::TicketIssued { wait_time, .. })) => {
                             println!("Ticket issued with wait_time {} sec", wait_time);
                         }
-                        Async::Ready(Some(Discv5Event::TopicRegistered { .. })) => {
-                            println!("Topic registered {}", node_id);
+                        Async::Ready(Some(Discv5Event::TopicRegistered { status, .. })) => {
+                            assert!(status, "Topic not registered");
+                            println!("Topic registered {} status: {}", node_id, status);
                             return Ok(Async::Ready(()));
                         }
                         Async::Ready(_) => (),

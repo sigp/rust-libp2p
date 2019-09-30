@@ -22,11 +22,11 @@ pub struct Ticket<TNodeId> {
     pub id: TicketId,
     /// Topic hash for ticket.
     pub topic_hash: TopicHash,
-    /// Peer id that sent the ticket or we sent the ticket to.
+    /// Node id that requested the ticket.
     pub node_id: TNodeId,
     /// Wait time for ticket to be allowed for topic registration.
     pub wait_time: Duration,
-    /// Time instant at which ticket was registered
+    /// Time instant at which ticket was registered.
     pub created_time: Instant,
 }
 
@@ -50,10 +50,10 @@ impl<TNodeId> Ticket<TNodeId> {
 
     /// Checks if wait time for ticket has passed.
     pub fn has_wait_elapsed(&self) -> bool {
-        if self.created_time + self.wait_time < Instant::now() {
-            return false;
-        } else {
+        if self.created_time + self.wait_time <= Instant::now() {
             return true;
+        } else {
+            return false;
         }
     }
 }
@@ -180,7 +180,7 @@ where
     /// Checks if ticket is registered in map and the wait time has elapsed.
     pub fn is_ticket_valid(&self, ticket_id: &TicketId) -> bool {
         if let Some(ticket) = self.sent_tickets.get(ticket_id) {
-            ticket.has_wait_elapsed();
+            return ticket.has_wait_elapsed();
         }
         false
     }
