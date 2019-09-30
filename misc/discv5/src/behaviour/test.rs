@@ -33,20 +33,17 @@ fn build_swarm(port: u16) -> SwarmType {
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
 
     let keypair = identity::Keypair::generate_secp256k1();
-    let enr = EnrBuilder::new()
+    let enr = EnrBuilder::new("v4")
         .ip(ip.clone().into())
         .udp(port)
         .build(&keypair)
         .unwrap();
     // unused transport for building a swarm
     let transport = MemoryTransport::default()
-        .with_upgrade(SecioConfig::new(keypair.clone()))
-        .and_then(move |out, endpoint| {
-            let peer_id = out.remote_key.into_peer_id();
-            let yamux = yamux::Config::default();
-            upgrade::apply(out.stream, yamux, endpoint)
-                .map(|muxer| (peer_id, StreamMuxerBox::new(muxer)))
-        })
+        .upgrade(upgrade::Version::V1)
+        .authenticate(SecioConfig::new(keypair.clone()))
+        .multiplex(yamux::Config::default())
+        .map(|(p, m), _| (p, StreamMuxerBox::new(m)))
         .map_err(|e| panic!("Failed to create transport: {:?}", e))
         .boxed();
     let discv5 = Discv5::new(enr, keypair.clone(), ip.into()).unwrap();
