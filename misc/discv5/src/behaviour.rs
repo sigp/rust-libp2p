@@ -402,12 +402,9 @@ impl<TSubstream> Discv5<TSubstream> {
     }
 
     fn send_register_topic(&mut self, node_id: &NodeId, ticket: Vec<u8>) {
-        let req = rpc::Request::RegisterTopic {
-            ticket: ticket,
-        };
+        let req = rpc::Request::RegisterTopic { ticket: ticket };
         self.send_rpc_request(node_id, req, None);
     }
-
 
     /// Request an external node's ENR.
     // This logic doesn't fit into a standard request - We likely don't know the ENR,
@@ -830,12 +827,6 @@ where
         >,
     > {
         loop {
-            // Drain queued events
-            if !self.events.is_empty() {
-                return Async::Ready(NetworkBehaviourAction::GenerateEvent(self.events.remove(0)));
-            }
-            self.events.shrink_to_fit();
-
             // Process events from the session service
             while let Async::Ready(event) = self.service.poll() {
                 match event {
@@ -879,6 +870,12 @@ where
                     }
                 }
             }
+
+            // Drain queued events
+            if !self.events.is_empty() {
+                return Async::Ready(NetworkBehaviourAction::GenerateEvent(self.events.remove(0)));
+            }
+            self.events.shrink_to_fit();
 
             // Drain applied pending entries from the routing table.
             if let Some(entry) = self.kbuckets.take_applied_pending() {
