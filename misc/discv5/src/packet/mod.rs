@@ -345,6 +345,31 @@ mod tests {
         result
     }
 
+    /* This section provides a series of reference tests for the encoding of packets */
+
+    #[test]
+    fn ref_test_encode_random_packet() {
+
+        // reference input
+        let tag = [1u8;TAG_LENGTH]; // all 1's.
+        let auth_tag = [2u8; AUTH_TAG_LENGTH]; // all 2's
+        let random_data =  [4u8; 44]; // 44 bytes of 4's;
+
+        // expected hex output
+        let expected_output = hex::decode("01010101010101010101010101010101010101010101010101010101010101018c0202020202020202020202020404040404040404040404040404040404040404040404040404040404040404040404040404040404040404").unwrap();
+        
+
+        let packet = Packet::RandomPacket {
+            tag,
+            auth_tag,
+            data: random_data.to_vec(),
+        };
+
+        assert_eq!(packet.encode(), expected_output);
+    }
+
+    /* This section provides functionality testing of the packets */
+
     #[test]
     fn encode_decode_random_packet() {
         let _ = simple_logger::init_with_level(log::Level::Debug);
