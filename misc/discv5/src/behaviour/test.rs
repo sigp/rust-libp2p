@@ -8,6 +8,7 @@ use libp2p_core::{
 };
 use libp2p_swarm::Swarm;
 use tokio::prelude::*;
+use tokio::runtime::Runtime;
 
 use crate::kbucket;
 use enr::NodeId;
@@ -56,6 +57,130 @@ fn build_swarms(n: usize) -> Vec<SwarmType> {
     swarms
 }
 
+fn build_swarms_from_keypairs(keypairs: Vec<identity::Keypair>) -> Vec<SwarmType> {
+    let base_port = 10000u16;
+    let mut swarms = Vec::new();
+    let ip: IpAddr = "127.0.0.1".parse().unwrap();
+
+    // for port in base_port..base_port + keypairs.len() as u16 {
+    for i in 0..keypairs.len() {
+        let port = base_port + i as u16;
+        let keypair = &keypairs[i];
+        let enr = EnrBuilder::new("v4")
+            .ip(ip.clone().into())
+            .udp(port)
+            .build(&keypair)
+            .unwrap();
+        // transport for building a swarm
+        let transport = MemoryTransport::default()
+            .upgrade(libp2p_core::upgrade::Version::V1)
+            .authenticate(SecioConfig::new(keypair.clone()))
+            .multiplex(yamux::Config::default())
+            .map(|(p, m), _| (p, StreamMuxerBox::new(m)))
+            .map_err(|e| panic!("Failed to create transport: {:?}", e))
+            .boxed();
+        let discv5 = Discv5::new(enr, keypair.clone(), ip.into()).unwrap();
+        swarms.push(Swarm::new(
+            transport,
+            discv5,
+            keypair.public().into_peer_id(),
+        ));
+    }
+    swarms
+}
+
+/// Return log2 distance between 2 node ids
+fn get_distance(node1: &NodeId, node2: &NodeId) -> Option<u64> {
+    let node1: kbucket::Key<NodeId> = node1.clone().into();
+    node1.log2_distance(&node2.clone().into())
+}
+
+/// Generate `n` keypairs such that the node ids they generate are close to
+/// the generated bootstrap node. Return the `n` nodes along with the bootstrap node.
+fn generate_keypairs(n: usize) -> Vec<identity::Keypair> {
+    let mut keypairs: Vec<identity::Keypair> = Vec::new();
+    let bootstrap_keypair = identity::Keypair::generate_secp256k1();
+    let bootstrap_node_id = EnrBuilder::new("v4")
+        .build(&bootstrap_keypair)
+        .unwrap()
+        .node_id()
+        .clone();
+    for _ in 0..n {
+        loop {
+            let keypair = identity::Keypair::generate_secp256k1();
+            let enr = EnrBuilder::new("v4").build(&keypair).unwrap();
+            let key = enr.node_id();
+            let distance = get_distance(&bootstrap_node_id, key).unwrap();
+            // Any distance >= 254 is good enough for discovering nodes in one
+            // complete query
+            if distance > 254 {
+                keypairs.push(keypair);
+                break;
+            }
+        }
+    }
+    keypairs.push(bootstrap_keypair);
+    keypairs
+}
+
+#[test]
+fn test_discovery_star_topology() {
+    init();
+    let node_num = 12;
+    let keypairs = generate_keypairs(node_num + 1); // num_nodes nodes, 1 bootstrap, 1 target
+    let mut swarms = build_swarms_from_keypairs(keypairs);
+    // Last node is bootstrap node in a star topology
+    let mut bootstrap_node = swarms.pop().unwrap();
+    let target_node = swarms.pop().unwrap();
+    let node_enrs: Vec<Enr> = swarms.iter().map(|n| n.local_enr().clone()).collect();
+    println!("Bootstrap node: {}", bootstrap_node.local_enr().node_id());
+    println!("Target node: {}", target_node.local_enr().node_id());
+    for swarm in swarms.iter_mut() {
+        let key: kbucket::Key<NodeId> = swarm.local_enr().node_id().clone().into();
+        let distance = key
+            .log2_distance(&bootstrap_node.local_enr().node_id().clone().into())
+            .unwrap();
+        println!(
+            "Distance of node {} relative to node {}: {}",
+            swarm.local_enr().node_id(),
+            bootstrap_node.local_enr().node_id(),
+            distance
+        );
+        swarm.add_enr(bootstrap_node.local_enr().clone());
+        bootstrap_node.add_enr(swarm.local_enr().clone());
+    }
+    // Start a FINDNODE query of self on every node
+    let target_random_node_id = target_node.local_enr().node_id();
+    swarms
+        .first_mut()
+        .unwrap()
+        .find_node(target_random_node_id.clone());
+    swarms.push(bootstrap_node);
+    Runtime::new()
+        .unwrap()
+        .block_on(future::poll_fn(move || -> Result<_, io::Error> {
+            for swarm in swarms.iter_mut() {
+                loop {
+                    match swarm.poll().unwrap() {
+                        Async::Ready(Some(Discv5Event::FindNodeResult { key, closer_peers })) => {
+                            println!(
+                                "Query found {} peers, Total peers {}",
+                                closer_peers.len(),
+                                node_num
+                            );
+                            assert!(closer_peers.len() == node_num);
+                            return Ok(Async::Ready(()));
+                        }
+                        Async::Ready(_) => (),
+                        Async::NotReady => break,
+                    }
+                }
+            }
+            Ok(Async::NotReady)
+        }))
+        .unwrap();
+}
+
 #[test]
 fn test_findnode_query() {
     init();
@@ -63,14 +188,19 @@ fn test_findnode_query() {
     let node_num = 8;
     let mut swarms = build_swarms(node_num);
     let node_enrs: Vec<Enr> = swarms.iter().map(|n| n.local_enr().clone()).collect();
-
+    let last: kbucket::Key<NodeId> = node_enrs.last().unwrap().node_id().clone().into();
     // link the nodes together
     for (swarm, previous_node_enr) in swarms.iter_mut().skip(1).zip(node_enrs.clone()) {
         let key: kbucket::Key<NodeId> = swarm.local_enr().node_id().clone().into();
         let distance = key
             .log2_distance(&previous_node_enr.node_id().clone().into())
             .unwrap();
-        println!("Distance of node relative to next: {}", distance);
+        println!(
+            "Distance of node {} relative to node {}: {}",
+            swarm.local_enr().node_id(),
+            previous_node_enr.node_id(),
+            distance
+        );
         swarm.add_enr(previous_node_enr);
     }
 
@@ -106,7 +236,7 @@ fn test_findnode_query() {
                             println!(
                                 "Query found {} peers. Total peers were: {}",
                                 closer_peers.len(),
-                                expected_node_ids.len()
+                                expected_node_ids.len(),
                             );
                             assert!(closer_peers.len() <= expected_node_ids.len());
                             return Ok(Async::Ready(()));
