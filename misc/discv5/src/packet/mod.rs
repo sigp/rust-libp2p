@@ -349,20 +349,83 @@ mod tests {
 
     #[test]
     fn ref_test_encode_random_packet() {
-
         // reference input
-        let tag = [1u8;TAG_LENGTH]; // all 1's.
+        let tag = [1u8; TAG_LENGTH]; // all 1's.
         let auth_tag = [2u8; AUTH_TAG_LENGTH]; // all 2's
-        let random_data =  [4u8; 44]; // 44 bytes of 4's;
+        let random_data = [4u8; 44]; // 44 bytes of 4's;
 
         // expected hex output
         let expected_output = hex::decode("01010101010101010101010101010101010101010101010101010101010101018c0202020202020202020202020404040404040404040404040404040404040404040404040404040404040404040404040404040404040404").unwrap();
-        
 
         let packet = Packet::RandomPacket {
             tag,
             auth_tag,
             data: random_data.to_vec(),
+        };
+
+        assert_eq!(packet.encode(), expected_output);
+    }
+
+    #[test]
+    fn ref_test_encode_whoareyou_packet() {
+        // reference input
+        let magic = [1u8; MAGIC_LENGTH]; // all 1's.
+        let token = [2u8; AUTH_TAG_LENGTH]; // all 2's
+        let id_nonce = [3u8; ID_NONCE_LENGTH]; // all 3's
+        let enr_seq = 1;
+
+        // expected hex output
+        let expected_output = hex::decode("0101010101010101010101010101010101010101010101010101010101010101ef8c020202020202020202020202a0030303030303030303030303030303030303030303030303030303030303030301").unwrap();
+
+        let packet = Packet::WhoAreYou {
+            magic,
+            token,
+            id_nonce,
+            enr_seq,
+        };
+
+        assert_eq!(packet.encode(), expected_output);
+    }
+
+    #[test]
+    fn ref_test_encode_auth_message_packet() {
+        // reference input
+        let tag = [1u8; TAG_LENGTH]; // all 1's.
+        let auth_header = AuthHeader::new(
+            [2; AUTH_TAG_LENGTH], // all 2's
+            [3; ID_NONCE_LENGTH], // all 3's
+            [4; 64].to_vec(),     // all 4's
+            [5; 42].to_vec(),     // all 5's
+        );
+
+        let random_data = [6; 44].to_vec();
+
+        // expected hex output
+        let expected_output = hex::decode("0101010101010101010101010101010101010101010101010101010101010101f89f8c020202020202020202020202a003030303030303030303030303030303030303030303030303030303030303038367636db84004040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404aa0505050505050505050505050505050505050505050505050505050505050505050505050505050505050606060606060606060606060606060606060606060606060606060606060606060606060606060606060606").unwrap();
+
+        let packet = Packet::AuthMessage {
+            tag,
+            auth_header,
+            message: random_data,
+        };
+
+        assert_eq!(packet.encode(), expected_output);
+    }
+
+    #[test]
+    fn ref_test_encode_message_packet() {
+        // reference input
+        let tag = [1u8; TAG_LENGTH]; // all 1's.
+        let auth_tag = [2; AUTH_TAG_LENGTH]; // all 2's
+        let random_data = [3; 44].to_vec();
+
+        // expected hex output
+        let expected_output = hex::decode("01010101010101010101010101010101010101010101010101010101010101018c0202020202020202020202020303030303030303030303030303030303030303030303030303030303030303030303030303030303030303").unwrap();
+
+        let packet = Packet::Message {
+            tag,
+            auth_tag,
+            message: random_data,
         };
 
         assert_eq!(packet.encode(), expected_output);
@@ -453,5 +516,4 @@ mod tests {
 
         assert_eq!(decoded_packet, packet);
     }
-
 }
