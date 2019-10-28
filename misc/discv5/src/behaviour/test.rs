@@ -132,7 +132,6 @@ fn test_discovery_star_topology() {
     // Last node is bootstrap node in a star topology
     let mut bootstrap_node = swarms.pop().unwrap();
     let target_node = swarms.pop().unwrap();
-    let node_enrs: Vec<Enr> = swarms.iter().map(|n| n.local_enr().clone()).collect();
     println!("Bootstrap node: {}", bootstrap_node.local_enr().node_id());
     println!("Target node: {}", target_node.local_enr().node_id());
     for swarm in swarms.iter_mut() {
@@ -162,7 +161,9 @@ fn test_discovery_star_topology() {
             for swarm in swarms.iter_mut() {
                 loop {
                     match swarm.poll().unwrap() {
-                        Async::Ready(Some(Discv5Event::FindNodeResult { key, closer_peers })) => {
+                        Async::Ready(Some(Discv5Event::FindNodeResult {
+                            closer_peers, ..
+                        })) => {
                             println!(
                                 "Query found {} peers, Total peers {}",
                                 closer_peers.len(),
@@ -188,7 +189,6 @@ fn test_findnode_query() {
     let node_num = 8;
     let mut swarms = build_swarms(node_num);
     let node_enrs: Vec<Enr> = swarms.iter().map(|n| n.local_enr().clone()).collect();
-    let last: kbucket::Key<NodeId> = node_enrs.last().unwrap().node_id().clone().into();
     // link the nodes together
     for (swarm, previous_node_enr) in swarms.iter_mut().skip(1).zip(node_enrs.clone()) {
         let key: kbucket::Key<NodeId> = swarm.local_enr().node_id().clone().into();
