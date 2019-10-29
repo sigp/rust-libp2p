@@ -57,6 +57,7 @@ fn build_swarms(n: usize) -> Vec<SwarmType> {
     swarms
 }
 
+/// Build `n` swarms using passed keypairs.
 fn build_swarms_from_keypairs(keypairs: Vec<identity::Keypair>) -> Vec<SwarmType> {
     let base_port = 10000u16;
     let mut swarms = Vec::new();
@@ -111,7 +112,7 @@ fn generate_keypairs(n: usize) -> Vec<identity::Keypair> {
             let enr = EnrBuilder::new("v4").build(&keypair).unwrap();
             let key = enr.node_id();
             let distance = get_distance(&bootstrap_node_id, key).unwrap();
-            // Any distance >= 254 is good enough for discovering nodes in one
+            // Any distance > 254 should be good enough for discovering nodes in one
             // complete query
             if distance > 254 {
                 keypairs.push(keypair);
@@ -127,10 +128,13 @@ fn generate_keypairs(n: usize) -> Vec<identity::Keypair> {
 fn test_discovery_star_topology() {
     init();
     let node_num = 12;
-    let keypairs = generate_keypairs(node_num + 1); // num_nodes nodes, 1 bootstrap, 1 target
+    // Generate `num_nodes` nodes with the bootstrap node and 1 target_node
+    let keypairs = generate_keypairs(node_num + 1);
     let mut swarms = build_swarms_from_keypairs(keypairs);
     // Last node is bootstrap node in a star topology
     let mut bootstrap_node = swarms.pop().unwrap();
+    // target_node is a node "close" to the bootstrap node for the FINDNODE query
+    //target_node is not polled.
     let target_node = swarms.pop().unwrap();
     println!("Bootstrap node: {}", bootstrap_node.local_enr().node_id());
     println!("Target node: {}", target_node.local_enr().node_id());
@@ -148,7 +152,7 @@ fn test_discovery_star_topology() {
         swarm.add_enr(bootstrap_node.local_enr().clone());
         bootstrap_node.add_enr(swarm.local_enr().clone());
     }
-    // Start a FINDNODE query of self on every node
+    // Start a FINDNODE query of target
     let target_random_node_id = target_node.local_enr().node_id();
     swarms
         .first_mut()
