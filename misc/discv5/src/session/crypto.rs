@@ -27,7 +27,8 @@ type Key = [u8; KEY_LENGTH];
 /* Session key generation */
 
 /// Generates session and auth-response keys for a nonce and remote ENR. This currently only
-/// supports Secp256k1 signed ENR's.
+/// supports Secp256k1 signed ENR's. This returns four keys; initiator key, responder key, auth
+/// response key and the ephemeral public key.
 pub fn generate_session_keys(
     local_id: &NodeId,
     remote_enr: &Enr,
@@ -76,6 +77,7 @@ fn derive_key(
     second_id: &NodeId,
     id_nonce: &Nonce,
 ) -> Result<(Key, Key, Key), Discv5Error> {
+
     let mut info = [0u8; INFO_LENGTH];
     info[0..26].copy_from_slice(KEY_AGREEMENT_STRING.as_bytes());
     info[26..26 + NODE_ID_LENGTH].copy_from_slice(&first_id.raw());
@@ -132,7 +134,8 @@ pub fn derive_keys_from_pubkey(
 
 /* Nonce Signing */
 
-/// Generates a signature of a nonce given a keypair. This prefixes 
+/// Generates a signature of a nonce given a keypair. This prefixes the `NONCE_PREFIX` to the
+/// signature.
 pub fn sign_nonce(keypair: &Keypair, nonce: &Nonce, ephem_pubkey: &[u8]) -> Result<Vec<u8>, Discv5Error> {
     let signing_nonce = generate_signing_nonce(nonce, ephem_pubkey);
 
@@ -261,6 +264,84 @@ mod tests {
     use enr::EnrBuilder;
     use libp2p_core::identity::Keypair;
     use rand;
+
+    /* This section provides a series of reference tests for the encoding of packets */
+
+    #[test]
+    fn ref_test_ecdh() {
+        let remote_pubkey = hex::decode("9961e4c2356d61bedb83052c115d311acb3a96f5777296dcf297351130266231503061ac4aaee666073d7e5bc2c80c3f5c5b500c1cb5fd0a76abbb6b675ad157").unwrap();
+        let local_secret_key = hex::decode("fb757dc581730490a1d7a00deea65e9b1936924caaea8f44d476014856b68736").unwrap();
+
+        let expected_secret = hex::decode("033b11a2a1f214567e1537ce5e509ffd9b21373247f2a3ff6841f4976f53165e7e").unwrap();
+
+        let mut remote_pk_bytes = [0;65];
+        remote_pk_bytes[0] = 4; // pre-fixes a magic byte indicating this is in uncompressed form
+        remote_pk_bytes[1..].copy_from_slice(&remote_pubkey);
+        let mut local_sk_bytes = [0;32];
+        local_sk_bytes.copy_from_slice(&local_secret_key);
+
+        let remote_pk = secp256k1::PublicKey::parse(&remote_pk_bytes).unwrap();
+        let local_sk = secp256k1::SecretKey::parse(&local_sk_bytes).unwrap();
+
+        let secret = secp256k1::SharedSecret::<EcdhIdent>::new(&remote_pk, &local_sk).unwrap();
+
+        assert_eq!(secret.as_ref(), expected_secret.as_slice());
+    }
+
+    #[test]
+    fn ref_key_derivation() {
+        let secret = hex::decode("02a77e3aa0c144ae7c0a3af73692b7d6e5b7a2fdc0eda16e8d5e6cb0d08e88dd04").unwrap();
+        let first_node_id = NodeId::parse(&hex::decode("a448f24c6d18e575453db13171562b71999873db5b286df957af199ec94617f7").unwrap()).unwrap();
+        let second_node_id = NodeId::parse(&hex::decode("885bba8dfeddd49855459df852ad5b63d13a3fae593f3f9fa7e317fd43651409").unwrap()).unwrap();
+        let id_nonce = [1; 32];
+
+        let expected_first_key = hex::decode("238d8b50e4363cf603a48c6cc3542967").unwrap();
+        let expected_second_key = hex::decode("bebc0183484f7e7ca2ac32e3d72c8891").unwrap();
+        let expected_auth_resp_key = hex::decode("e987ad9e414d5b4f9bfe4ff1e52f2fae").unwrap();
+
+        let (first_key, second_key, auth_resp_key) = derive_key(&secret, &first_node_id, &second_node_id, &id_nonce).unwrap();
+
+        assert_eq!(first_key.to_vec(), expected_first_key);
+        assert_eq!(second_key.to_vec(), expected_second_key);
+        assert_eq!(auth_resp_key.to_vec(), expected_auth_resp_key);
+    }
+
+    #[test]
+    fn ref_nonce_signing() {
+        let nonce = [1; 32];
+        let ephemeral_pubkey = hex::decode("9961e4c2356d61bedb83052c115d311acb3a96f5777296dcf297351130266231503061ac4aaee666073d7e5bc2c80c3f5c5b500c1cb5fd0a76abbb6b675ad157").unwrap();
+        let local_secret_key = hex::decode("fb757dc581730490a1d7a00deea65e9b1936924caaea8f44d476014856b68736").unwrap();
+
+        let expected_nonce = hex::decode("3b7b8ce9df3fbd9b6367c365622ccc82a2cb9d94219401e7b08e3194f9f835764a07caad38bf0f5a7a89501a8156bb053c880774502f5cd8a6190fbe374adc89").unwrap();
+
+
+        let secret_key = libp2p_core::identity::secp256k1::SecretKey::from_bytes(local_secret_key).unwrap();
+
+        let key = Keypair::Secp256k1(libp2p_core::identity::secp256k1::Keypair::from(secret_key));
+        let nonce = sign_nonce(&key, &nonce, &ephemeral_pubkey).unwrap();
+
+        assert_eq!(nonce, expected_nonce);
+    }
+
+    #[test]
+    fn ref_encryption() {
+        let key_bytes = hex::decode("9f2d77db7004bf8a1a85107ac686990b").unwrap();
+        let nonce_bytes = hex::decode("27b5af763c446acd2749fe8e").unwrap();
+        let pt = hex::decode("01c20101").unwrap();
+        let ad = hex::decode("93a7400fa0d6a694ebc24d5cf570f65d04215b6ac00757875e3f3a5f42107903").unwrap();
+        let expected_ciphertext = hex::decode("a5d12a2d94b8ccb3ba55558229867dc13bfa3648").unwrap();
+
+        let mut key = [0u8;16];
+        key.copy_from_slice(&key_bytes);
+        let mut nonce = [0u8;12];
+        nonce.copy_from_slice(&nonce_bytes);
+
+        let ciphertext = encrypt_message(&key, nonce,&pt, &ad).unwrap(); 
+
+        assert_eq!(ciphertext, expected_ciphertext);
+    }
+
+    /* This section provides functionality testing */
 
     #[test]
     fn derive_symmetric_keys() {

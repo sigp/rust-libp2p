@@ -286,7 +286,7 @@ impl Enr {
     /// Provides the URL-safe base64 encoded "text" version of the ENR prefixed by "enr:".
     pub fn to_base64(&self) -> String {
         let cloned_self = self.clone();
-        let hex = base64::encode_config(&cloned_self.encode(), base64::URL_SAFE);
+        let hex = base64::encode_config(&cloned_self.encode(), base64::URL_SAFE_NO_PAD);
         format!("enr:{}", hex)
     }
 
@@ -490,8 +490,8 @@ impl FromStr for Enr {
         if &base64_string[..4] == "enr:" {
             decode_string = &decode_string[4..];
         }
-        let bytes = base64::decode_config(decode_string, base64::URL_SAFE)
-            .map_err(|_| "Invalid base64 encoding")?;
+        let bytes = base64::decode_config(decode_string, base64::URL_SAFE_NO_PAD)
+            .map_err(|e| format!("Invalid base64 encoding: {:?}", e))?;
         rlp::decode::<Enr>(&bytes).map_err(|e| format!("Invalid ENR: {:?}", e))
     }
 }

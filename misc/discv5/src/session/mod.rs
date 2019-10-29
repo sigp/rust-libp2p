@@ -274,8 +274,10 @@ impl Session {
     // generate the auth response to be encrypted
     let auth_pt = AuthResponse::new(&sig, updated_enr).encode();
 
+
     // encrypt the auth response
     let auth_response_ciphertext  = crypto::encrypt_message(&auth_resp_key, [0u8; 12], &auth_pt, &[])?;
+
 
     // generate an auth header, with a random auth_tag
     let auth_tag: [u8; 12] = rand::random();
