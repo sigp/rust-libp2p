@@ -193,18 +193,14 @@ fn test_findnode_query() {
     let node_num = 8;
     let mut swarms = build_swarms(node_num);
     let node_enrs: Vec<Enr> = swarms.iter().map(|n| n.local_enr().clone()).collect();
+
     // link the nodes together
     for (swarm, previous_node_enr) in swarms.iter_mut().skip(1).zip(node_enrs.clone()) {
         let key: kbucket::Key<NodeId> = swarm.local_enr().node_id().clone().into();
         let distance = key
             .log2_distance(&previous_node_enr.node_id().clone().into())
             .unwrap();
-        println!(
-            "Distance of node {} relative to node {}: {}",
-            swarm.local_enr().node_id(),
-            previous_node_enr.node_id(),
-            distance
-        );
+        println!("Distance of node relative to next: {}", distance);
         swarm.add_enr(previous_node_enr);
     }
 
@@ -240,7 +236,7 @@ fn test_findnode_query() {
                             println!(
                                 "Query found {} peers. Total peers were: {}",
                                 closer_peers.len(),
-                                expected_node_ids.len(),
+                                expected_node_ids.len()
                             );
                             assert!(closer_peers.len() <= expected_node_ids.len());
                             return Ok(Async::Ready(()));
