@@ -15,6 +15,10 @@ use enr::NodeId;
 use enr::{Enr, EnrBuilder};
 use libp2p_secio::SecioConfig;
 use libp2p_yamux as yamux;
+use rand::{
+    RngCore,
+    {prng::XorShiftRng, SeedableRng},
+};
 use std::io;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
@@ -95,9 +99,9 @@ fn get_distance(node1: &NodeId, node2: &NodeId) -> Option<u64> {
     node1.log2_distance(&node2.clone().into())
 }
 
-/// Generate `n` keypairs such that the node ids they generate are close to
+/// Generate `n` keypairs such that the node ids they generate are at kbucket `bucket_num` of
 /// the generated bootstrap node. Return the `n` nodes along with the bootstrap node.
-fn generate_keypairs(n: usize) -> Vec<identity::Keypair> {
+fn generate_keypairs(n: usize, bucket_num: u64) -> Vec<identity::Keypair> {
     let mut keypairs: Vec<identity::Keypair> = Vec::new();
     let bootstrap_keypair = identity::Keypair::generate_secp256k1();
     let bootstrap_node_id = EnrBuilder::new("v4")
@@ -113,7 +117,7 @@ fn generate_keypairs(n: usize) -> Vec<identity::Keypair> {
             let distance = get_distance(&bootstrap_node_id, key).unwrap();
             // Any distance > 254 should be good enough for discovering nodes in one
             // complete query
-            if distance > 254 {
+            if distance == bucket_num {
                 keypairs.push(keypair);
                 break;
             }
@@ -123,12 +127,64 @@ fn generate_keypairs(n: usize) -> Vec<identity::Keypair> {
     keypairs
 }
 
+fn generate_deterministic_keypair(n: usize, seed: u64) -> Vec<identity::Keypair> {
+    let mut keypairs = Vec::new();
+    for i in 0..n {
+        let sk = {
+            let mut rng = &mut XorShiftRng::seed_from_u64(seed + i as u64);
+            let mut b = [0; secp256k1::util::SECRET_KEY_SIZE];
+            loop {
+                // until a value is given within the curve order
+                rng.fill_bytes(&mut b);
+                if let Ok(k) = identity::secp256k1::SecretKey::from_bytes(&mut b) {
+                    break k;
+                }
+            }
+        };
+        let kp = identity::Keypair::Secp256k1(identity::secp256k1::Keypair::from(sk));
+        // println!("Keypair {:?}", kp.public());
+        keypairs.push(kp);
+    }
+    keypairs
+}
+
+#[test]
+fn test_deterministic() {
+    let mut i = 0;
+    loop {
+        i += 1;
+        let keypairs = generate_deterministic_keypair(14, i);
+        let mut swarms = build_swarms_from_keypairs(keypairs);
+        let mut bootstrap_node = swarms.pop().unwrap();
+        let mut check = true;
+        for swarm in swarms.iter_mut() {
+            let key: kbucket::Key<NodeId> = swarm.local_enr().node_id().clone().into();
+            let distance = key
+                .log2_distance(&bootstrap_node.local_enr().node_id().clone().into())
+                .unwrap();
+            if distance != 256 {
+                check = false;
+                break;
+            }
+        }
+        if check {
+            println!("Seed {}", i);
+            break;
+        }
+        if i % 100 == 0 {
+            println!("seed value {}", i);
+        }
+    }
+    assert!(true);
+}
+
 #[test]
 fn test_discovery_star_topology() {
     init();
     let node_num = 12;
     // Generate `num_nodes` nodes with the bootstrap node and 1 target_node
-    let keypairs = generate_keypairs(node_num + 1);
+    // let keypairs = generate_keypairs(node_num + 1, 256);
+    let keypairs = generate_deterministic_keypair(node_num + 2, 1654);
     let mut swarms = build_swarms_from_keypairs(keypairs);
     // Last node is bootstrap node in a star topology
     let mut bootstrap_node = swarms.pop().unwrap();
