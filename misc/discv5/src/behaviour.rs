@@ -1001,6 +1001,25 @@ where
     }
 }
 
+/// Takes an enr and a list of other enrs to compare against.
+/// Returns `false` if count of enrs in the same /24 subnet as `enr` >= `limit` and `true` otherwise.
+fn ip_limiter<'a>(enr: Enr, others: impl Iterator<Item = &'a Enr>, limit: usize) -> bool {
+    let mut allowed = true;
+    if let Some(ip) = enr.ip() {
+        let count = others.flat_map(|e| e.ip()).fold(0, |acc, x| {
+            if x.octets()[0..3] == ip.octets()[0..3] {
+                acc + 1
+            } else {
+                acc
+            }
+        });
+        if count >= limit {
+            allowed = false;
+        }
+    };
+    allowed
+}
+
 /// Event that can be produced by the `Discv5` behaviour.
 #[derive(Debug)]
 pub enum Discv5Event {
@@ -1079,5 +1098,21 @@ mod tests {
 
         node = buckets.iter().next().unwrap();
         assert_eq!(node.status, NodeStatus::Connected);
+    }
+
+    #[test]
+    fn test_subnet() {
+        let ip1: IpAddr = "192.168.1.1".parse().unwrap();
+        let ip2: IpAddr = "192.168.1.2".parse().unwrap();
+        let ip3: IpAddr = "192.168.2.3".parse().unwrap(); //different /24 subnet
+
+        let kp1 = identity::Keypair::generate_secp256k1();
+        let enr = EnrBuilder::new("v4").ip(ip1).build(&kp1).unwrap();
+        let others = vec![
+            EnrBuilder::new("v4").ip(ip2).build(&kp1).unwrap(),
+            EnrBuilder::new("v4").ip(ip3).build(&kp1).unwrap(),
+        ];
+        let val = ip_limiter(enr, others.iter(), 2);
+        assert!(val);
     }
 }
