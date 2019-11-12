@@ -154,7 +154,7 @@ impl<TSubstream> Discv5<TSubstream> {
         let key = kbucket::Key::from(enr.node_id().clone());
         if self
             .kbuckets
-            .check(&key, &enr, { |v, o, l| ip_limiter(v, &o, l) })
+            .check(&key, Some(enr.clone()), { |v, o, l| ip_limiter(v, &o, l) })
         {
             match self.kbuckets.entry(&key) {
                 kbucket::Entry::Present(mut entry, _) => {
@@ -661,7 +661,7 @@ impl<TSubstream> Discv5<TSubstream> {
             let key = kbucket::Key::from(peer.node_id().clone());
             if self
                 .kbuckets
-                .check(&key, &peer, { |v, o, l| ip_limiter(v, &o, l) })
+                .check(&key, Some(peer.clone()), { |v, o, l| ip_limiter(v, &o, l) })
             {
                 match self.kbuckets.entry(&key) {
                     kbucket::Entry::Present(mut entry, _) => {
@@ -716,29 +716,34 @@ impl<TSubstream> Discv5<TSubstream> {
             self.known_peer_ids
                 .insert(enr_copy.peer_id(), enr_copy.node_id().clone());
         }
-        if let Some(enr) = enr {
-            if self
-                .kbuckets
-                .check(&key, &enr, { |v, o, l| ip_limiter(v, &o, l) })
-            {
-                match self.kbuckets.entry(&key) {
-                    kbucket::Entry::Present(mut entry, old_status) => {
+        if self
+            .kbuckets
+            .check(&key, enr.clone(), { |v, o, l| ip_limiter(v, &o, l) })
+        {
+            match self.kbuckets.entry(&key) {
+                kbucket::Entry::Present(mut entry, old_status) => {
+                    if let Some(enr) = enr {
                         *entry.value() = enr;
-                        if old_status != new_status {
-                            entry.update(new_status);
-                        }
                     }
+                    if old_status != new_status {
+                        entry.update(new_status);
+                    }
+                }
 
-                    kbucket::Entry::Pending(mut entry, old_status) => {
+                kbucket::Entry::Pending(mut entry, old_status) => {
+                    if let Some(enr) = enr {
                         *entry.value() = enr;
-                        if old_status != new_status {
-                            entry.update(new_status);
-                        }
                     }
+                    if old_status != new_status {
+                        entry.update(new_status);
+                    }
+                }
 
-                    kbucket::Entry::Absent(entry) => {
-                        if new_status == NodeStatus::Connected {
-                            // Note: If an ENR is not provided, no record is added
+                kbucket::Entry::Absent(entry) => {
+                    if new_status == NodeStatus::Connected {
+                        // Note: If an ENR is not provided, no record is added
+                        debug_assert!(enr.is_some());
+                        if let Some(enr) = enr {
                             match entry.insert(enr, new_status) {
                                 kbucket::InsertResult::Inserted => {
                                     let event = Discv5Event::NodeInserted {
@@ -757,8 +762,8 @@ impl<TSubstream> Discv5<TSubstream> {
                             }
                         }
                     }
-                    _ => {}
                 }
+                _ => {}
             }
         }
     }
