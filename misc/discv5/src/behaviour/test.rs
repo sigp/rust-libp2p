@@ -46,7 +46,7 @@ fn build_swarms(n: usize, base_port: u16) -> Vec<SwarmType> {
             .map(|(p, m), _| (p, StreamMuxerBox::new(m)))
             .map_err(|e| panic!("Failed to create transport: {:?}", e))
             .boxed();
-        let discv5 = Discv5::new(enr, keypair.clone(), ip.into()).unwrap();
+        let discv5 = Discv5::new(enr, keypair.clone(), ip.into(), false).unwrap();
         swarms.push(Swarm::new(
             transport,
             discv5,
@@ -79,7 +79,7 @@ fn build_swarms_from_keypairs(keypairs: Vec<identity::Keypair>) -> Vec<SwarmType
             .map(|(p, m), _| (p, StreamMuxerBox::new(m)))
             .map_err(|e| panic!("Failed to create transport: {:?}", e))
             .boxed();
-        let discv5 = Discv5::new(enr, keypair.clone(), ip.into()).unwrap();
+        let discv5 = Discv5::new(enr, keypair.clone(), ip.into(), false).unwrap();
         swarms.push(Swarm::new(
             transport,
             discv5,
