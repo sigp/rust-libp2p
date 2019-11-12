@@ -1080,6 +1080,7 @@ mod tests {
     use super::*;
     use enr::EnrBuilder;
     use libp2p_core::identity;
+    use std::net::Ipv4Addr;
 
     #[test]
     fn test_updating_connection_on_ping() {
@@ -1129,7 +1130,7 @@ mod tests {
     }
 
     #[test]
-    fn test_subnet() {
+    fn test_ip_limiter_fn() {
         let ip1: IpAddr = "192.168.1.1".parse().unwrap();
         let ip2: IpAddr = "192.168.1.2".parse().unwrap();
         let ip3: IpAddr = "192.168.2.3".parse().unwrap(); //different /24 subnet
@@ -1141,5 +1142,36 @@ mod tests {
         let others = vec![&enr1, &enr2];
         let val = ip_limiter(&enr, &others, 2);
         assert!(val);
+    }
+
+    #[test]
+    fn test_table_limits() {
+        let keypair = identity::Keypair::generate_secp256k1();
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        let enr = EnrBuilder::new("v4")
+            .ip(ip.clone().into())
+            .udp(10001)
+            .build(&keypair)
+            .unwrap();
+        let mut discv5: Discv5<Box<u64>> =
+            Discv5::new(enr, keypair.clone(), ip.into(), true).unwrap();
+        let table_limit: usize = 10;
+        // Generate `table_limit + 1` nodes in the same subnet.
+        let enrs: Vec<Enr> = (1..=table_limit + 1)
+            .map(|i| {
+                let kp = identity::Keypair::generate_secp256k1();
+                let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, i as u8));
+                EnrBuilder::new("v4")
+                    .ip(ip.clone().into())
+                    .udp(10000 + i as u16)
+                    .build(&kp)
+                    .unwrap()
+            })
+            .collect();
+        for enr in enrs {
+            discv5.add_enr(enr.clone());
+        }
+        // Number of entries could be < `table_limit` as per bucket limit is 2.
+        assert!(discv5.kbuckets_entries().collect::<Vec<_>>().len() <= table_limit);
     }
 }
