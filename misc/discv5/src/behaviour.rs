@@ -87,6 +87,9 @@ pub struct Discv5<TSubstream> {
     /// The time between pings to ensure connectivity amongst connected nodes.
     ping_delay: Duration,
 
+    /// Config option for limiting ip's in same subnet
+    limit_ip: bool,
+
     /// Marker to pin the generics.
     marker: PhantomData<TSubstream>,
 }
@@ -116,7 +119,12 @@ impl<TSubstream> Discv5<TSubstream> {
     /// as IP addresses and ports which we wish to broadcast to other nodes via this discovery
     /// mechanism. The `listen_address` determines which address the UDP socket will listen on, and the udp `port`
     /// will be taken from the provided ENR.
-    pub fn new(local_enr: Enr, keypair: Keypair, listen_address: IpAddr) -> io::Result<Self> {
+    pub fn new(
+        local_enr: Enr,
+        keypair: Keypair,
+        listen_address: IpAddr,
+        limit_ip: bool,
+    ) -> io::Result<Self> {
         let service = SessionService::new(local_enr.clone(), keypair.clone(), listen_address)?;
         let query_config = QueryConfig::default();
 
@@ -135,6 +143,7 @@ impl<TSubstream> Discv5<TSubstream> {
             next_query_id: 0,
             query_config,
             service,
+            limit_ip,
             ping_delay: Duration::from_secs(300),
             marker: PhantomData,
         })
@@ -152,9 +161,10 @@ impl<TSubstream> Discv5<TSubstream> {
         self.known_peer_ids
             .insert(enr.peer_id().clone(), enr.node_id().clone());
         let key = kbucket::Key::from(enr.node_id().clone());
-        if self
-            .kbuckets
-            .check(&key, Some(enr.clone()), { |v, o, l| ip_limiter(v, &o, l) })
+        if !self.limit_ip
+            || self
+                .kbuckets
+                .check(&key, Some(enr.clone()), { |v, o, l| ip_limiter(v, &o, l) })
         {
             match self.kbuckets.entry(&key) {
                 kbucket::Entry::Present(mut entry, _) => {
@@ -659,9 +669,10 @@ impl<TSubstream> Discv5<TSubstream> {
 
             // If any of the discovered nodes are in the routing table, and there contains an older ENR, update it.
             let key = kbucket::Key::from(peer.node_id().clone());
-            if self
-                .kbuckets
-                .check(&key, Some(peer.clone()), { |v, o, l| ip_limiter(v, &o, l) })
+            if !self.limit_ip
+                || self
+                    .kbuckets
+                    .check(&key, Some(peer.clone()), { |v, o, l| ip_limiter(v, &o, l) })
             {
                 match self.kbuckets.entry(&key) {
                     kbucket::Entry::Present(mut entry, _) => {
@@ -716,9 +727,10 @@ impl<TSubstream> Discv5<TSubstream> {
             self.known_peer_ids
                 .insert(enr_copy.peer_id(), enr_copy.node_id().clone());
         }
-        if self
-            .kbuckets
-            .check(&key, enr.clone(), { |v, o, l| ip_limiter(v, &o, l) })
+        if !self.limit_ip
+            || self
+                .kbuckets
+                .check(&key, enr.clone(), { |v, o, l| ip_limiter(v, &o, l) })
         {
             match self.kbuckets.entry(&key) {
                 kbucket::Entry::Present(mut entry, old_status) => {
@@ -1087,7 +1099,8 @@ mod tests {
             .unwrap();
 
         // Set up discv5 with one disconnected node
-        let mut discv5: Discv5<Box<u64>> = Discv5::new(enr, keypair.clone(), ip.into()).unwrap();
+        let mut discv5: Discv5<Box<u64>> =
+            Discv5::new(enr, keypair.clone(), ip.into(), false).unwrap();
         discv5.add_enr(enr2.clone());
         discv5.connection_updated(enr2.node_id().clone(), None, NodeStatus::Disconnected);
 

@@ -61,7 +61,7 @@
 //!
 //!    // construct the discv5 behaviour
 //!    // the substream type is removed for demonstrative purposes
-//!    let discv5: Discv5<()> = Discv5::new(enr, keypair, "0.0.0.0".parse::<Ipv4Addr>(). unwrap().into()).unwrap();
+//!    let discv5: Discv5<()> = Discv5::new(enr, keypair, "0.0.0.0".parse::<Ipv4Addr>(). unwrap().into(), false).unwrap();
 //! ```
 //!
 //! To see a usage in a swarm environment, see the `discv5` example in `/examples`.
