@@ -152,32 +152,37 @@ impl<TSubstream> Discv5<TSubstream> {
         self.known_peer_ids
             .insert(enr.peer_id().clone(), enr.node_id().clone());
         let key = kbucket::Key::from(enr.node_id().clone());
-        match self.kbuckets.entry(&key) {
-            kbucket::Entry::Present(mut entry, _) => {
-                *entry.value() = enr;
-            }
-            kbucket::Entry::Pending(mut entry, _) => {
-                *entry.value() = enr;
-            }
-            kbucket::Entry::Absent(entry) => {
-                match entry.insert(enr.clone(), NodeStatus::Disconnected) {
-                    kbucket::InsertResult::Inserted => {
-                        let event = Discv5Event::EnrAdded {
-                            enr,
-                            replaced: None,
-                        };
-                        self.events.push(event);
-                    }
-                    kbucket::InsertResult::Full => (),
-                    kbucket::InsertResult::Pending { disconnected } => {
-                        // Try and establish a connection
-                        self.send_ping(&disconnected.into_preimage());
-                    }
+        if self
+            .kbuckets
+            .check(&key, &enr, { |v, o, l| ip_limiter(v, &o, l) })
+        {
+            match self.kbuckets.entry(&key) {
+                kbucket::Entry::Present(mut entry, _) => {
+                    *entry.value() = enr;
                 }
-                return;
-            }
-            kbucket::Entry::SelfEntry => return,
-        };
+                kbucket::Entry::Pending(mut entry, _) => {
+                    *entry.value() = enr;
+                }
+                kbucket::Entry::Absent(entry) => {
+                    match entry.insert(enr.clone(), NodeStatus::Disconnected) {
+                        kbucket::InsertResult::Inserted => {
+                            let event = Discv5Event::EnrAdded {
+                                enr,
+                                replaced: None,
+                            };
+                            self.events.push(event);
+                        }
+                        kbucket::InsertResult::Full => (),
+                        kbucket::InsertResult::Pending { disconnected } => {
+                            // Try and establish a connection
+                            self.send_ping(&disconnected.into_preimage());
+                        }
+                    }
+                    return;
+                }
+                kbucket::Entry::SelfEntry => return,
+            };
+        }
     }
 
     /// Returns the number of connected peers the behaviour knows about.
@@ -654,28 +659,33 @@ impl<TSubstream> Discv5<TSubstream> {
 
             // If any of the discovered nodes are in the routing table, and there contains an older ENR, update it.
             let key = kbucket::Key::from(peer.node_id().clone());
-            match self.kbuckets.entry(&key) {
-                kbucket::Entry::Present(mut entry, _) => {
-                    if entry.value().seq() < peer.seq() {
-                        trace!("Enr updated: {}", peer);
-                        *entry.value() = peer.clone();
+            if self
+                .kbuckets
+                .check(&key, &peer, { |v, o, l| ip_limiter(v, &o, l) })
+            {
+                match self.kbuckets.entry(&key) {
+                    kbucket::Entry::Present(mut entry, _) => {
+                        if entry.value().seq() < peer.seq() {
+                            trace!("Enr updated: {}", peer);
+                            *entry.value() = peer.clone();
+                            self.service.update_enr(peer);
+                        }
+                    }
+                    kbucket::Entry::Pending(mut entry, _) => {
+                        if entry.value().seq() < peer.seq() {
+                            trace!("Enr updated: {}", peer);
+                            *entry.value() = peer.clone();
+                            self.service.update_enr(peer);
+                        }
+                    }
+                    kbucket::Entry::Absent(_entry) => {
+                        // the service may have an untrusted session
+                        // update the service, which will inform this protocol if a session is
+                        // established or not.
                         self.service.update_enr(peer);
                     }
+                    _ => {}
                 }
-                kbucket::Entry::Pending(mut entry, _) => {
-                    if entry.value().seq() < peer.seq() {
-                        trace!("Enr updated: {}", peer);
-                        *entry.value() = peer.clone();
-                        self.service.update_enr(peer);
-                    }
-                }
-                kbucket::Entry::Absent(_entry) => {
-                    // the service may have an untrusted session
-                    // update the service, which will inform this protocol if a session is
-                    // established or not.
-                    self.service.update_enr(peer);
-                }
-                _ => {}
             }
         }
 
@@ -706,50 +716,50 @@ impl<TSubstream> Discv5<TSubstream> {
             self.known_peer_ids
                 .insert(enr_copy.peer_id(), enr_copy.node_id().clone());
         }
-        match self.kbuckets.entry(&key) {
-            kbucket::Entry::Present(mut entry, old_status) => {
-                if let Some(enr) = enr {
-                    *entry.value() = enr;
-                }
-                if old_status != new_status {
-                    entry.update(new_status);
-                }
-            }
+        if let Some(enr) = enr {
+            if self
+                .kbuckets
+                .check(&key, &enr, { |v, o, l| ip_limiter(v, &o, l) })
+            {
+                match self.kbuckets.entry(&key) {
+                    kbucket::Entry::Present(mut entry, old_status) => {
+                        *entry.value() = enr;
+                        if old_status != new_status {
+                            entry.update(new_status);
+                        }
+                    }
 
-            kbucket::Entry::Pending(mut entry, old_status) => {
-                if let Some(enr) = enr {
-                    *entry.value() = enr;
-                }
-                if old_status != new_status {
-                    entry.update(new_status);
-                }
-            }
+                    kbucket::Entry::Pending(mut entry, old_status) => {
+                        *entry.value() = enr;
+                        if old_status != new_status {
+                            entry.update(new_status);
+                        }
+                    }
 
-            kbucket::Entry::Absent(entry) => {
-                if new_status == NodeStatus::Connected {
-                    // Note: If an ENR is not provided, no record is added
-                    debug_assert!(enr.is_some());
-                    if let Some(enr) = enr {
-                        match entry.insert(enr, new_status) {
-                            kbucket::InsertResult::Inserted => {
-                                let event = Discv5Event::NodeInserted {
-                                    node_id: node_id.clone(),
-                                    replaced: None,
-                                };
-                                self.events.push(event);
-                            }
-                            kbucket::InsertResult::Full => (),
-                            kbucket::InsertResult::Pending { disconnected } => {
-                                debug_assert!(!self
-                                    .connected_peers
-                                    .contains_key(disconnected.preimage()));
-                                self.send_ping(&disconnected.into_preimage());
+                    kbucket::Entry::Absent(entry) => {
+                        if new_status == NodeStatus::Connected {
+                            // Note: If an ENR is not provided, no record is added
+                            match entry.insert(enr, new_status) {
+                                kbucket::InsertResult::Inserted => {
+                                    let event = Discv5Event::NodeInserted {
+                                        node_id: node_id.clone(),
+                                        replaced: None,
+                                    };
+                                    self.events.push(event);
+                                }
+                                kbucket::InsertResult::Full => (),
+                                kbucket::InsertResult::Pending { disconnected } => {
+                                    debug_assert!(!self
+                                        .connected_peers
+                                        .contains_key(disconnected.preimage()));
+                                    self.send_ping(&disconnected.into_preimage());
+                                }
                             }
                         }
                     }
+                    _ => {}
                 }
             }
-            _ => {}
         }
     }
 
@@ -1003,10 +1013,10 @@ where
 
 /// Takes an enr and a list of other enrs to compare against.
 /// Returns `false` if count of enrs in the same /24 subnet as `enr` >= `limit` and `true` otherwise.
-fn ip_limiter<'a>(enr: Enr, others: impl Iterator<Item = &'a Enr>, limit: usize) -> bool {
+fn ip_limiter(enr: &Enr, others: &Vec<&Enr>, limit: usize) -> bool {
     let mut allowed = true;
     if let Some(ip) = enr.ip() {
-        let count = others.flat_map(|e| e.ip()).fold(0, |acc, x| {
+        let count = others.iter().flat_map(|e| e.ip()).fold(0, |acc, x| {
             if x.octets()[0..3] == ip.octets()[0..3] {
                 acc + 1
             } else {
@@ -1108,11 +1118,10 @@ mod tests {
 
         let kp1 = identity::Keypair::generate_secp256k1();
         let enr = EnrBuilder::new("v4").ip(ip1).build(&kp1).unwrap();
-        let others = vec![
-            EnrBuilder::new("v4").ip(ip2).build(&kp1).unwrap(),
-            EnrBuilder::new("v4").ip(ip3).build(&kp1).unwrap(),
-        ];
-        let val = ip_limiter(enr, others.iter(), 2);
+        let enr1 = EnrBuilder::new("v4").ip(ip2).build(&kp1).unwrap();
+        let enr2 = EnrBuilder::new("v4").ip(ip3).build(&kp1).unwrap();
+        let others = vec![&enr1, &enr2];
+        let val = ip_limiter(&enr, &others, 2);
         assert!(val);
     }
 }
