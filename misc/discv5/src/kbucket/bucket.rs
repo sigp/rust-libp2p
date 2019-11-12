@@ -31,6 +31,7 @@ use super::*;
 
 /// Maximum number of nodes in a bucket, i.e. the (fixed) `k` parameter.
 pub const MAX_NODES_PER_BUCKET: usize = 16;
+const MAX_NODES_PER_SUBNET_BUCKET: usize = 2;
 
 /// A `PendingNode` is a `Node` that is pending insertion into a `KBucket`.
 #[derive(Debug, Clone)]
@@ -59,7 +60,6 @@ pub enum NodeStatus {
 }
 
 impl<TPeerId, TVal> PendingNode<TPeerId, TVal> {
-
     pub fn status(&self) -> NodeStatus {
         self.status
     }
@@ -368,7 +368,6 @@ where
         }
     }
 
-
     /// Gets the number of entries currently in the bucket.
     pub fn num_entries(&self) -> usize {
         self.nodes.len()
@@ -395,6 +394,16 @@ where
     /// bucket.
     pub fn get_mut(&mut self, key: &Key<TPeerId>) -> Option<&mut Node<TPeerId, TVal>> {
         self.nodes.iter_mut().find(move |p| &p.key == key)
+    }
+
+    /// Checks if value can be inserted into the kbuckets table.
+    /// A single bucket can only have 2 nodes per /24 subnet
+    pub fn check(&self, value: &TVal, f: impl Fn(&TVal, Vec<&TVal>, usize) -> bool) -> bool {
+        f(
+            value,
+            self.iter().map(|(e, _)| &e.value).collect(),
+            MAX_NODES_PER_SUBNET_BUCKET,
+        )
     }
 }
 

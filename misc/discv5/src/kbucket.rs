@@ -80,6 +80,8 @@ use std::time::{Duration, Instant};
 
 /// Maximum number of k-buckets.
 const NUM_BUCKETS: usize = 256;
+/// Number of permitted nodes in the same /24 subnet
+const MAX_NODES_PER_SUBNET_TABLE: usize = 10;
 
 /// A `KBucketsTable` represents a Kademlia routing table.
 #[derive(Debug, Clone)]
@@ -170,6 +172,21 @@ where
         })
     }
 
+    /// Returns an iterator over all the entries in the routing table.
+    /// Does not add pending node to kbucket to get an iterator which
+    /// takes a reference instead of a mutable reference.
+    pub fn iter_ref<'a>(&'a self) -> impl Iterator<Item = EntryRefView<'a, TPeerId, TVal>> {
+        self.buckets.iter().flat_map(move |table| {
+            table.iter().map(move |(n, status)| EntryRefView {
+                node: NodeRefView {
+                    key: &n.key,
+                    value: &n.value,
+                },
+                status,
+            })
+        })
+    }
+
     /// Consumes the next applied pending entry, if any.
     ///
     /// When an entry is attempted to be inserted and the respective bucket is full,
@@ -234,6 +251,34 @@ where
         }
     }
 
+    /// Returns a reference to a bucket given the key. Returns None if bucket does not exist.
+    pub fn get_bucket<'a>(&'a self, key: &Key<TPeerId>) -> Option<&'a KBucket<TPeerId, TVal>> {
+        let index = BucketIndex::new(&self.local_key.distance(key));
+        if let Some(i) = index {
+            let bucket = &self.buckets[i.get()];
+            Some(&bucket)
+        } else {
+            None
+        }
+    }
+
+    /// Checks if key and value can be inserted into the kbuckets table.
+    /// A single bucket can only have 2 nodes per /24 subnet
+    /// The entire table can only have 10 nodes per /24 subnet
+    pub fn check(
+        &self,
+        key: &Key<TPeerId>,
+        value: &TVal,
+        f: impl Fn(&TVal, Vec<&TVal>, usize) -> bool,
+    ) -> bool {
+        let bucket = self.get_bucket(key);
+        if let Some(b) = bucket {
+            let others = self.iter_ref().map(|e| e.node.value).collect();
+            f(value, others, MAX_NODES_PER_SUBNET_TABLE) && b.check(value, f)
+        } else {
+            true
+        }
+    }
 }
 
 /// An iterator over (some projection of) the closest entries in a
