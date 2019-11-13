@@ -263,8 +263,8 @@ where
     }
 
     /// Checks if key and value can be inserted into the kbuckets table.
-    /// A single bucket can only have 2 nodes per /24 subnet
-    /// The entire table can only have 10 nodes per /24 subnet
+    /// A single bucket can only have `MAX_NODES_PER_SUBNET_BUCKET` nodes per /24 subnet.
+    /// The entire table can only have `MAX_NODES_PER_SUBNET_TABLE` nodes per /24 subnet.
     pub fn check(
         &self,
         key: &Key<TPeerId>,
