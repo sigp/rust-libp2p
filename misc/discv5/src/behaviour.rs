@@ -118,7 +118,8 @@ impl<TSubstream> Discv5<TSubstream> {
     /// `local_enr` is the `ENR` representing the local node. This contains node identifying information, such
     /// as IP addresses and ports which we wish to broadcast to other nodes via this discovery
     /// mechanism. The `listen_address` determines which address the UDP socket will listen on, and the udp `port`
-    /// will be taken from the provided ENR.
+    /// will be taken from the provided ENR. `limit_ip` indicates whether we want to limit ip's from the same
+    /// /24 subnet in the kbuckets table. This is to mitigate eclipse attacks.
     pub fn new(
         local_enr: Enr,
         keypair: Keypair,
@@ -1028,8 +1029,10 @@ where
     }
 }
 
-/// Takes an enr and a list of other enrs to compare against.
-/// Returns `false` if count of enrs in the same /24 subnet as `enr` >= `limit` and `true` otherwise.
+/// Takes an `enr` to insert and a list of other `enrs` to compare against.
+/// Returns `true` if `enr` can be inserted and `false` otherwise.
+/// `enr` can be inserted if the count of enrs in `others` in the same /24 subnet as `enr`
+/// is less than `limit`.
 fn ip_limiter(enr: &Enr, others: &Vec<&Enr>, limit: usize) -> bool {
     let mut allowed = true;
     if let Some(ip) = enr.ip() {
@@ -1172,7 +1175,7 @@ mod tests {
             .build(&keypair)
             .unwrap();
         let bucket_limit: usize = 2;
-        // Generate `bucket_limit + 1` keypairs
+        // Generate `bucket_limit + 1` keypairs that go in `enr` node's 256th bucket.
         let keypairs = {
             let mut keypairs = Vec::new();
             for _ in 0..bucket_limit + 1 {
@@ -1183,8 +1186,6 @@ mod tests {
                     let distance = key
                         .log2_distance(&enr_new.node_id().clone().into())
                         .unwrap();
-                    // Any distance > 254 should be good enough for discovering nodes in one
-                    // complete query
                     if distance == 256 {
                         keypairs.push(keypair);
                         break;
