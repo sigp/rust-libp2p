@@ -1129,28 +1129,14 @@ mod tests {
         assert_eq!(node.status, NodeStatus::Connected);
     }
 
-    #[test]
-    fn test_ip_limiter_fn() {
-        let ip1: IpAddr = "192.168.1.1".parse().unwrap();
-        let ip2: IpAddr = "192.168.1.2".parse().unwrap();
-        let ip3: IpAddr = "192.168.2.3".parse().unwrap(); //different /24 subnet
-
-        let kp1 = identity::Keypair::generate_secp256k1();
-        let enr = EnrBuilder::new("v4").ip(ip1).build(&kp1).unwrap();
-        let enr1 = EnrBuilder::new("v4").ip(ip2).build(&kp1).unwrap();
-        let enr2 = EnrBuilder::new("v4").ip(ip3).build(&kp1).unwrap();
-        let others = vec![&enr1, &enr2];
-        let val = ip_limiter(&enr, &others, 2);
-        assert!(val);
-    }
-
+    // The kbuckets table can have maximum 10 nodes in the same /24 subnet across all buckets
     #[test]
     fn test_table_limits() {
         let keypair = identity::Keypair::generate_secp256k1();
         let ip: IpAddr = "127.0.0.1".parse().unwrap();
         let enr = EnrBuilder::new("v4")
             .ip(ip.clone().into())
-            .udp(10001)
+            .udp(9000)
             .build(&keypair)
             .unwrap();
         let mut discv5: Discv5<Box<u64>> =
@@ -1163,7 +1149,7 @@ mod tests {
                 let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, i as u8));
                 EnrBuilder::new("v4")
                     .ip(ip.clone().into())
-                    .udp(10000 + i as u16)
+                    .udp(9000 + i as u16)
                     .build(&kp)
                     .unwrap()
             })
@@ -1173,5 +1159,62 @@ mod tests {
         }
         // Number of entries could be < `table_limit` as per bucket limit is 2.
         assert!(discv5.kbuckets_entries().collect::<Vec<_>>().len() <= table_limit);
+    }
+
+    // Each bucket can have maximum 2 nodes in the same /24 subnet
+    #[test]
+    fn test_bucket_limits() {
+        let keypair = identity::Keypair::generate_secp256k1();
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        let enr = EnrBuilder::new("v4")
+            .ip(ip.clone().into())
+            .udp(9500)
+            .build(&keypair)
+            .unwrap();
+        let bucket_limit: usize = 2;
+        // Generate `bucket_limit + 1` keypairs
+        let keypairs = {
+            let mut keypairs = Vec::new();
+            for _ in 0..bucket_limit + 1 {
+                loop {
+                    let keypair = identity::Keypair::generate_secp256k1();
+                    let enr_new = EnrBuilder::new("v4").build(&keypair).unwrap();
+                    let key: kbucket::Key<NodeId> = enr.node_id().clone().into();
+                    let distance = key
+                        .log2_distance(&enr_new.node_id().clone().into())
+                        .unwrap();
+                    // Any distance > 254 should be good enough for discovering nodes in one
+                    // complete query
+                    if distance == 256 {
+                        keypairs.push(keypair);
+                        break;
+                    }
+                }
+            }
+            keypairs
+        };
+        // Generate `bucket_limit + 1` nodes in the same subnet.
+        let enrs: Vec<Enr> = (1..=bucket_limit + 1)
+            .map(|i| {
+                let kp = &keypairs[i - 1];
+                let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, i as u8));
+                EnrBuilder::new("v4")
+                    .ip(ip.clone().into())
+                    .udp(9500 + i as u16)
+                    .build(kp)
+                    .unwrap()
+            })
+            .collect();
+        let mut discv5: Discv5<Box<u64>> =
+            Discv5::new(enr, keypair.clone(), ip.into(), true).unwrap();
+        for enr in enrs {
+            discv5.add_enr(enr.clone());
+        }
+
+        // Number of entries should be equal to `bucket_limit`.
+        assert_eq!(
+            discv5.kbuckets_entries().collect::<Vec<_>>().len(),
+            bucket_limit
+        );
     }
 }
