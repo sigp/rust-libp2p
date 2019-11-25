@@ -20,6 +20,7 @@ use libp2p_secio::SecioConfig;
 use libp2p_yamux as yamux;
 use rand_core::{RngCore, SeedableRng};
 use rand_xorshift;
+use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
@@ -113,6 +114,50 @@ fn generate_deterministic_keypair(n: usize, seed: u64) -> Vec<identity::Keypair>
         keypairs.push(kp);
     }
     keypairs
+}
+
+fn get_distance(node1: &NodeId, node2: &NodeId) -> Option<u64> {
+    let node1: kbucket::Key<NodeId> = node1.clone().into();
+    node1.log2_distance(&node2.clone().into())
+}
+
+// Simple searching function to find seeds that give node ids for a range of testing and different
+// topologies
+#[allow(dead_code)]
+fn find_seed() {
+    let mut found = false;
+    let mut buckets = HashMap::new();
+    let mut seed = 1;
+    while !found {
+        let keys = generate_deterministic_keypair(11, seed);
+
+        let node_ids = keys
+            .iter()
+            .map(|k| NodeId::from(k.public()))
+            .collect::<Vec<_>>();
+
+        let local = node_ids[0].clone();
+
+        buckets = HashMap::new();
+
+        for id in node_ids[1..].iter() {
+            let distance = get_distance(&local, id);
+            if let Some(distance) = distance {
+                *buckets.entry(distance).or_insert_with(|| 0) += 1;
+            }
+        }
+        if buckets.values().find(|v| **v > 2) == None {
+            found = true;
+        }
+        seed += 1;
+        if seed % 1000 == 0 {
+            println!("Seed: {}", seed);
+        }
+    }
+    println!("Found Seed: {}", seed);
+    for (k, v) in buckets.iter() {
+        println!("{}, {}", k, v);
+    }
 }
 
 /// Test for a star topology with `num_nodes` connected to a `bootstrap_node`
@@ -303,32 +348,37 @@ fn test_updating_connection_on_ping() {
 // The kbuckets table can have maximum 10 nodes in the same /24 subnet across all buckets
 #[test]
 fn test_table_limits() {
-    let keypair = identity::Keypair::generate_secp256k1();
+    // this seed generates 12 node id's that are distributed accross buckets such that no more than
+    // 2 exist in a single bucket.
+    let keypairs = generate_deterministic_keypair(12, 9487);
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
-    let enr = EnrBuilder::new("v4")
+    let local_enr = EnrBuilder::new("v4")
         .ip(ip.clone().into())
-        .udp(9000)
-        .build(&keypair)
+        .udp(9050)
+        .build(&keypairs[0])
         .unwrap();
-    let mut discv5: Discv5<Box<u64>> = Discv5::new(enr, keypair.clone(), ip.into(), true).unwrap();
+    let mut discv5: Discv5<Box<u64>> =
+        Discv5::new(local_enr, keypairs[0].clone(), ip.into(), true).unwrap();
     let table_limit: usize = 10;
-    // Generate `table_limit + 1` nodes in the same subnet.
+    // Generate `table_limit + 2` nodes in the same subnet.
     let enrs: Vec<Enr> = (1..=table_limit + 1)
         .map(|i| {
-            let kp = identity::Keypair::generate_secp256k1();
             let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, i as u8));
             EnrBuilder::new("v4")
                 .ip(ip.clone().into())
-                .udp(9000 + i as u16)
-                .build(&kp)
+                .udp(9050 + i as u16)
+                .build(&keypairs[i])
                 .unwrap()
         })
         .collect();
     for enr in enrs {
         discv5.add_enr(enr.clone());
     }
-    // Number of entries could be < `table_limit` as per bucket limit is 2.
-    assert!(discv5.kbuckets_entries().collect::<Vec<_>>().len() <= table_limit);
+    // Number of entries should be `table_limit`, i.e one node got restricted
+    assert_eq!(
+        discv5.kbuckets_entries().collect::<Vec<_>>().len(),
+        table_limit
+    );
 }
 
 // Each bucket can have maximum 2 nodes in the same /24 subnet

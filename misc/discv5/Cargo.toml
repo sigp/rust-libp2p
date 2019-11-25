@@ -20,7 +20,6 @@ enr = { path = "../enr" }
 bigint = "4.2"
 futures = "0.1"
 log = "0.4"
-rand = "0.6.5"
 smallvec = "0.6"
 tokio-io = "0.1.12"
 tokio-udp = "0.1.5"
@@ -35,6 +34,7 @@ hex = "0.4.0"
 fnv = "1.0.6"
 arrayvec = "0.4.10"
 digest = "0.8.1"
+rand = "0.6.5"
 
 [dev-dependencies]
 libp2p-secio = { version = "0.12.0", path = "../../protocols/secio" }
