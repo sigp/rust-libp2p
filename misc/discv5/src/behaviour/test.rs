@@ -18,6 +18,8 @@ use enr::NodeId;
 use enr::{Enr, EnrBuilder};
 use libp2p_secio::SecioConfig;
 use libp2p_yamux as yamux;
+use rand_core::{RngCore, SeedableRng};
+use rand_xorshift;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
@@ -92,51 +94,45 @@ fn build_swarms_from_keypairs(keypairs: Vec<identity::Keypair>) -> Vec<SwarmType
     swarms
 }
 
-/// Return log2 distance between 2 node ids
-fn get_distance(node1: &NodeId, node2: &NodeId) -> Option<u64> {
-    let node1: kbucket::Key<NodeId> = node1.clone().into();
-    node1.log2_distance(&node2.clone().into())
-}
-
-/// Generate `n` keypairs such that the node ids they generate are close to
-/// the generated bootstrap node. Return the `n` nodes along with the bootstrap node.
-fn generate_keypairs(n: usize) -> Vec<identity::Keypair> {
-    let mut keypairs: Vec<identity::Keypair> = Vec::new();
-    let bootstrap_keypair = identity::Keypair::generate_secp256k1();
-    let bootstrap_node_id = EnrBuilder::new("v4")
-        .build(&bootstrap_keypair)
-        .unwrap()
-        .node_id()
-        .clone();
-    for _ in 0..n {
-        loop {
-            let keypair = identity::Keypair::generate_secp256k1();
-            let enr = EnrBuilder::new("v4").build(&keypair).unwrap();
-            let key = enr.node_id();
-            let distance = get_distance(&bootstrap_node_id, key).unwrap();
-            // Any distance > 254 should be good enough for discovering nodes in one
-            // complete query
-            if distance > 254 {
-                keypairs.push(keypair);
-                break;
+/// Generate `n` deterministic keypairs from a given seed.
+fn generate_deterministic_keypair(n: usize, seed: u64) -> Vec<identity::Keypair> {
+    let mut keypairs = Vec::new();
+    for i in 0..n {
+        let sk = {
+            let rng = &mut rand_xorshift::XorShiftRng::seed_from_u64(seed + i as u64);
+            let mut b = [0; secp256k1::util::SECRET_KEY_SIZE];
+            loop {
+                // until a value is given within the curve order
+                rng.fill_bytes(&mut b);
+                if let Ok(k) = identity::secp256k1::SecretKey::from_bytes(&mut b) {
+                    break k;
+                }
             }
-        }
+        };
+        let kp = identity::Keypair::Secp256k1(identity::secp256k1::Keypair::from(sk));
+        keypairs.push(kp);
     }
-    keypairs.push(bootstrap_keypair);
     keypairs
 }
 
+/// Test for a star topology with `num_nodes` connected to a `bootstrap_node`
+/// FINDNODE request is sent from any of the `num_nodes` nodes to a `target_node`
+/// which isn't part of the swarm.
+/// The seed for the keypair generation is chosen such that all `num_nodes` nodes
+/// and the `target_node` are in the 256th k-bucket of the bootstrap node.
+/// This ensures that all nodes are found in a single FINDNODE query.
 #[test]
 fn test_discovery_star_topology() {
     init();
     let node_num = 12;
-    // Generate `num_nodes` nodes with the bootstrap node and 1 target_node
-    let keypairs = generate_keypairs(node_num + 1);
+    // Seed is chosen such that all nodes are in the 256th bucket of bootstrap
+    let seed = 1654;
+    // Generate `num_nodes` + bootstrap_node and target_node keypairs from given seed
+    let keypairs = generate_deterministic_keypair(node_num + 2, seed);
     let mut swarms = build_swarms_from_keypairs(keypairs);
     // Last node is bootstrap node in a star topology
     let mut bootstrap_node = swarms.pop().unwrap();
-    // target_node is a node "close" to the bootstrap node for the FINDNODE query
-    //target_node is not polled.
+    // target_node is not polled.
     let target_node = swarms.pop().unwrap();
     println!("Bootstrap node: {}", bootstrap_node.local_enr().node_id());
     println!("Target node: {}", target_node.local_enr().node_id());
