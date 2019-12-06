@@ -40,7 +40,7 @@ use tokio_timer::Delay;
 mod tests;
 
 /// Seconds before a timeout expires.
-const REQUEST_TIMEOUT: u64 = 5;
+const REQUEST_TIMEOUT: u64 = 2;
 /// The number of times to retry a request.
 const REQUEST_RETRIES: u8 = 2;
 /// The timeout for a Session.

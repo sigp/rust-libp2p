@@ -881,6 +881,15 @@ mod tests {
     }
 
     #[test]
+    fn test_read_enr() {
+        let text = "-Iu4QM-YJF2RRpMcZkFiWzMf2kRd1A5F1GIekPa4Sfi_v0DCLTDBfOMTMMWJhhawr1YLUPb5008CpnBKrgjY3sstjfgCgmlkgnY0gmlwhH8AAAGJc2VjcDI1NmsxoQP8u1uyQFyJYuQUTyA1raXKhSw1HhhxNUQ2VE52LNHWMIN0Y3CCIyiDdWRwgiMo";
+        let enr: Enr = text.parse::<Enr>().unwrap();
+        dbg!(enr.ip());
+        dbg!(enr.udp());
+        dbg!(enr.tcp());
+    }
+
+    #[test]
     fn test_encode_test_vector_2() {
         let secret_key = libp2p_core::identity::secp256k1::SecretKey::from_bytes(
             hex::decode("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")

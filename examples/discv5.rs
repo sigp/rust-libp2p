@@ -87,6 +87,7 @@ fn main() {
         enr,
         keypair.clone(),
         "0.0.0.0".parse::<Ipv4Addr>().unwrap().into(),
+        false,
     )
     .unwrap();
     let mut swarm = libp2p::Swarm::new(transport, discv5, keypair.public().into_peer_id());
