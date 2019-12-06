@@ -127,7 +127,8 @@ impl<TSubstream> Discv5<TSubstream> {
         limit_ip: bool,
     ) -> io::Result<Self> {
         let service = SessionService::new(local_enr.clone(), keypair.clone(), listen_address)?;
-        let query_config = QueryConfig::default();
+        let mut query_config = QueryConfig::default();
+        query_config.parallelism = 5;
 
         Ok(Discv5 {
             events: SmallVec::new(),
@@ -332,6 +333,11 @@ impl<TSubstream> Discv5<TSubstream> {
             }
             match res {
                 rpc::Response::Nodes { total, mut nodes } => {
+                    debug!(
+                        "Received a nodes response of len: {} from node_id: {}",
+                        nodes.len(),
+                        node_id
+                    );
                     // Currently a maximum of 16 peers can be returned. Datagrams have a max
                     // size of 1280 and ENR's have a max size of 300 bytes. There should be no
                     // more than 5 responses, to return 16 peers.
@@ -728,6 +734,7 @@ impl<TSubstream> Discv5<TSubstream> {
         // if this is part of a query, update the query
         if let Some(query_id) = query_id {
             if let Some(query) = self.active_queries.get_mut(&query_id) {
+                let mut peer_count = 0;
                 for peer in others_iter.clone() {
                     if query
                         .target_mut()
@@ -738,7 +745,9 @@ impl<TSubstream> Discv5<TSubstream> {
                     {
                         query.target_mut().untrusted_enrs.push(peer.clone());
                     }
+                    peer_count += 1;
                 }
+                debug!("{} peers found for query id {}", peer_count, query_id);
                 query.on_success(source, others_iter.map(|kp| kp.node_id().clone()))
             }
         }
