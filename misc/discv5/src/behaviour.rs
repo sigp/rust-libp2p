@@ -666,6 +666,7 @@ impl<TSubstream> Discv5<TSubstream> {
     /// Internal function that starts a query.
     fn start_query(&mut self, query_type: QueryType) {
         let query_id = self.next_query_id;
+        debug!("Starting a new query. Id: {}", query_id);
         self.next_query_id += 1;
 
         let target = QueryInfo {
@@ -853,21 +854,27 @@ impl<TSubstream> Discv5<TSubstream> {
                     } else {
                         // there was no partially downloaded nodes inform the query of the failure
                         // if it's part of a query
-                        debug!("RPC Request: {:?} failed for node: {}", request, node_id);
                         if let Some(query_id) = query_id_option {
                             if let Some(query) = self.active_queries.get_mut(&query_id) {
                                 query.on_failure(&node_id);
                             }
+                        } else {
+                            debug!("Failed RPC request: {:?} for node: {} ", request, node_id);
                         }
                     }
                 }
                 // for all other requests, if any are queries, mark them as failures.
                 _ => {
-                    warn!("RPC Request: {:?} failed for node: {}", request, node_id);
                     if let Some(query_id) = query_id_option {
                         if let Some(query) = self.active_queries.get_mut(&query_id) {
+                            debug!(
+                                "Failed query request: {:?} for query: {} and node: {} ",
+                                request, query_id, node_id
+                            );
                             query.on_failure(&node_id);
                         }
+                    } else {
+                        debug!("Failed RPC request: {:?} for node: {} ", request, node_id);
                     }
                 }
             }
