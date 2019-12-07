@@ -40,9 +40,9 @@ use tokio_timer::Delay;
 mod tests;
 
 /// Seconds before a timeout expires.
-const REQUEST_TIMEOUT: u64 = 2;
+const REQUEST_TIMEOUT: u64 = 4;
 /// The number of times to retry a request.
-const REQUEST_RETRIES: u8 = 2;
+const REQUEST_RETRIES: u8 = 1;
 /// The timeout for a Session.
 //TODO: Make this a function of messages sent, to prevent nonce replay
 pub const SESSION_TIMEOUT: u64 = 86400;
@@ -545,7 +545,10 @@ impl SessionService {
             Entry::Occupied(e) => e,
             Entry::Vacant(_) => {
                 // no session exists
-                debug!("Received a message without a session. From: {}", src_id);
+                debug!(
+                    "Received a message without a session. From: {:?}, node: {}",
+                    src, src_id
+                );
                 debug!("Requesting a WHOAREYOU packet to be sent.");
                 // spawn a WHOAREYOU event to check for highest known ENR
                 let event = SessionEvent::WhoAreYouRequest {

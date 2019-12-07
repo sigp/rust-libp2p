@@ -95,7 +95,15 @@ fn main() {
     // if we know of another peer's ENR, add it known peers
     if let Some(base64_enr) = std::env::args().nth(3) {
         match base64_enr.parse::<libp2p::enr::Enr>() {
-            Ok(enr) => swarm.add_enr(enr),
+            Ok(enr) => {
+                println!(
+                    "ENR Read. ip: {:?}, udp_port {:?}, tcp_port: {:?}",
+                    enr.ip(),
+                    enr.udp(),
+                    enr.tcp()
+                );
+                swarm.add_enr(enr);
+            }
             Err(e) => panic!("Decoding ENR failed: {}", e),
         }
     }
