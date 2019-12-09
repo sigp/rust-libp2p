@@ -1,3 +1,23 @@
+// Copyright 2018 Parity Technologies (UK) Ltd.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the "Software"),
+// to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the
+// Software is furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+// DEALINGS IN THE SOFTWARE.
+
 use crate::behaviour::GossipsubRpc;
 use crate::protocol::{GossipsubCodec, ProtocolConfig};
 use futures::prelude::*;
@@ -5,7 +25,7 @@ use libp2p_core::upgrade::{InboundUpgrade, Negotiated, OutboundUpgrade};
 use libp2p_swarm::protocols_handler::{
     KeepAlive, ProtocolsHandler, ProtocolsHandlerEvent, ProtocolsHandlerUpgrErr, SubstreamProtocol,
 };
-use log::{error, trace};
+use log::{trace, warn};
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::io;
@@ -109,7 +129,6 @@ where
     type OutboundProtocol = ProtocolConfig;
     type OutboundOpenInfo = GossipsubRpc;
 
-    #[inline]
     fn listen_protocol(&self) -> SubstreamProtocol<Self::InboundProtocol> {
         self.listen_protocol.clone()
     }
@@ -131,19 +150,18 @@ where
         // Should never establish a new outbound substream if one already exists.
         // If this happens, an outbound message is not sent.
         if self.outbound_substream.is_some() {
-            error!("Established an outbound substream with one already available");
-            return;
+            warn!("Established an outbound substream with one already available");
+            // Add the message back to the send queue
+            self.send_queue.push(message);
+        } else {
+            self.outbound_substream = Some(OutboundSubstreamState::PendingSend(substream, message));
         }
-
-        self.outbound_substream = Some(OutboundSubstreamState::PendingSend(substream, message));
     }
 
-    #[inline]
     fn inject_event(&mut self, message: GossipsubRpc) {
         self.send_queue.push(message);
     }
 
-    #[inline]
     fn inject_dial_upgrade_error(
         &mut self,
         _: Self::OutboundOpenInfo,
@@ -156,8 +174,6 @@ where
         // them.
     }
 
-    #[inline]
-    //TODO: Implement a manual shutdown.
     fn connection_keep_alive(&self) -> KeepAlive {
         self.keep_alive
     }
