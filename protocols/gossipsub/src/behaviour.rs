@@ -23,6 +23,7 @@ use crate::handler::GossipsubHandler;
 use crate::mcache::MessageCache;
 use crate::protocol::{
     GossipsubControlAction, GossipsubMessage, GossipsubSubscription, GossipsubSubscriptionAction,
+    MessageId,
 };
 use crate::topic::{Topic, TopicHash};
 use futures::prelude::*;
@@ -77,7 +78,7 @@ pub struct Gossipsub<TSubstream> {
 
     // We keep track of the messages we received (in the format `string(source ID, seq_no)`) so that
     // we don't dispatch the same message twice if we receive it twice on the network.
-    received: LruCache<String, ()>,
+    received: LruCache<MessageId, ()>,
 
     /// Heartbeat interval stream.
     heartbeat: Interval,
@@ -99,7 +100,11 @@ impl<TSubstream> Gossipsub<TSubstream> {
             mesh: HashMap::new(),
             fanout: HashMap::new(),
             fanout_last_pub: HashMap::new(),
-            mcache: MessageCache::new(gs_config.history_gossip, gs_config.history_length),
+            mcache: MessageCache::new(
+                gs_config.history_gossip,
+                gs_config.history_length,
+                gs_config.message_id_fn,
+            ),
             received: LruCache::new(256), // keep track of the last 256 messages
             heartbeat: Interval::new(
                 Instant::now() + gs_config.heartbeat_initial_delay,
@@ -218,7 +223,10 @@ impl<TSubstream> Gossipsub<TSubstream> {
             topics: topic.into_iter().map(|t| self.topic_hash(t)).collect(),
         };
 
-        debug!("Publishing message: {:?}", message.id());
+        debug!(
+            "Publishing message: {:?}",
+            (self.config.message_id_fn)(&message)
+        );
 
         // forward the message to mesh and floodsub peers
         let local_peer_id = self.local_peer_id.clone();
@@ -256,12 +264,15 @@ impl<TSubstream> Gossipsub<TSubstream> {
         }
 
         // add published message to our received caches
+        let msg_id = (self.config.message_id_fn)(&message);
         self.mcache.put(message.clone());
-        self.received.put(message.id(), ());
+        self.received.put(msg_id.clone(), ());
+
+        info!("Published message: {:?}", msg_id);
 
         let event = Arc::new(GossipsubRpc {
             subscriptions: Vec::new(),
-            messages: vec![message.clone()],
+            messages: vec![message],
             control_msgs: Vec::new(),
         });
         // Send to peers we know are subscribed to the topic.
@@ -272,7 +283,6 @@ impl<TSubstream> Gossipsub<TSubstream> {
                 event: event.clone(),
             });
         }
-        info!("Published message: {:?}", message.id());
     }
 
     /// This function should be called when `config.manual_propagation` is `true` in order to
@@ -280,18 +290,25 @@ impl<TSubstream> Gossipsub<TSubstream> {
     /// fast enough that the messages should still exist in the cache.
     ///
     /// Calling this function will propagate a message stored in the cache, if it still exists.
-    pub fn propagate_message(&mut self, message_id: &str, propagation_source: &PeerId) {
+    /// If the message still exists in the cache, it will be forwarded and this function will return true,
+    /// otherwise it will return false.
+    pub fn propagate_message(
+        &mut self,
+        message_id: &MessageId,
+        propagation_source: &PeerId,
+    ) -> bool {
         let message = match self.mcache.get(message_id) {
             Some(message) => message.clone(),
             None => {
                 warn!(
                     "Message not in cache. Ignoring forwarding. Message Id: {}",
-                    message_id
+                    message_id.0
                 );
-                return;
+                return false;
             }
         };
-        self.forward_msg(message, propagation_source)
+        self.forward_msg(message, propagation_source);
+        true
     }
 
     /// Gossipsub JOIN(topic) - adds topic peers to mesh and sends them GRAFT messages.
@@ -359,7 +376,6 @@ impl<TSubstream> Gossipsub<TSubstream> {
                     topic_hash: topic_hash.clone(),
                 },
             );
-            //TODO: tagPeer
         }
         debug!("Completed JOIN for topic: {:?}", topic_hash);
     }
@@ -380,7 +396,6 @@ impl<TSubstream> Gossipsub<TSubstream> {
                         topic_hash: topic_hash.clone(),
                     },
                 );
-                //TODO: untag Peer
             }
         }
         debug!("Completed LEAVE for topic: {:?}", topic_hash);
@@ -388,7 +403,7 @@ impl<TSubstream> Gossipsub<TSubstream> {
 
     /// Handles an IHAVE control message. Checks our cache of messages. If the message is unknown,
     /// requests it with an IWANT control message.
-    fn handle_ihave(&mut self, peer_id: &PeerId, ihave_msgs: Vec<(TopicHash, Vec<String>)>) {
+    fn handle_ihave(&mut self, peer_id: &PeerId, ihave_msgs: Vec<(TopicHash, Vec<MessageId>)>) {
         debug!("Handling IHAVE for peer: {:?}", peer_id);
         // use a hashset to avoid duplicates efficiently
         let mut iwant_ids = HashSet::new();
@@ -427,7 +442,7 @@ impl<TSubstream> Gossipsub<TSubstream> {
 
     /// Handles an IWANT control message. Checks our cache of messages. If the message exists it is
     /// forwarded to the requesting peer.
-    fn handle_iwant(&mut self, peer_id: &PeerId, iwant_msgs: Vec<String>) {
+    fn handle_iwant(&mut self, peer_id: &PeerId, iwant_msgs: Vec<MessageId>) {
         debug!("Handling IWANT for peer: {:?}", peer_id);
         // build a hashmap of available messages
         let mut cached_messages = HashMap::new();
@@ -472,7 +487,6 @@ impl<TSubstream> Gossipsub<TSubstream> {
                 if !peers.contains(peer_id) {
                     peers.push(peer_id.clone());
                 }
-            //TODO: tagPeer
             } else {
                 to_prune_topics.insert(topic_hash.clone());
             }
@@ -514,7 +528,6 @@ impl<TSubstream> Gossipsub<TSubstream> {
                     peer_id, topic_hash
                 );
                 peers.retain(|p| p != peer_id);
-                //TODO: untagPeer
             }
         }
         debug!("Completed PRUNE handling for peer: {:?}", peer_id);
@@ -523,16 +536,13 @@ impl<TSubstream> Gossipsub<TSubstream> {
     /// Handles a newly received GossipsubMessage.
     /// Forwards the message to all peers in the mesh.
     fn handle_received_message(&mut self, msg: GossipsubMessage, propagation_source: &PeerId) {
+        let msg_id = (self.config.message_id_fn)(&msg);
         debug!(
             "Handling message: {:?} from peer: {:?}",
-            msg.id(),
-            propagation_source
+            msg_id, propagation_source
         );
-        if self.received.put(msg.id(), ()).is_some() {
-            info!(
-                "Message already received, ignoring. Message: {:?}",
-                msg.id()
-            );
+        if self.received.put(msg_id.clone(), ()).is_some() {
+            debug!("Message already received, ignoring. Message: {:?}", msg_id);
             return;
         }
 
@@ -543,13 +553,13 @@ impl<TSubstream> Gossipsub<TSubstream> {
         if self.mesh.keys().any(|t| msg.topics.iter().any(|u| t == u)) {
             debug!("Sending received message to user");
             self.events.push_back(NetworkBehaviourAction::GenerateEvent(
-                GossipsubEvent::Message(propagation_source.clone(), msg.clone()),
+                GossipsubEvent::Message(propagation_source.clone(), msg_id, msg.clone()),
             ));
         }
 
         // forward the message to mesh peers, if no validation is required
         if !self.config.manual_propagation {
-            let message_id = msg.id();
+            let message_id = (self.config.message_id_fn)(&msg);
             self.forward_msg(msg, propagation_source);
             debug!("Completed message handling for message: {:?}", message_id);
         }
@@ -653,11 +663,9 @@ impl<TSubstream> Gossipsub<TSubstream> {
         );
     }
 
-    /// Heartbeat function which shifts the memcache and updates the mesh
+    /// Heartbeat function which shifts the memcache and updates the mesh.
     fn heartbeat(&mut self) {
         debug!("Starting heartbeat");
-
-        //TODO: Clean up any state from last heartbeat.
 
         let mut to_graft = HashMap::new();
         let mut to_prune = HashMap::new();
@@ -871,7 +879,8 @@ impl<TSubstream> Gossipsub<TSubstream> {
 
     /// Helper function which forwards a message to mesh[topic] peers.
     fn forward_msg(&mut self, message: GossipsubMessage, source: &PeerId) {
-        debug!("Forwarding message: {:?}", message.id());
+        let msg_id = (self.config.message_id_fn)(&message);
+        debug!("Forwarding message: {:?}", msg_id);
         let mut recipient_peers = HashSet::new();
 
         // add mesh peers
@@ -895,7 +904,7 @@ impl<TSubstream> Gossipsub<TSubstream> {
             });
 
             for peer in recipient_peers.iter() {
-                debug!("Sending message: {:?} to peer {:?}", message.id(), peer);
+                debug!("Sending message: {:?} to peer {:?}", msg_id, peer);
                 self.events.push_back(NetworkBehaviourAction::SendEvent {
                     peer_id: peer.clone(),
                     event: event.clone(),
@@ -1169,9 +1178,10 @@ pub struct GossipsubRpc {
 /// Event that can happen on the gossipsub behaviour.
 #[derive(Debug)]
 pub enum GossipsubEvent {
-    /// A message has been received. This contains the PeerId that we received the message from
-    /// and the actual message.
-    Message(PeerId, GossipsubMessage),
+    /// A message has been received. This contains the PeerId that we received the message from,
+    /// the message id (used if the application layer needs to propagate the message) and the
+    /// message itself.
+    Message(PeerId, MessageId, GossipsubMessage),
 
     /// A remote subscribed to a topic.
     Subscribed {

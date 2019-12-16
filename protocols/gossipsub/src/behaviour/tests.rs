@@ -321,7 +321,8 @@ mod tests {
                 _ => collected_publish,
             });
 
-        let msg_id = publishes.first().expect("Should contain > 0 entries").id();
+        let msg_id =
+            (gs.config.message_id_fn)(&publishes.first().expect("Should contain > 0 entries"));
 
         assert!(
             publishes.len() == 20,
@@ -386,7 +387,8 @@ mod tests {
                 _ => collected_publish,
             });
 
-        let msg_id = publishes.first().expect("Should contain > 0 entries").id();
+        let msg_id =
+            (gs.config.message_id_fn)(&publishes.first().expect("Should contain > 0 entries"));
 
         assert_eq!(
             publishes.len(),
@@ -589,13 +591,15 @@ mod tests {
     fn test_handle_iwant_msg_cached() {
         let (mut gs, peers, _) = build_and_inject_nodes(20, Vec::new(), true);
 
+        let id = gs.config.message_id_fn;
+
         let message = GossipsubMessage {
             source: peers[11].clone(),
             data: vec![1, 2, 3, 4],
             sequence_number: 1u64,
             topics: Vec::new(),
         };
-        let msg_id = message.id();
+        let msg_id = id(&message);
         gs.mcache.put(message.clone());
 
         gs.handle_iwant(&peers[7], vec![msg_id.clone()]);
@@ -615,7 +619,7 @@ mod tests {
             });
 
         assert!(
-            sent_messages.iter().any(|msg| msg.id() == msg_id),
+            sent_messages.iter().any(|msg| id(msg) == msg_id),
             "Expected the cached message to be sent to an IWANT peer"
         );
     }
@@ -625,6 +629,7 @@ mod tests {
     fn test_handle_iwant_msg_cached_shifted() {
         let (mut gs, peers, _) = build_and_inject_nodes(20, Vec::new(), true);
 
+        let id = gs.config.message_id_fn;
         // perform 10 memshifts and check that it leaves the cache
         for shift in 1..10 {
             let message = GossipsubMessage {
@@ -633,7 +638,7 @@ mod tests {
                 sequence_number: shift,
                 topics: Vec::new(),
             };
-            let msg_id = message.id();
+            let msg_id = id(&message);
             gs.mcache.put(message.clone());
             for _ in 0..shift {
                 gs.mcache.shift();
@@ -644,7 +649,7 @@ mod tests {
             // is the message is being sent?
             let message_exists = gs.events.iter().any(|e| match e {
                 NetworkBehaviourAction::SendEvent { peer_id: _, event } => {
-                    event.messages.iter().any(|msg| msg.id() == msg_id)
+                    event.messages.iter().any(|msg| id(msg) == msg_id)
                 }
                 _ => false,
             });
@@ -669,7 +674,7 @@ mod tests {
         let (mut gs, peers, _) = build_and_inject_nodes(20, Vec::new(), true);
 
         let events_before = gs.events.len();
-        gs.handle_iwant(&peers[7], vec![String::from("unknown id")]);
+        gs.handle_iwant(&peers[7], vec![MessageId(String::from("unknown id"))]);
         let events_after = gs.events.len();
 
         assert_eq!(
@@ -686,15 +691,18 @@ mod tests {
 
         gs.handle_ihave(
             &peers[7],
-            vec![(topic_hashes[0].clone(), vec![String::from("unknown id")])],
+            vec![(
+                topic_hashes[0].clone(),
+                vec![MessageId(String::from("unknown id"))],
+            )],
         );
 
         // check that we sent an IWANT request for `unknown id`
         let iwant_exists = match gs.control_pool.get(&peers[7]) {
             Some(controls) => controls.iter().any(|c| match c {
-                GossipsubControlAction::IWant { message_ids } => {
-                    message_ids.iter().any(|m| *m == String::from("unknown id"))
-                }
+                GossipsubControlAction::IWant { message_ids } => message_ids
+                    .iter()
+                    .any(|m| *m.0 == String::from("unknown id")),
                 _ => false,
             }),
             _ => false,
@@ -713,7 +721,7 @@ mod tests {
         let (mut gs, peers, topic_hashes) =
             build_and_inject_nodes(20, vec![String::from("topic1")], true);
 
-        let msg_id = String::from("known id");
+        let msg_id = MessageId(String::from("known id"));
         gs.received.put(msg_id.clone(), ());
 
         let events_before = gs.events.len();
@@ -737,7 +745,7 @@ mod tests {
             &peers[7],
             vec![(
                 TopicHash::from_raw(String::from("unsubscribed topic")),
-                vec![String::from("irrelevant id")],
+                vec![MessageId(String::from("irrelevant id"))],
             )],
         );
         let events_after = gs.events.len();
