@@ -282,6 +282,12 @@ impl std::fmt::Display for MessageId {
     }
 }
 
+impl Into<String> for MessageId {
+    fn into(self) -> String {
+        self.0.into()
+    }
+}
+
 /// A message received by the gossipsub system.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GossipsubMessage {
