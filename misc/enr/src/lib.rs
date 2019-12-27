@@ -1071,4 +1071,25 @@ mod tests {
         .unwrap();
         assert_eq!(node_id, *enr.node_id())
     }
+
+    #[test]
+    fn test_attnets() {
+        let key = Keypair::generate_secp256k1();
+        let tcp = 30303;
+        let ip = Ipv4Addr::new(10, 0, 0, 1);
+
+        let mut enr = {
+            let mut builder = EnrBuilder::new("v4");
+            builder.ip(ip.into());
+            builder.tcp(tcp);
+            builder.attnets(vec![0b0000_0000]);
+            builder.build(&key).unwrap()
+        };
+
+        assert_eq!(enr.attnets(), Some(vec![0b0000_0000]));
+        assert!(enr.set_attnets(vec![0b0000_0001], &key).is_ok());
+        assert_eq!(enr.attnets(), Some(vec![0b0000_0001]));
+
+        assert!(enr.verify());
+    }
 }
