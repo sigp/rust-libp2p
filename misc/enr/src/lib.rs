@@ -401,8 +401,8 @@ impl Enr {
     }
 
     /// Set attestation subnet bitfield.
-    pub fn set_attnets(&mut self, attnets: Vec<u8>, keypair: &Keypair) -> Result<bool, EnrError> {
-        self.add_key("attnets", attnets, keypair)
+    pub fn set_attnets(&mut self, attnets: &[u8], keypair: &Keypair) -> Result<bool, EnrError> {
+        self.add_key("attnets", attnets.to_vec(), keypair)
     }
 
     /// Sets the IP and UDP port in a single update with a single increment in sequence number.
@@ -668,8 +668,8 @@ impl EnrBuilder {
     }
 
     /// Adds a `attnets` field to the `ENRBuilder`
-    pub fn attnets(&mut self, attnets: Vec<u8>) -> &mut Self {
-        self.content.insert("attnets".into(), attnets);
+    pub fn attnets(&mut self, attnets: &[u8]) -> &mut Self {
+        self.content.insert("attnets".into(), attnets.to_vec());
         self
     }
 
@@ -1082,12 +1082,12 @@ mod tests {
             let mut builder = EnrBuilder::new("v4");
             builder.ip(ip.into());
             builder.tcp(tcp);
-            builder.attnets(vec![0b0000_0000]);
+            builder.attnets(&[0b0000_0000]);
             builder.build(&key).unwrap()
         };
 
         assert_eq!(enr.attnets(), Some(vec![0b0000_0000]));
-        assert!(enr.set_attnets(vec![0b0000_0001], &key).is_ok());
+        assert!(enr.set_attnets(&[0b0000_0001], &key).is_ok());
         assert_eq!(enr.attnets(), Some(vec![0b0000_0001]));
 
         assert!(enr.verify());
