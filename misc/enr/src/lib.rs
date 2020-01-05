@@ -279,6 +279,11 @@ impl Enr {
         panic!("An ENR was created with an unknown public key");
     }
 
+    /// Returns the SSZ encoded attestation subnet field if defined.
+    pub fn attnets(&self) -> Option<Vec<u8>> {
+        self.content.get("attnets").map(|v| v.clone())
+    }
+
     /// Verify the signature of the ENR record.
     pub fn verify(&self) -> bool {
         let enr_pubkey = EnrPublicKey::from(self.public_key());
@@ -393,6 +398,11 @@ impl Enr {
 
     pub fn set_tcp6(&mut self, tcp: u16, keypair: &Keypair) -> Result<bool, EnrError> {
         self.add_key("tcp6", tcp.to_be_bytes().to_vec(), keypair)
+    }
+
+    /// Set attestation subnet bitfield.
+    pub fn set_attnets(&mut self, attnets: &[u8], keypair: &Keypair) -> Result<bool, EnrError> {
+        self.add_key("attnets", attnets.to_vec(), keypair)
     }
 
     /// Sets the IP and UDP port in a single update with a single increment in sequence number.
@@ -654,6 +664,12 @@ impl EnrBuilder {
     pub fn udp6(&mut self, udp: u16) -> &mut Self {
         self.content
             .insert("udp6".into(), udp.to_be_bytes().to_vec());
+        self
+    }
+
+    /// Adds a `attnets` field to the `ENRBuilder`
+    pub fn attnets(&mut self, attnets: &[u8]) -> &mut Self {
+        self.content.insert("attnets".into(), attnets.to_vec());
         self
     }
 
@@ -1054,5 +1070,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(node_id, *enr.node_id())
+    }
+
+    #[test]
+    fn test_attnets() {
+        let key = Keypair::generate_secp256k1();
+        let tcp = 30303;
+        let ip = Ipv4Addr::new(10, 0, 0, 1);
+
+        let mut enr = {
+            let mut builder = EnrBuilder::new("v4");
+            builder.ip(ip.into());
+            builder.tcp(tcp);
+            builder.attnets(&[0b0000_0000]);
+            builder.build(&key).unwrap()
+        };
+
+        assert_eq!(enr.attnets(), Some(vec![0b0000_0000]));
+        assert!(enr.set_attnets(&[0b0000_0001], &key).is_ok());
+        assert_eq!(enr.attnets(), Some(vec![0b0000_0001]));
+
+        assert!(enr.verify());
     }
 }
