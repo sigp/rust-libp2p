@@ -10,15 +10,12 @@
 //! This `Session` module is responsible for generating, deriving and holding keys for sessions for known peers.
 
 use super::packet::{AuthHeader, AuthResponse, AuthTag, Nonce, Packet, Tag, MAGIC_LENGTH};
-use crate::session_service::{SESSION_ESTABLISH_TIMEOUT, SESSION_TIMEOUT};
 use crate::Discv5Error;
 use enr::{Enr, NodeId};
 use libp2p_core::identity::Keypair;
 use log::debug;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
-use tokio_timer::Delay;
 use zeroize::Zeroize;
 
 mod crypto;
@@ -43,9 +40,6 @@ pub struct Session {
 
     /// Last seen IP address and port. This is used to determine if the session is trusted or not.
     last_seen_socket: SocketAddr,
-
-    /// The Delay when this session expires.
-    timeout: Delay,
 }
 
 #[derive(Zeroize, PartialEq)]
@@ -114,7 +108,6 @@ impl Session {
             state: SessionState::RandomSent,
             trusted: TrustedState::Untrusted,
             remote_enr: Some(remote_enr),
-            timeout: Delay::new(Instant::now() + Duration::from_secs(SESSION_ESTABLISH_TIMEOUT)),
             last_seen_socket: "0.0.0.0:0".parse::<SocketAddr>().expect("Valid Socket"),
         };
 
@@ -154,7 +147,6 @@ impl Session {
             state: SessionState::WhoAreYouSent,
             trusted: TrustedState::Untrusted,
             remote_enr,
-            timeout: Delay::new(Instant::now() + Duration::from_secs(SESSION_ESTABLISH_TIMEOUT)),
             last_seen_socket: "0.0.0.0:0".parse::<SocketAddr>().expect("Valid Socket"),
         };
 
@@ -226,9 +218,6 @@ impl Session {
 
         // session has been established
         self.state = SessionState::Established(keys);
-
-        // update the timeout
-        self.timeout = Delay::new(Instant::now() + Duration::from_secs(SESSION_TIMEOUT));
 
         // output if the session is trusted or untrusted
         Ok(self.update_trusted())
@@ -438,14 +427,6 @@ impl Session {
     /// The socket address of the last packer received from this node.
     pub fn set_last_seen_socket(&mut self, socket: SocketAddr) {
         self.last_seen_socket = socket;
-    }
-
-    pub fn increment_timeout(&mut self, secs: u64) {
-        self.timeout = Delay::new(Instant::now() + Duration::from_secs(secs));
-    }
-
-    pub fn timeout(&mut self) -> &mut Delay {
-        &mut self.timeout
     }
 
     pub fn is_whoareyou_sent(&self) -> bool {
