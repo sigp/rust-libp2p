@@ -117,6 +117,20 @@ impl SessionService {
         &self.enr
     }
 
+    /// Update attestation subnet bitfield of local ENR.
+    pub fn update_enr_bitfield(&mut self, bitfield: &[u8]) -> bool {
+        match self.enr.set_attnets(bitfield, &self.keypair) {
+            Ok(status) => status,
+            Err(e) => {
+                warn!(
+                    "Could not update ENR attestation subnet bitfield. Error: {:?}",
+                    e
+                );
+                false
+            }
+        }
+    }
+
     /// Updates the local ENR `SocketAddr` for either the TCP or UDP port.
     pub fn update_local_enr_socket(&mut self, socket: SocketAddr, is_tcp: bool) -> bool {
         // determine whether to update the TCP or UDP port
