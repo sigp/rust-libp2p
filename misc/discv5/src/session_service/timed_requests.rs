@@ -111,26 +111,6 @@ impl TimedRequests {
         }
     }
 
-    fn remove_by_key<F: FnMut(&RequestKey) -> bool>(
-        &mut self,
-        src: &SocketAddr,
-        mut filter: F,
-    ) -> Option<Request> {
-        if let Some(requests) = self.requests.get_mut(src) {
-            if let Some(pos) = requests.iter().position(|r| filter(&r.request_key)) {
-                let request_timeout = requests.remove(pos);
-                // remove the timeout
-                let _ = self.timeouts.remove(&request_timeout.delay_key);
-                // return the request
-                Some(request_timeout.request)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
     pub fn insert(&mut self, dst: SocketAddr, request: Request) {
         // create a timeout for the request
         let timeout_index = TimeoutIndex::new(dst, self.current_key);
@@ -161,11 +141,17 @@ impl Stream for TimedRequests {
             Ok(Async::Ready(Some(timeout_index))) => {
                 let timeout_index = timeout_index.into_inner();
                 let dst = timeout_index.dst;
-                Ok(Async::Ready(Some((
-                    dst,
-                    self.remove_by_key(&dst, |key| key == &timeout_index.request_key)
-                        .ok_or_else(|| "Timed out request doesn't exist")?,
-                ))))
+
+                if let Some(requests) = self.requests.get_mut(&dst) {
+                    if let Some(pos) = requests
+                        .iter()
+                        .position(|r| r.request_key == timeout_index.request_key)
+                    {
+                        let request = requests.remove(pos).request;
+                        return Ok(Async::Ready(Some((dst, request))));
+                    }
+                }
+                Err("Timed out request did not exist")
             }
             Ok(Async::Ready(None)) => Ok(Async::Ready(None)),
             Ok(Async::NotReady) => Ok(Async::NotReady),
