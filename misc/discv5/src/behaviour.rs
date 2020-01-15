@@ -232,6 +232,16 @@ impl<TSubstream> Discv5<TSubstream> {
         }
     }
 
+    /// Allows application layer to update local ENR's attestation subnet bitfield.
+    pub fn update_enr_bitfield(&mut self, bitfield: &[u8]) -> bool {
+        if self.service.update_enr_bitfield(bitfield) {
+            self.ping_connected_peers();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Returns an iterator over all ENR node IDs of nodes currently contained in a bucket
     /// of the Kademlia routing table.
     pub fn kbuckets_entries(&mut self) -> impl Iterator<Item = &NodeId> {
