@@ -343,9 +343,10 @@ impl<TSubstream> Discv5<TSubstream> {
             }
             match res {
                 rpc::Response::Nodes { total, mut nodes } => {
-                    debug!(
-                        "Received a nodes response of len: {} from node_id: {}",
+                    trace!(
+                        "Received a nodes response of len: {}, total: {}, from node_id: {}",
                         nodes.len(),
+                        total,
                         node_id
                     );
                     // Currently a maximum of 16 peers can be returned. Datagrams have a max
@@ -382,18 +383,21 @@ impl<TSubstream> Discv5<TSubstream> {
                         let mut current_response = self
                             .active_nodes_responses
                             .remove(&node_id)
-                            .unwrap_or_else(|| Default::default());
+                            .unwrap_or_default();
 
+                        debug!(
+                            "Nodes Response: {} of {} received",
+                            current_response.count, total
+                        );
                         // if there are more requests coming, store the nodes and wait for
                         // another response
                         if current_response.count < 5 && (current_response.count as u64) < total {
                             current_response.count += 1;
 
                             current_response.received_nodes.append(&mut nodes);
-                            self.active_rpc_requests
-                                .insert(req, (query_id, request.clone()));
+                            self.active_rpc_requests.insert(req, (query_id, request));
                             self.active_nodes_responses
-                                .insert(node_id.clone(), current_response);
+                                .insert(node_id, current_response);
                             return;
                         }
 
@@ -403,7 +407,14 @@ impl<TSubstream> Discv5<TSubstream> {
                         current_response.received_nodes.append(&mut nodes);
                         nodes = current_response.received_nodes;
                     }
-                    // note: If a client sends an initial NODES response with a total > 1 then
+
+                    debug!(
+                        "Received a nodes response of len: {}, total: {}, from node_id: {}",
+                        nodes.len(),
+                        total,
+                        node_id
+                    );
+                    // note: If a peer sends an initial NODES response with a total > 1 then
                     // in a later response sends a response with a total of 1, all previous nodes
                     // will be ignored.
                     // ensure any mapping is removed in this rare case
@@ -543,12 +554,12 @@ impl<TSubstream> Discv5<TSubstream> {
                 let entry_size = entry.node.value.clone().encode().len();
                 // Responses assume that a session is established. Thus, on top of the encoded
                 // ENR's the packet should be a regular message. A regular message has a tag (32
-                // bytes), and auth_tag (12 bytes) and the NODES response has an ID (8 bytes) and a total (8 bytes). The encryption adds the HMAC (16 bytes) and can be at most 16 bytes larger so the total packet size can be at most 92 (given AES_GCM).
+                // bytes), and auth_tag (12 bytes) and the NODES response has an ID (8 bytes) and a total (8 bytes).
+                // The encryption adds the HMAC (16 bytes) and can be at most 16 bytes larger so the total packet size can be at most 92 (given AES_GCM).
                 if entry_size + total_size < MAX_PACKET_SIZE - 92 {
                     total_size += entry_size;
-                    trace!("Adding ENR, Valid? : {}", entry.node.value.verify());
+                    trace!("Adding ENR, Valid: {}", entry.node.value.verify());
                     trace!("Enr: {}", entry.node.value.clone());
-                    trace!("Enr: {:?}", entry.node.value.clone());
                     to_send_nodes[rpc_index].push(entry.node.value.clone());
                 } else {
                     total_size = entry_size;
@@ -759,7 +770,7 @@ impl<TSubstream> Discv5<TSubstream> {
                     peer_count += 1;
                 }
                 debug!("{} peers found for query id {}", peer_count, query_id);
-                query.on_success(source, others_iter.map(|kp| kp.node_id().clone()))
+                query.on_success(source, others_iter.map(|kp| kp.node_id().clone()).collect())
             }
         }
     }
@@ -1043,7 +1054,7 @@ where
                         waiting_query = Some((query_id, target, return_peer));
                         break;
                     }
-                    QueryState::Waiting(None) | QueryState::WaitingAtCapacity => (),
+                    QueryState::Waiting(None) | QueryState::WaitingAtCapacity => {}
                 }
             }
 

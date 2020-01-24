@@ -88,8 +88,7 @@ impl Encodable for AuthResponse {
         // requires custom encoding. None is encoded as rlp []
         if let Some(node_record) = &self.node_record {
             s.append(node_record);
-        }
-        else {
+        } else {
             s.begin_list(0);
         }
     }
@@ -107,8 +106,7 @@ impl Decodable for AuthResponse {
         let node_record = {
             if node_record_rlp.is_empty() {
                 None
-            }
-            else {
+            } else {
                 Some(node_record_rlp.as_val::<Enr>()?)
             }
         };
@@ -137,7 +135,12 @@ impl Decodable for AuthHeader {
         match rlp.item_count() {
             Ok(size) => {
                 if size != 5 {
-                    debug!("Failed to decode Authentication header. Incorrect list size. Length: {}, expected 5", size);
+                    if size == 3 {
+                        // This is likely due to using the wrong ENR
+                        debug!("Decoding failed. We likely sent an invalid node id");
+                    } else {
+                        debug!("Failed to decode Authentication header. Incorrect list size. Length: {}, expected 5", size);
+                    }
                     return Err(DecoderError::RlpIncorrectListLen);
                 }
             }
@@ -172,7 +175,6 @@ impl Decodable for AuthHeader {
         let auth_tag_bytes = decoded_list
             .pop()
             .ok_or_else(|| DecoderError::RlpExpectedToBeData)?;
-
 
         let mut auth_tag: AuthTag = Default::default();
         if auth_tag_bytes.len() > AUTH_TAG_LENGTH {
@@ -251,5 +253,4 @@ mod tests {
 
         assert_eq!(decoded_auth_response.signature, sig);
     }
-
 }

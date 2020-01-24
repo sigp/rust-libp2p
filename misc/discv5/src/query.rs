@@ -118,7 +118,6 @@ where
     TTarget: Into<Key<TTarget>> + Clone,
     TNodeId: Into<Key<TNodeId>> + Eq + Clone,
 {
-
     /// Creates a new query with the given configuration.
     pub fn with_config<I>(
         config: QueryConfig,
@@ -182,15 +181,11 @@ where
     /// If the query is finished, the query is not currently waiting for a
     /// result from `peer`, or a result for `peer` has already been reported,
     /// calling this function has no effect.
-    pub fn on_success<I>(&mut self, node_id: &TNodeId, closer_peers: I)
-    where
-        I: IntoIterator<Item = TNodeId>,
-    {
+    pub fn on_success(&mut self, node_id: &TNodeId, closer_peers: Vec<TNodeId>) {
         if let QueryProgress::Finished = self.progress {
             return;
         }
 
-        let num_closest = self.closest_peers.len();
         let key = node_id.clone().into();
         let distance = key.distance(&self.target_key);
 
@@ -203,7 +198,7 @@ where
                     debug_assert!(self.num_waiting > 0);
                     self.num_waiting -= 1;
                     let peer = e.get_mut();
-                    peer.peers_returned += num_closest;
+                    peer.peers_returned += closer_peers.len();
                     if peer.peers_returned >= self.config.num_results {
                         peer.state = QueryPeerState::Succeeded;
                     } else if self.iterations == peer.iteration {
@@ -226,6 +221,7 @@ where
             },
         }
 
+        let num_closest = self.closest_peers.len();
         let mut progress = false;
 
         // Incorporate the reported closer peers into the query.
@@ -312,15 +308,19 @@ where
 
         for peer in self.closest_peers.values_mut() {
             match peer.state {
-                QueryPeerState::PendingIteration => {
+                QueryPeerState::PendingIteration | QueryPeerState::NotContacted => {
                     // This peer is waiting to be reiterated.
-                    peer.state = QueryPeerState::Waiting;
-                    self.num_waiting += 1;
-                    let return_peer = ReturnPeer {
-                        node_id: peer.key.preimage().clone(),
-                        iteration: peer.iteration,
-                    };
-                    return QueryState::Waiting(Some(return_peer));
+                    if !at_capacity {
+                        peer.state = QueryPeerState::Waiting;
+                        self.num_waiting += 1;
+                        let return_peer = ReturnPeer {
+                            node_id: peer.key.preimage().clone(),
+                            iteration: peer.iteration,
+                        };
+                        return QueryState::Waiting(Some(return_peer));
+                    } else {
+                        return QueryState::WaitingAtCapacity;
+                    }
                 }
 
                 QueryPeerState::Waiting => {
@@ -346,20 +346,6 @@ where
                             self.progress = QueryProgress::Finished;
                             return QueryState::Finished;
                         }
-                    }
-                }
-
-                QueryPeerState::NotContacted => {
-                    if !at_capacity {
-                        peer.state = QueryPeerState::Waiting;
-                        self.num_waiting += 1;
-                        let return_peer = ReturnPeer {
-                            node_id: peer.key.preimage().clone(),
-                            iteration: peer.iteration,
-                        };
-                        return QueryState::Waiting(Some(return_peer));
-                    } else {
-                        return QueryState::WaitingAtCapacity;
                     }
                 }
 
