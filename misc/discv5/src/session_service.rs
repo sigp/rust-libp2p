@@ -49,7 +49,7 @@ const REQUEST_RETRIES: u8 = 1;
 //TODO: Make this a function of messages sent, to prevent nonce replay
 pub const SESSION_TIMEOUT: u64 = 86400;
 /// The number of seconds a session will wait to be established before being removed.
-pub const SESSION_ESTABLISH_TIMEOUT: u64 = 30;
+pub const SESSION_ESTABLISH_TIMEOUT: u64 = 15;
 
 pub struct SessionService {
     /// Queue of events produced by the session service.
@@ -117,6 +117,20 @@ impl SessionService {
         &self.enr
     }
 
+    /// Update attestation subnet bitfield of local ENR.
+    pub fn update_enr_bitfield(&mut self, bitfield: &[u8]) -> bool {
+        match self.enr.set_attnets(bitfield, &self.keypair) {
+            Ok(status) => status,
+            Err(e) => {
+                warn!(
+                    "Could not update ENR attestation subnet bitfield. Error: {:?}",
+                    e
+                );
+                false
+            }
+        }
+    }
+
     /// Updates the local ENR `SocketAddr` for either the TCP or UDP port.
     pub fn update_local_enr_socket(&mut self, socket: SocketAddr, is_tcp: bool) -> bool {
         // determine whether to update the TCP or UDP port
@@ -176,13 +190,11 @@ impl SessionService {
             Some(s) if s.trusted_established() => s,
             Some(_) => {
                 // we are currently establishing a connection, add to pending messages
-                debug!("Awaiting a session to established, caching message");
-                let msgs = self
-                    .pending_messages
-                    .entry(dst_id.clone())
-                    .or_insert_with(Vec::new);
-                msgs.push(message);
-                return Ok(());
+                debug!("Session is being established, request failed");
+                // Note: For the sake of request speed. We don't cache this message and await a
+                // session to be established. The session could take a while to be established or
+                // eventually fail. We prefer the request to fail quickly upfront.
+                return Err(Discv5Error::InvalidEnr);
             }
             None => {
                 debug!(
@@ -240,7 +252,7 @@ impl SessionService {
     ) -> Result<(), Discv5Error> {
         // session should be established
         let session = self.sessions.get(dst_id).ok_or_else(|| {
-            warn!("Request without an ENR could not be sent, no session is exists");
+            warn!("Request without an ENR could not be sent, no session exists");
             Discv5Error::SessionNotEstablished
         })?;
 
@@ -727,12 +739,17 @@ impl SessionService {
         // for a given node id.
         let pending_requests_ref = &self.pending_requests;
         while let Ok(Async::Ready(Some((node_id, session)))) = self.sessions.poll() {
-            // only remove a session if there are no pending requests.
             if pending_requests_ref.exists(|req| req.dst_id == node_id) {
                 // add the session back in with the current request timeout
                 self.sessions
                     .insert_at(node_id, session, Duration::from_secs(REQUEST_TIMEOUT));
             } else {
+                // fail all pending requests for this node
+                if let Some(pending_messages) = pending_messages_ref.remove(&node_id) {
+                    for msg in pending_messages {
+                        events_ref.push_back(SessionEvent::RequestFailed(node_id.clone(), msg.id));
+                    }
+                }
                 debug!("Session timed out for node: {}", node_id);
             }
         }
