@@ -138,7 +138,7 @@ pub type Enr = EnrRaw<DefaultKey>;
 /// The ENR Record.
 ///
 /// This struct will always have a valid signature, known public key type, sequence number and `NodeId`. All other parameters are variable/optional.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct EnrRaw<K: EnrKey> {
     /// ENR sequence number.
     seq: u64,
@@ -155,6 +155,18 @@ pub struct EnrRaw<K: EnrKey> {
 
     /// Marker to pin the generic.
     phantom: PhantomData<K>,
+}
+
+impl<K: EnrKey> Clone for EnrRaw<K> {
+    fn clone(&self) -> EnrRaw<K> {
+        EnrRaw {
+            seq: self.seq.clone(),
+            node_id: self.node_id.clone(),
+            content: self.content.clone(),
+            signature: self.signature.clone(),
+            phantom: PhantomData,
+        }
+    }
 }
 
 impl<K: EnrKey> EnrRaw<K> {

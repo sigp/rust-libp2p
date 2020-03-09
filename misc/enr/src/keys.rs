@@ -24,7 +24,7 @@ use std::convert::TryFrom;
 
 /// The trait required for a key to sign and modify an ENR record.
 pub trait EnrKey {
-    type PublicKey: EnrPublicKey + Clone + Into<String>;
+    type PublicKey: EnrPublicKey + Clone + Into<String> + PartialEq;
 
     /// Performs ENR-specific signing for the `v4` identity scheme.
     fn sign_v4(&self, msg: &[u8]) -> Result<Vec<u8>, SigningError>;
@@ -210,7 +210,7 @@ impl DefaultKey {
 
 /// A standard implementation of `EnrPublicKey` which has support for `Secp256k1`
 /// and `Ed25519` for ENR signature verification.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum DefaultPublicKey {
     /// An `Secp256k1` public key.
     Secp256k1(secp256k1::PublicKey),

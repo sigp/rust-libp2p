@@ -30,7 +30,7 @@ rand = "0.7.2"
 rlp = "0.4.3"
 serde = { version = "1.0.93", optional = true }
 sha3 = "0.8.2"
-libp2p-core = { version = "*", optional = true }
+libp2p-core = { path = "../../core", optional = true }
 
 [features]
 default = ["serde"]

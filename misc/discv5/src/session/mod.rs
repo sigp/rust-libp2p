@@ -11,8 +11,7 @@
 
 use super::packet::{AuthHeader, AuthResponse, AuthTag, Nonce, Packet, Tag, MAGIC_LENGTH};
 use crate::Discv5Error;
-use enr::{Enr, NodeId};
-use libp2p_core::identity::Keypair;
+use enr::{DefaultKey, Enr, NodeId};
 use log::debug;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
@@ -160,7 +159,7 @@ impl Session {
     /// specifies if the Session is trusted or not.
     pub fn establish_from_header(
         &mut self,
-        local_keypair: &Keypair,
+        local_keypair: &DefaultKey,
         local_id: &NodeId,
         remote_id: &NodeId,
         id_nonce: Nonce,
