@@ -12,12 +12,13 @@
 
 use self::ip_vote::IpVote;
 use self::query_info::{QueryInfo, QueryType};
+use crate::error::Discv5Error;
 use crate::kbucket::{self, EntryRefView, KBucketsTable, NodeStatus};
 use crate::query::{Query, QueryConfig, QueryState, ReturnPeer};
 use crate::rpc;
 use crate::service::MAX_PACKET_SIZE;
 use crate::session_service::{SessionEvent, SessionService};
-use enr::{Enr, NodeId};
+use enr::{DefaultKey, Enr, EnrKey, EnrPublicKey, NodeId};
 use fnv::FnvHashMap;
 use futures::prelude::*;
 use libp2p_core::{identity::Keypair, ConnectedPoint};
@@ -32,7 +33,7 @@ use libp2p_swarm::{
 use log::{debug, error, info, trace, warn};
 use smallvec::SmallVec;
 use std::collections::HashMap;
-use std::io;
+use std::convert::TryFrom;
 use std::net::{IpAddr, SocketAddr};
 use std::{marker::PhantomData, time::Duration};
 use tokio_io::{AsyncRead, AsyncWrite};
@@ -125,18 +126,32 @@ impl<TSubstream> Discv5<TSubstream> {
         keypair: Keypair,
         listen_address: IpAddr,
         limit_ip: bool,
-    ) -> io::Result<Self> {
-        let service = SessionService::new(local_enr.clone(), keypair.clone(), listen_address)?;
+    ) -> Result<Self, Discv5Error> {
+        // convert the libp2p keypair into an ENR Default key
+        //
+        // Only secp256k1 and ed25519 keys are supported currently
+        /*
+        let a = DefaultKey::generate_secp256k1();
+        let apub = a.public();
+        let bpub = apub.into_peer_id();
+
+        let libp2p_key = libp2p_core::identity::Keypair::generate_secp256k1();
+        let _enr_key: DefaultKey = libp2p_key
+            .try_into()
+            .expect("Should be able to convert a libp2p secp256k1 keypair");
+
+         */
+        let key = DefaultKey::try_from(keypair)
+            .map_err(|_| Discv5Error::KeyTypeNotSupported("libp2p key type not supported"))?;
+        let node_id = local_enr.node_id().clone();
+        let service = SessionService::new(local_enr, key, listen_address)?;
         let mut query_config = QueryConfig::default();
         query_config.parallelism = 5;
 
         Ok(Discv5 {
             events: SmallVec::new(),
             known_peer_ids: HashMap::new(),
-            kbuckets: KBucketsTable::new(
-                local_enr.node_id().clone().into(),
-                Duration::from_secs(60),
-            ),
+            kbuckets: KBucketsTable::new(node_id.into(), Duration::from_secs(60)),
             active_queries: Default::default(),
             active_rpc_requests: Default::default(),
             active_nodes_responses: HashMap::new(),
@@ -161,7 +176,7 @@ impl<TSubstream> Discv5<TSubstream> {
     pub fn add_enr(&mut self, enr: Enr) {
         // add to the known_peer_ids mapping
         self.known_peer_ids
-            .insert(enr.peer_id().clone(), enr.node_id().clone());
+            .insert(enr.peer_id(), enr.node_id().clone());
         let key = kbucket::Key::from(enr.node_id().clone());
         if !self.limit_ip
             || self

@@ -13,7 +13,6 @@
 //! IP address/port that doesn't match the source, is considered untrusted. Once the IP is updated
 //! to match the source, the `Session` is promoted to an established state. RPC requests are not sent
 //! to untrusted Sessions, only responses.
-//!
 //TODO: Document the event structure and WHOAREYOU requests to the protocol layer.
 //TODO: Limit packets per node to avoid DOS/Spam.
 
@@ -22,7 +21,7 @@ use super::service::Discv5Service;
 use crate::error::Discv5Error;
 use crate::rpc::ProtocolMessage;
 use crate::session::Session;
-use enr::{Enr, NodeId};
+use enr::{Enr, NodeId, DefaultKey};
 use futures::prelude::*;
 use libp2p_core::identity::Keypair;
 use log::{debug, error, trace, warn};
@@ -82,7 +81,11 @@ impl SessionService {
     /* Public Functions */
 
     /// A new Session service which instantiates the UDP socket.
-    pub fn new(enr: Enr, keypair: Keypair, ip: IpAddr) -> io::Result<Self> {
+    pub fn new(enr: Enr, key: DefaultKey, ip: IpAddr) -> Result<Self, Discv5Error> {
+
+        // convert the libp2p keypair into an Enr default key
+        let keypair: DefaultKey = keypair.try_into()
+
         // ensure the keypair matches the one that signed the enr.
         if enr.public_key().into_protobuf_encoding() != keypair.public().into_protobuf_encoding() {
             panic!("Discv5: Provided keypair does not match the provided ENR keypair");
