@@ -10,10 +10,9 @@ use crate::error::Discv5Error;
 use crate::packet::{AuthHeader, AuthResponse, AuthTag, Nonce};
 use enr::{Enr, NodeId};
 use hkdf::Hkdf;
-use libp2p_core::{identity::Keypair, PublicKey};
 use openssl::symm::{decrypt_aead, encrypt_aead, Cipher};
 use secp256k1::Signature;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 const NODE_ID_LENGTH: usize = 32;
 const INFO_LENGTH: usize = 26 + 2 * NODE_ID_LENGTH;
@@ -34,42 +33,20 @@ pub fn generate_session_keys(
     remote_enr: &Enr,
     id_nonce: &Nonce,
 ) -> Result<(Key, Key, Key, Vec<u8>), Discv5Error> {
-    // verify we know the public key and it's type
-    let pubkey = remote_enr.public_key();
-
-    let (secret, ephem_pk) = match &pubkey {
-        PublicKey::Rsa(_) => {
-            // don't support ephemeral RSA keys yet
-            return Err(Discv5Error::KeyTypeNotSupported("RSA"));
-        }
-        PublicKey::Ed25519(_) => {
-            // TODO: Convert the node's ed25519 public key (which is encoded as a
-            // curve25519_dalek::curve::CompressedEdwardsY to a montgomery point such
-            // that it can be read as x25519 public key to perform Diffie Hellman.
-
-            return Err(Discv5Error::KeyTypeNotSupported("Ed25519"));
-        }
-
-        PublicKey::Secp256k1(pubkey) => {
-            let remote_pk =
-                secp256k1::PublicKey::parse(&pubkey.encode_uncompressed()).expect("is a valid key");
-
-            let ephem_libp2p_sk = libp2p_core::identity::secp256k1::SecretKey::generate();
-            let ephem_sk =
-                secp256k1::SecretKey::parse(&ephem_libp2p_sk.to_bytes()).expect("valid key");
-            let ephem_pk = secp256k1::PublicKey::from_secret_key(&ephem_sk);
-
-            let secret = secp256k1::SharedSecret::<EcdhIdent>::new(&remote_pk, &ephem_sk)
-                .map_err(|_| Discv5Error::KeyDerivationFailed)?;
-            // store as uncompressed, strip the first byte and send only 64 bytes.
-            let ephem_pk = ephem_pk.serialize()[1..].to_vec();
-
-            (secret, ephem_pk)
-        }
+    let (secret, ephem_pk) = {
+        let remote_pk = remote_enr.public_key();
+        let mut rng = rand::thread_rng();
+        let ephem_sk = secp256k1::SecretKey::random(&mut rng);
+        let ephem_pk = secp256k1::PublicKey::from_secret_key(&ephem_sk);
+        let secret = secp256k1::SharedSecret::<EcdhIdent>::new(&remote_pk, &ephem_sk)
+            .map_err(|_| Discv5Error::KeyDerivationFailed)?;
+        // store as uncompressed, strip the first byte and send only 64 bytes.
+        let ephem_pk = ephem_pk.serialize()[1..].to_vec();
+        (secret, ephem_pk)
     };
 
     let (initiator_key, responder_key, auth_resp_key) =
-        derive_key(secret.as_ref(), local_id, remote_enr.node_id(), id_nonce)?;
+        derive_key(secret.as_ref(), local_id, &remote_enr.node_id(), id_nonce)?;
 
     Ok((initiator_key, responder_key, auth_resp_key, ephem_pk))
 }
@@ -103,33 +80,21 @@ fn derive_key(
 
 /// Derives the session keys for a public key type that matches the local keypair.
 pub fn derive_keys_from_pubkey(
-    local_keypair: &Keypair,
+    local_key: &secp256k1::SecretKey,
     local_id: &NodeId,
     remote_id: &NodeId,
     id_nonce: &Nonce,
     ephem_pubkey: &[u8],
 ) -> Result<(Key, Key, Key), Discv5Error> {
-    let secret = match local_keypair {
-        Keypair::Rsa(_) => {
-            // don't support RSA keys yet
-            return Err(Discv5Error::KeyTypeNotSupported("RSA"));
-        }
-        Keypair::Ed25519(_) => {
-            // don't support RSA keys yet
-            return Err(Discv5Error::KeyTypeNotSupported("Ed25519"));
-        }
-        Keypair::Secp256k1(key) => {
-            // convert remote pubkey into secp256k1 public key
-            // the key type should match our own node record
-            let remote_pubkey = secp256k1::PublicKey::parse_slice(ephem_pubkey, None)
-                .map_err(|_| Discv5Error::InvalidRemotePublicKey)?;
+    let secret = {
+        // convert remote pubkey into secp256k1 public key
+        // the key type should match our own node record
+        let remote_pubkey = secp256k1::PublicKey::parse_slice(ephem_pubkey, None)
+            .map_err(|_| Discv5Error::InvalidRemotePublicKey)?;
 
-            let sk = secp256k1::SecretKey::parse(&key.secret().to_bytes()).expect("valid key");
-
-            let secret = secp256k1::SharedSecret::<EcdhIdent>::new(&remote_pubkey, &sk)
-                .map_err(|_| Discv5Error::KeyDerivationFailed)?;
-            secret.as_ref().to_vec()
-        }
+        let secret = secp256k1::SharedSecret::<EcdhIdent>::new(&remote_pubkey, local_key)
+            .map_err(|_| Discv5Error::KeyDerivationFailed)?;
+        secret.as_ref().to_vec()
     };
 
     derive_key(&secret, remote_id, local_id, id_nonce)
@@ -140,58 +105,43 @@ pub fn derive_keys_from_pubkey(
 /// Generates a signature of a nonce given a keypair. This prefixes the `NONCE_PREFIX` to the
 /// signature.
 pub fn sign_nonce(
-    keypair: &Keypair,
+    signing_key: &secp256k1::SecretKey,
     nonce: &Nonce,
     ephem_pubkey: &[u8],
 ) -> Result<Vec<u8>, Discv5Error> {
     let signing_nonce = generate_signing_nonce(nonce, ephem_pubkey);
 
-    match keypair {
-        Keypair::Rsa(_) => unimplemented!("RSA keys are not supported"),
-        Keypair::Ed25519(_) => unimplemented!("Ed25519 keys are not supported"),
-        // builds a compact secp256k1 serialized compact signature
-        Keypair::Secp256k1(key) => {
-            let der_sig = key
-                .secret()
-                .sign(&signing_nonce)
-                .map_err(|_| Discv5Error::Custom("Nonce signing failed"))?;
-            Ok(Signature::parse_der(&der_sig)
-                .map_err(|_| Discv5Error::Custom("Invalid DER signature"))?
-                .serialize()
-                .to_vec())
-        }
-    }
+    let m = secp256k1::Message::parse_slice(&signing_nonce)
+        .map_err(|_| Discv5Error::Custom("Could not parse nonce for signing"))?;
+
+    Ok(secp256k1::sign(&m, signing_key).0.serialize().to_vec())
 }
 
 /// Verifies the authentication header nonce.
 pub fn verify_authentication_nonce(
-    remote_pubkey: &PublicKey,
+    remote_pubkey: &secp256k1::PublicKey,
     remote_ephem_pubkey: &[u8],
     nonce: &Nonce,
     sig: &[u8],
 ) -> bool {
     let signing_nonce = generate_signing_nonce(nonce, remote_ephem_pubkey);
 
-    match remote_pubkey {
-        PublicKey::Rsa(_) => unimplemented!("RSA keys are not supported"),
-        PublicKey::Ed25519(_) => unimplemented!("Ed25519 keys are not supported"),
-        // verifies secp256k1 serialized compact signatures
-        PublicKey::Secp256k1(pk) => {
-            if let Ok(signature) = Signature::parse_slice(sig).map(|s| s.serialize_der()) {
-                return pk.verify(&signing_nonce, signature.as_ref());
-            }
-            false
-        }
-    }
+    Signature::parse_slice(sig)
+        .and_then(|s| {
+            secp256k1::Message::parse_slice(&signing_nonce)
+                .map(|m| secp256k1::verify(&m, &s, remote_pubkey))
+        })
+        .unwrap_or(false)
 }
 
-/// Builds the signature for a given nonce. The SHA256 hash occurs in the secp256k1 signing
-/// function.
+/// Builds the signature for a given nonce.
+///
+/// This takes the SHA256 hash of the nonce.
 fn generate_signing_nonce(id_nonce: &Nonce, ephem_pubkey: &[u8]) -> Vec<u8> {
     let mut nonce = NONCE_PREFIX.as_bytes().to_vec();
     nonce.append(&mut id_nonce.to_vec());
     nonce.append(&mut ephem_pubkey.to_vec());
-    nonce
+    Sha256::digest(&nonce).to_vec()
 }
 
 /* Decryption related functions */
@@ -272,7 +222,6 @@ mod tests {
     use super::*;
     use crate::packet::Tag;
     use enr::EnrBuilder;
-    use libp2p_core::identity::Keypair;
     use rand;
 
     /* This section provides a series of reference tests for the encoding of packets */
@@ -345,10 +294,7 @@ mod tests {
 
         let mut nonce = [0u8; 32];
         nonce.copy_from_slice(&nonce_bytes);
-        let secret_key =
-            libp2p_core::identity::secp256k1::SecretKey::from_bytes(local_secret_key).unwrap();
-
-        let key = Keypair::Secp256k1(libp2p_core::identity::secp256k1::Keypair::from(secret_key));
+        let key = secp256k1::SecretKey::parse_slice(&local_secret_key).unwrap();
         let sig = sign_nonce(&key, &nonce, &ephemeral_pubkey).unwrap();
 
         assert_eq!(sig, expected_sig);
@@ -366,10 +312,7 @@ mod tests {
 
         let mut nonce = [0u8; 32];
         nonce.copy_from_slice(&nonce_bytes);
-        let secret_key =
-            libp2p_core::identity::secp256k1::SecretKey::from_bytes(local_secret_key).unwrap();
-
-        let key = Keypair::Secp256k1(libp2p_core::identity::secp256k1::Keypair::from(secret_key));
+        let key = secp256k1::SecretKey::parse_slice(&local_secret_key).unwrap();
         let sig = sign_nonce(&key, &nonce, &ephemeral_pubkey).unwrap();
 
         let auth_pt = AuthResponse::new(&sig, None).encode();
@@ -400,20 +343,21 @@ mod tests {
 
     #[test]
     fn derive_symmetric_keys() {
-        let node1_kp = Keypair::generate_secp256k1();
-        let node2_kp = Keypair::generate_secp256k1();
+        let mut rng = rand::thread_rng();
+        let node1_key = secp256k1::SecretKey::random(&mut rng);
+        let node2_key = secp256k1::SecretKey::random(&mut rng);
 
-        let node1_enr = EnrBuilder::new("v4").build(&node1_kp).unwrap();
-        let node2_enr = EnrBuilder::new("v4").build(&node2_kp).unwrap();
+        let node1_enr = EnrBuilder::new("v4").build(&node1_key).unwrap();
+        let node2_enr = EnrBuilder::new("v4").build(&node2_key).unwrap();
 
         let nonce: Nonce = rand::random();
 
         let (key1, key2, key3, pk) =
-            generate_session_keys(node1_enr.node_id(), &node2_enr, &nonce).unwrap();
+            generate_session_keys(&node1_enr.node_id(), &node2_enr, &nonce).unwrap();
         let (key4, key5, key6) = derive_keys_from_pubkey(
-            &node2_kp,
-            node2_enr.node_id(),
-            node1_enr.node_id(),
+            &node2_key,
+            &node2_enr.node_id(),
+            &node1_enr.node_id(),
             &nonce,
             &pk,
         )

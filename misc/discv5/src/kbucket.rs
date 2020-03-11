@@ -268,17 +268,13 @@ where
     pub fn check(
         &self,
         key: &Key<TPeerId>,
-        value: Option<TVal>,
+        value: &TVal,
         f: impl Fn(&TVal, Vec<&TVal>, usize) -> bool,
     ) -> bool {
-        if let Some(value) = value {
-            let bucket = self.get_bucket(key);
-            if let Some(b) = bucket {
-                let others = self.iter_ref().map(|e| e.node.value).collect();
-                f(&value, others, MAX_NODES_PER_SUBNET_TABLE) && b.check(&value, f)
-            } else {
-                true
-            }
+        let bucket = self.get_bucket(key);
+        if let Some(b) = bucket {
+            let others = self.iter_ref().map(|e| e.node.value).collect();
+            f(value, others, MAX_NODES_PER_SUBNET_TABLE) && b.check(value, f)
         } else {
             true
         }

@@ -12,7 +12,6 @@
 use super::packet::{AuthHeader, AuthResponse, AuthTag, Nonce, Packet, Tag, MAGIC_LENGTH};
 use crate::Discv5Error;
 use enr::{Enr, NodeId};
-use libp2p_core::identity::Keypair;
 use log::debug;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
@@ -160,7 +159,7 @@ impl Session {
     /// specifies if the Session is trusted or not.
     pub fn establish_from_header(
         &mut self,
-        local_keypair: &Keypair,
+        local_key: &secp256k1::SecretKey,
         local_id: &NodeId,
         remote_id: &NodeId,
         id_nonce: Nonce,
@@ -168,7 +167,7 @@ impl Session {
     ) -> Result<bool, Discv5Error> {
         // generate session keys
         let (decryption_key, encryption_key, auth_resp_key) = crypto::derive_keys_from_pubkey(
-            local_keypair,
+            local_key,
             local_id,
             remote_id,
             &id_nonce,
@@ -229,7 +228,7 @@ impl Session {
     pub fn encrypt_with_header(
         &mut self,
         tag: Tag,
-        keypair: &Keypair,
+        local_key: &secp256k1::SecretKey,
         updated_enr: Option<Enr>,
         local_node_id: &NodeId,
         id_nonce: &Nonce,
@@ -252,7 +251,7 @@ impl Session {
         };
 
         // construct the nonce signature
-        let sig = crypto::sign_nonce(keypair, id_nonce, &ephem_pubkey)
+        let sig = crypto::sign_nonce(local_key, id_nonce, &ephem_pubkey)
             .map_err(|_| Discv5Error::Custom("Could not sign WHOAREYOU nonce"))?;
 
         // generate the auth response to be encrypted

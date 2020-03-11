@@ -13,7 +13,6 @@
 //! IP address/port that doesn't match the source, is considered untrusted. Once the IP is updated
 //! to match the source, the `Session` is promoted to an established state. RPC requests are not sent
 //! to untrusted Sessions, only responses.
-//!
 //TODO: Document the event structure and WHOAREYOU requests to the protocol layer.
 //TODO: Limit packets per node to avoid DOS/Spam.
 
@@ -22,15 +21,13 @@ use super::service::Discv5Service;
 use crate::error::Discv5Error;
 use crate::rpc::ProtocolMessage;
 use crate::session::Session;
-use enr::{Enr, NodeId};
+use enr::{Enr, EnrError, NodeId};
 use futures::prelude::*;
-use libp2p_core::identity::Keypair;
 use log::{debug, error, trace, warn};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::default::Default;
-use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
@@ -58,8 +55,8 @@ pub struct SessionService {
     /// The local ENR.
     enr: Enr,
 
-    /// The keypair to sign the ENR and set up encrypted communication with peers.
-    keypair: Keypair,
+    /// The key to sign the ENR and set up encrypted communication with peers.
+    key: secp256k1::SecretKey,
 
     /// Pending raw requests. A list of raw messages we are awaiting a response from the remote.
     /// These are indexed by SocketAddr as WHOAREYOU messages do not return a source node id to
@@ -82,9 +79,9 @@ impl SessionService {
     /* Public Functions */
 
     /// A new Session service which instantiates the UDP socket.
-    pub fn new(enr: Enr, keypair: Keypair, ip: IpAddr) -> io::Result<Self> {
+    pub fn new(enr: Enr, key: secp256k1::SecretKey, ip: IpAddr) -> Result<Self, Discv5Error> {
         // ensure the keypair matches the one that signed the enr.
-        if enr.public_key().into_protobuf_encoding() != keypair.public().into_protobuf_encoding() {
+        if enr.public_key() != secp256k1::PublicKey::from_secret_key(&key) {
             panic!("Discv5: Provided keypair does not match the provided ENR keypair");
         }
 
@@ -104,11 +101,12 @@ impl SessionService {
         Ok(SessionService {
             events: VecDeque::new(),
             enr,
-            keypair,
+            key,
             pending_requests: TimedRequests::new(Duration::from_secs(REQUEST_TIMEOUT)),
             pending_messages: HashMap::default(),
             sessions: TimedSessions::new(),
-            service: Discv5Service::new(socket_addr, magic)?,
+            service: Discv5Service::new(socket_addr, magic)
+                .map_err(|e| Discv5Error::Error(format!("{:?}", e)))?,
         })
     }
 
@@ -117,46 +115,35 @@ impl SessionService {
         &self.enr
     }
 
-    /// Update attestation subnet bitfield of local ENR.
-    pub fn update_enr_bitfield(&mut self, bitfield: &[u8]) -> bool {
-        match self.enr.set_attnets(bitfield, &self.keypair) {
-            Ok(status) => status,
-            Err(e) => {
-                warn!(
-                    "Could not update ENR attestation subnet bitfield. Error: {:?}",
-                    e
-                );
-                false
-            }
-        }
+    /// Generic function to modify a field in the local ENR.
+    pub fn enr_insert(&mut self, key: &str, value: Vec<u8>) -> Result<Option<Vec<u8>>, EnrError> {
+        self.enr.insert(key, value, &self.key)
     }
 
     /// Updates the local ENR `SocketAddr` for either the TCP or UDP port.
-    pub fn update_local_enr_socket(&mut self, socket: SocketAddr, is_tcp: bool) -> bool {
+    pub fn update_local_enr_socket(
+        &mut self,
+        socket: SocketAddr,
+        is_tcp: bool,
+    ) -> Result<(), EnrError> {
         // determine whether to update the TCP or UDP port
         if is_tcp {
-            match self.enr.set_tcp_socket(socket, &self.keypair) {
-                Ok(_) => true,
-                Err(e) => {
-                    warn!("Could not update the ENR IP address. Error: {:?}", e);
-                    false
-                }
-            }
+            self.enr.set_tcp_socket(socket, &self.key).map_err(|e| {
+                warn!("Could not update the ENR IP address. Error: {:?}", e);
+                e
+            })
         } else {
             // Update the UDP socket
-            match self.enr.set_udp_socket(socket, &self.keypair) {
-                Ok(_) => true,
-                Err(e) => {
-                    warn!("Could not update the ENR IP address. Error: {:?}", e);
-                    false
-                }
-            }
+            self.enr.set_udp_socket(socket, &self.key).map_err(|e| {
+                warn!("Could not update the ENR IP address. Error: {:?}", e);
+                e
+            })
         }
     }
 
     /// Updates a session if a new ENR or an updated ENR is discovered.
     pub fn update_enr(&mut self, enr: Enr) {
-        if let Some(session) = self.sessions.get_mut(enr.node_id()) {
+        if let Some(session) = self.sessions.get_mut(&enr.node_id()) {
             // if an ENR is updated to an address that was not the last seen address of the
             // session, we demote the session to untrusted.
             if session.update_enr(enr.clone()) {
@@ -186,7 +173,7 @@ impl SessionService {
             Discv5Error::InvalidEnr
         })?;
 
-        let session = match self.sessions.get(dst_id) {
+        let session = match self.sessions.get(&dst_id) {
             Some(s) if s.trusted_established() => s,
             Some(_) => {
                 // we are currently establishing a connection, add to pending messages
@@ -408,7 +395,7 @@ impl SessionService {
         // Generate session keys and encrypt the earliest packet with the authentication header
         let auth_packet = match session.encrypt_with_header(
             tag,
-            &self.keypair,
+            &self.key,
             updated_enr,
             &self.enr.node_id(),
             &id_nonce,
@@ -479,7 +466,7 @@ impl SessionService {
 
         // establish the session
         match session.establish_from_header(
-            &self.keypair,
+            &self.key,
             &self.enr.node_id(),
             &src_id,
             id_nonce,

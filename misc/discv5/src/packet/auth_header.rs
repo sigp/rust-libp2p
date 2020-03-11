@@ -215,14 +215,14 @@ impl Decodable for AuthHeader {
 mod tests {
     use super::*;
     use enr::EnrBuilder;
-    use libp2p_core::identity::Keypair;
     use rand;
 
     #[test]
     fn encode_decode_auth_response() {
         let sig: [u8; 32] = rand::random();
 
-        let key = Keypair::generate_secp256k1();
+        let mut rng = rand::thread_rng();
+        let key = secp256k1::SecretKey::random(&mut rng);
         let tcp = 30303;
 
         let enr = {

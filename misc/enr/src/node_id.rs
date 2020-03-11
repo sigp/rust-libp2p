@@ -1,22 +1,24 @@
 //! The identifier for an ENR record. This is the keccak256 hash of the public key (for secp256k1
-//! this is the uncompressed encoded form of the public key).
+//! keys this is the uncompressed encoded form of the public key).
 
-use crate::enr_keypair::EnrPublicKey;
-use libp2p_core::identity::PublicKey;
+use crate::keys::EnrPublicKey;
 use sha3::{Digest, Keccak256};
 
 type RawNodeId = [u8; 32];
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// The NodeId of an ENR (a 32 byte identifier).
 pub struct NodeId {
     raw: RawNodeId,
 }
 
 impl NodeId {
+    /// Creates a new node record from 32 bytes.
     pub fn new(raw_input: &[u8; 32]) -> Self {
-        NodeId { raw: raw_input.clone() }
+        NodeId { raw: *raw_input }
     }
 
+    /// Parses a byte slice to form a node Id. This fails if the slice isn't of length 32.
     pub fn parse(raw_input: &[u8]) -> Result<Self, &'static str> {
         if raw_input.len() > 32 {
             return Err("Input too large");
@@ -28,23 +30,22 @@ impl NodeId {
         Ok(NodeId { raw })
     }
 
+    /// Generates a random NodeId.
     pub fn random() -> Self {
         NodeId {
             raw: rand::random(),
         }
     }
 
+    /// Returns a `RawNodeId` which is a 32 byte list.
     pub fn raw(&self) -> RawNodeId {
         self.raw
     }
 }
 
-/// Returns the node-id of the associated ENR record. This is the keccak256
-/// hash of the public key. ENR records cannot be created without a valid public key.
-/// Therefore this will always return a value.
-impl From<PublicKey> for NodeId {
-    fn from(public_key: PublicKey) -> Self {
-        let pubkey_bytes = EnrPublicKey::from(public_key.clone()).encode_uncompressed();
+impl<T: EnrPublicKey> From<T> for NodeId {
+    fn from(public_key: T) -> Self {
+        let pubkey_bytes = public_key.encode_uncompressed();
         NodeId::parse(&Keccak256::digest(&pubkey_bytes)).expect("must be the correct length")
     }
 }
