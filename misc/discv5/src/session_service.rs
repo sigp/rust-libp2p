@@ -21,7 +21,7 @@ use super::service::Discv5Service;
 use crate::error::Discv5Error;
 use crate::rpc::ProtocolMessage;
 use crate::session::Session;
-use enr::{Enr, EnrError, NodeId};
+use enr::{CombinedKey, Enr, EnrError, EnrKey, NodeId};
 use futures::prelude::*;
 use log::{debug, error, trace, warn};
 use sha2::{Digest, Sha256};
@@ -53,10 +53,10 @@ pub struct SessionService {
     events: VecDeque<SessionEvent>,
 
     /// The local ENR.
-    enr: Enr,
+    enr: Enr<CombinedKey>,
 
     /// The key to sign the ENR and set up encrypted communication with peers.
-    key: secp256k1::SecretKey,
+    key: enr::CombinedKey,
 
     /// Pending raw requests. A list of raw messages we are awaiting a response from the remote.
     /// These are indexed by SocketAddr as WHOAREYOU messages do not return a source node id to
@@ -79,9 +79,13 @@ impl SessionService {
     /* Public Functions */
 
     /// A new Session service which instantiates the UDP socket.
-    pub fn new(enr: Enr, key: secp256k1::SecretKey, ip: IpAddr) -> Result<Self, Discv5Error> {
+    pub fn new(
+        enr: Enr<CombinedKey>,
+        key: enr::CombinedKey,
+        ip: IpAddr,
+    ) -> Result<Self, Discv5Error> {
         // ensure the keypair matches the one that signed the enr.
-        if enr.public_key() != secp256k1::PublicKey::from_secret_key(&key) {
+        if enr.public_key() != key.public() {
             panic!("Discv5: Provided keypair does not match the provided ENR keypair");
         }
 
@@ -111,7 +115,7 @@ impl SessionService {
     }
 
     /// The local ENR of the service.
-    pub fn enr(&self) -> &Enr {
+    pub fn enr(&self) -> &Enr<CombinedKey> {
         &self.enr
     }
 
@@ -142,7 +146,7 @@ impl SessionService {
     }
 
     /// Updates a session if a new ENR or an updated ENR is discovered.
-    pub fn update_enr(&mut self, enr: Enr) {
+    pub fn update_enr(&mut self, enr: Enr<CombinedKey>) {
         if let Some(session) = self.sessions.get_mut(&enr.node_id()) {
             // if an ENR is updated to an address that was not the last seen address of the
             // session, we demote the session to untrusted.
@@ -159,7 +163,7 @@ impl SessionService {
     // address that we know of.
     pub fn send_request(
         &mut self,
-        dst_enr: &Enr,
+        dst_enr: &Enr<CombinedKey>,
         message: ProtocolMessage,
     ) -> Result<(), Discv5Error> {
         // check for an established session
@@ -288,7 +292,7 @@ impl SessionService {
         dst: SocketAddr,
         node_id: &NodeId,
         enr_seq: u64,
-        remote_enr: Option<Enr>,
+        remote_enr: Option<Enr<CombinedKey>>,
         auth_tag: AuthTag,
     ) {
         // If a WHOAREYOU is already sent or a session is already established, ignore this request.
@@ -793,7 +797,7 @@ impl SessionService {
 /// The output from polling the `SessionSerivce`.
 pub enum SessionEvent {
     /// A session has been established with a node.
-    Established(Enr),
+    Established(Enr<CombinedKey>),
 
     /// A message was received.
     Message {

@@ -45,14 +45,17 @@
 //! use enr::{Enr,EnrBuilder};
 //! use std::net::Ipv4Addr;
 //! use libp2p_discv5::Discv5;
+//! use std::convert::TryInto;
 //!
 //!   // generate a key for the node
 //!   let keypair = Keypair::generate_secp256k1();
+//!   let enr_key = keypair.clone().try_into().unwrap();
+//!
 //!   // construct a local ENR
 //!   let enr = EnrBuilder::new("v4")
 //!        .ip("127.0.0.1".parse::<Ipv4Addr>().expect("valid address").into())
 //!        .udp(9000)
-//!        .build(&keypair)
+//!        .build(&enr_key)
 //!        .unwrap();
 //!
 //!     // display the ENR's node id and base64 encoding

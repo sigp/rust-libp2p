@@ -188,6 +188,7 @@ where
 
         let key = node_id.clone().into();
         let distance = key.distance(&self.target_key);
+        let num_closest = self.closest_peers.len();
 
         // Mark the peer's progress, the total nodes it has returned and it's current iteration.
         // If iterations have been completed and the node returned peers, mark it as succeeded.
@@ -198,7 +199,7 @@ where
                     debug_assert!(self.num_waiting > 0);
                     self.num_waiting -= 1;
                     let peer = e.get_mut();
-                    peer.peers_returned += closer_peers.len();
+                    peer.peers_returned += num_closest;
                     if peer.peers_returned >= self.config.num_results {
                         peer.state = QueryPeerState::Succeeded;
                     } else if self.iterations == peer.iteration {
@@ -221,7 +222,6 @@ where
             },
         }
 
-        let num_closest = self.closest_peers.len();
         let mut progress = false;
 
         // Incorporate the reported closer peers into the query.

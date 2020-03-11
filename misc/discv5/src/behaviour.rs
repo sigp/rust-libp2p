@@ -21,11 +21,12 @@ use crate::query::{Query, QueryConfig, QueryState, ReturnPeer};
 use crate::rpc;
 use crate::service::MAX_PACKET_SIZE;
 use crate::session_service::{SessionEvent, SessionService};
-use enr::{Enr, EnrError, NodeId};
+use enr::{CombinedKey, Enr, EnrError, NodeId};
 use fnv::FnvHashMap;
 use futures::prelude::*;
 use libp2p_core::ConnectedPoint;
 use libp2p_core::{
+    identity::Keypair,
     multiaddr::{Multiaddr, Protocol},
     PeerId,
 };
@@ -36,6 +37,7 @@ use libp2p_swarm::{
 use log::{debug, error, info, trace, warn};
 use smallvec::SmallVec;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::net::{IpAddr, SocketAddr};
 use std::{marker::PhantomData, time::Duration};
 use tokio_io::{AsyncRead, AsyncWrite};
@@ -59,7 +61,7 @@ pub struct Discv5<TSubstream> {
     known_peer_ids: HashMap<PeerId, NodeId>,
 
     /// Storage of the ENR record for each node.
-    kbuckets: KBucketsTable<NodeId, Enr>,
+    kbuckets: KBucketsTable<NodeId, Enr<CombinedKey>>,
 
     /// All the iterative queries we are currently performing, with their ID. The last parameter
     /// is the list of accumulated providers for `GET_PROVIDERS` queries.
@@ -103,7 +105,7 @@ struct NodesResponse {
     /// The response count.
     count: usize,
     /// The filtered nodes that have been received.
-    received_nodes: Vec<Enr>,
+    received_nodes: Vec<Enr<CombinedKey>>,
 }
 
 impl Default for NodesResponse {
@@ -124,13 +126,26 @@ impl<TSubstream> Discv5<TSubstream> {
     /// will be taken from the provided ENR. `limit_ip` indicates whether we want to limit ip's from the same
     /// /24 subnet in the kbuckets table. This is to mitigate eclipse attacks.
     pub fn new(
-        local_enr: Enr,
-        key: secp256k1::SecretKey,
+        local_enr: Enr<CombinedKey>,
+        keypair: Keypair,
         listen_address: IpAddr,
         limit_ip: bool,
     ) -> Result<Self, Discv5Error> {
         let node_id = local_enr.node_id().clone();
-        let service = SessionService::new(local_enr, key, listen_address)?;
+        // Note: Currently only the secp256k1 keypair is supported. Perform the check here
+        match keypair {
+            Keypair::Secp256k1(_) => {} // this key type is fine
+            _ => {
+                return Err(Discv5Error::KeyTypeNotSupported(
+                    "This libp2p key type is not supported",
+                ));
+            }
+        }
+        let enr_key = keypair.try_into().map_err(|_| {
+            Discv5Error::KeyTypeNotSupported("This libp2p key type is not supported")
+        })?;
+
+        let service = SessionService::new(local_enr, enr_key, listen_address)?;
         let mut query_config = QueryConfig::default();
         query_config.parallelism = 5;
 
@@ -159,7 +174,7 @@ impl<TSubstream> Discv5<TSubstream> {
     /// addresses, so that they can be used immediately in following DHT
     /// operations involving one of these peers, without having to dial
     /// them upfront.
-    pub fn add_enr(&mut self, enr: Enr) {
+    pub fn add_enr(&mut self, enr: Enr<CombinedKey>) {
         // add to the known_peer_ids mapping
         self.known_peer_ids
             .insert(enr.peer_id(), enr.node_id().clone());
@@ -208,7 +223,7 @@ impl<TSubstream> Discv5<TSubstream> {
     }
 
     /// Returns the local ENR of the node.
-    pub fn local_enr(&self) -> &Enr {
+    pub fn local_enr(&self) -> &Enr<CombinedKey> {
         &self.service.enr()
     }
 
@@ -259,7 +274,7 @@ impl<TSubstream> Discv5<TSubstream> {
 
     /// Returns an iterator over all the ENR's of nodes currently contained in a bucket of
     /// the Kademlia routing table.
-    pub fn enr_entries(&mut self) -> impl Iterator<Item = &Enr> {
+    pub fn enr_entries(&mut self) -> impl Iterator<Item = &Enr<CombinedKey>> {
         self.kbuckets.iter().map(|entry| entry.node.value)
     }
 
@@ -541,7 +556,7 @@ impl<TSubstream> Discv5<TSubstream> {
         rpc_id: u64,
         distance: u64,
     ) {
-        let nodes: Vec<EntryRefView<NodeId, Enr>> = self
+        let nodes: Vec<EntryRefView<NodeId, Enr<CombinedKey>>> = self
             .kbuckets
             .nodes_by_distance(distance)
             .into_iter()
@@ -563,7 +578,7 @@ impl<TSubstream> Discv5<TSubstream> {
                 .map_err(|e| warn!("Failed to send a FINDNODES response. Error: {:?}", e));
         } else {
             // build the NODES response
-            let mut to_send_nodes: Vec<Vec<Enr>> = Vec::new();
+            let mut to_send_nodes: Vec<Vec<Enr<CombinedKey>>> = Vec::new();
             let mut total_size = 0;
             let mut rpc_index = 0;
             to_send_nodes.push(Vec::new());
@@ -681,7 +696,7 @@ impl<TSubstream> Discv5<TSubstream> {
     }
 
     /// Returns an ENR if one is known for the given NodeId.
-    fn find_enr(&mut self, node_id: &NodeId) -> Option<Enr> {
+    fn find_enr(&mut self, node_id: &NodeId) -> Option<Enr<CombinedKey>> {
         // check if we know this node id in our routing table
         let key = kbucket::Key::from(node_id.clone());
         if let kbucket::Entry::Present(mut entry, _) = self.kbuckets.entry(&key) {
@@ -730,7 +745,12 @@ impl<TSubstream> Discv5<TSubstream> {
     }
 
     /// Processes discovered peers from a query.
-    fn discovered(&mut self, source: &NodeId, peers: Vec<Enr>, query_id: Option<QueryId>) {
+    fn discovered(
+        &mut self,
+        source: &NodeId,
+        peers: Vec<Enr<CombinedKey>>,
+        query_id: Option<QueryId>,
+    ) {
         let local_id = self.local_enr().node_id().clone();
         let others_iter = peers.into_iter().filter(|p| p.node_id() != local_id);
 
@@ -796,7 +816,7 @@ impl<TSubstream> Discv5<TSubstream> {
     fn connection_updated(
         &mut self,
         node_id: NodeId,
-        enr: Option<Enr>,
+        enr: Option<Enr<CombinedKey>>,
         mut new_status: NodeStatus,
     ) {
         let key = kbucket::Key::from(node_id.clone());
@@ -867,7 +887,7 @@ impl<TSubstream> Discv5<TSubstream> {
 
     /// The equivalent of libp2p `inject_connected()` for a udp session. We have no stream, but a
     /// session key-pair has been negotiated.
-    fn inject_session_established(&mut self, enr: Enr) {
+    fn inject_session_established(&mut self, enr: Enr<CombinedKey>) {
         let node_id = enr.node_id().clone();
         debug!("Session established with Node: {}", node_id);
         self.known_peer_ids.insert(enr.peer_id(), node_id.clone());
@@ -1132,7 +1152,7 @@ where
 /// Returns `true` if `enr` can be inserted and `false` otherwise.
 /// `enr` can be inserted if the count of enrs in `others` in the same /24 subnet as `enr`
 /// is less than `limit`.
-fn ip_limiter(enr: &Enr, others: &Vec<&Enr>, limit: usize) -> bool {
+fn ip_limiter(enr: &Enr<CombinedKey>, others: &Vec<&Enr<CombinedKey>>, limit: usize) -> bool {
     let mut allowed = true;
     if let Some(ip) = enr.ip() {
         let count = others.iter().flat_map(|e| e.ip()).fold(0, |acc, x| {
@@ -1158,9 +1178,12 @@ pub enum Discv5Event {
     /// - `PeerId`: enr.peer_id()
     /// - `Multiaddr`: enr.multiaddr()
     /// - `NodeId`: enr.node_id()
-    Discovered(Enr),
+    Discovered(Enr<CombinedKey>),
     /// A new ENR was added to the routing table.
-    EnrAdded { enr: Enr, replaced: Option<Enr> },
+    EnrAdded {
+        enr: Enr<CombinedKey>,
+        replaced: Option<Enr<CombinedKey>>,
+    },
     /// A new node has been added to the routing table.
     NodeInserted {
         node_id: NodeId,

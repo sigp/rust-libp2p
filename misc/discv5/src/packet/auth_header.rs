@@ -1,6 +1,6 @@
 ///! The Authentication header associated with Discv5 Packets.
 use super::{AuthTag, Nonce, AUTH_TAG_LENGTH, ID_NONCE_LENGTH};
-use enr::Enr;
+use enr::{CombinedKey, Enr};
 use log::debug;
 use rlp::{Decodable, DecoderError, Encodable, Rlp, RlpStream};
 
@@ -61,11 +61,11 @@ pub struct AuthResponse {
     pub signature: Vec<u8>,
 
     /// An optional ENR, required if the requester has an out-dated ENR.
-    pub node_record: Option<Enr>,
+    pub node_record: Option<Enr<CombinedKey>>,
 }
 
 impl AuthResponse {
-    pub fn new(sig: &[u8], node_record: Option<Enr>) -> Self {
+    pub fn new(sig: &[u8], node_record: Option<Enr<CombinedKey>>) -> Self {
         AuthResponse {
             version: AUTH_RESPONSE_VERSION,
             signature: sig.to_vec(),
@@ -107,7 +107,7 @@ impl Decodable for AuthResponse {
             if node_record_rlp.is_empty() {
                 None
             } else {
-                Some(node_record_rlp.as_val::<Enr>()?)
+                Some(node_record_rlp.as_val::<Enr<CombinedKey>>()?)
             }
         };
 
@@ -221,8 +221,7 @@ mod tests {
     fn encode_decode_auth_response() {
         let sig: [u8; 32] = rand::random();
 
-        let mut rng = rand::thread_rng();
-        let key = secp256k1::SecretKey::random(&mut rng);
+        let key = CombinedKey::generate_secp256k1();
         let tcp = 30303;
 
         let enr = {

@@ -19,9 +19,8 @@ fn simple_session_message() {
     let receiver_port = 5001;
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
 
-    let mut rng = rand::thread_rng();
-    let key1 = secp256k1::SecretKey::random(&mut rng);
-    let key2 = secp256k1::SecretKey::random(&mut rng);
+    let key1 = CombinedKey::generate_secp256k1();
+    let key2 = CombinedKey::generate_secp256k1();
 
     let sender_enr = EnrBuilder::new("v4")
         .ip(ip)
@@ -34,10 +33,8 @@ fn simple_session_message() {
         .build(&key2)
         .unwrap();
 
-    let mut sender_service =
-        SessionService::new(sender_enr.clone(), key1.clone(), ip.into()).unwrap();
-    let mut receiver_service =
-        SessionService::new(receiver_enr.clone(), key2.clone(), ip.into()).unwrap();
+    let mut sender_service = SessionService::new(sender_enr.clone(), key1, ip.into()).unwrap();
+    let mut receiver_service = SessionService::new(receiver_enr.clone(), key2, ip.into()).unwrap();
 
     let send_message = ProtocolMessage {
         id: 1,
@@ -104,9 +101,8 @@ fn multiple_messages() {
     let sender_port = 5002;
     let receiver_port = 5003;
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
-    let mut rng = rand::thread_rng();
-    let key1 = secp256k1::SecretKey::random(&mut rng);
-    let key2 = secp256k1::SecretKey::random(&mut rng);
+    let key1 = CombinedKey::generate_secp256k1();
+    let key2 = CombinedKey::generate_secp256k1();
 
     let sender_enr = EnrBuilder::new("v4")
         .ip(ip)
@@ -119,10 +115,8 @@ fn multiple_messages() {
         .build(&key2)
         .unwrap();
 
-    let mut sender_service =
-        SessionService::new(sender_enr.clone(), key1.clone(), ip.into()).unwrap();
-    let mut receiver_service =
-        SessionService::new(receiver_enr.clone(), key2.clone(), ip.into()).unwrap();
+    let mut sender_service = SessionService::new(sender_enr.clone(), key1, ip.into()).unwrap();
+    let mut receiver_service = SessionService::new(receiver_enr.clone(), key2, ip.into()).unwrap();
 
     let send_message = ProtocolMessage {
         id: 1,
@@ -142,15 +136,20 @@ fn multiple_messages() {
 
     let messages_to_send = 5;
 
-    for _ in 0..messages_to_send {
-        let _ = sender_service.send_request(&receiver_enr, send_message.clone());
-    }
+    // sender to send the first message then await for the session to be established
+    let _ = sender_service.send_request(&receiver_enr, send_message.clone());
 
     let mut message_count = 0;
 
     let sender = future::poll_fn(move || -> Poll<(), ()> {
         loop {
             match sender_service.poll() {
+                Async::Ready(SessionEvent::Established(_)) => {
+                    // now the session is established, send the rest of the messages
+                    for _ in 0..messages_to_send - 1 {
+                        let _ = sender_service.send_request(&receiver_enr, send_message.clone());
+                    }
+                }
                 Async::Ready(_) => {}
                 Async::NotReady => return Ok(Async::NotReady),
             };

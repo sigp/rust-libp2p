@@ -8,7 +8,7 @@
 use super::ecdh_ident::EcdhIdent;
 use crate::error::Discv5Error;
 use crate::packet::{AuthHeader, AuthResponse, AuthTag, Nonce};
-use enr::{Enr, NodeId};
+use enr::{CombinedKey, CombinedPublicKey, Enr, NodeId};
 use hkdf::Hkdf;
 use openssl::symm::{decrypt_aead, encrypt_aead, Cipher};
 use secp256k1::Signature;
@@ -30,19 +30,25 @@ type Key = [u8; KEY_LENGTH];
 /// response key and the ephemeral public key.
 pub fn generate_session_keys(
     local_id: &NodeId,
-    remote_enr: &Enr,
+    remote_enr: &Enr<CombinedKey>,
     id_nonce: &Nonce,
 ) -> Result<(Key, Key, Key, Vec<u8>), Discv5Error> {
     let (secret, ephem_pk) = {
-        let remote_pk = remote_enr.public_key();
-        let mut rng = rand::thread_rng();
-        let ephem_sk = secp256k1::SecretKey::random(&mut rng);
-        let ephem_pk = secp256k1::PublicKey::from_secret_key(&ephem_sk);
-        let secret = secp256k1::SharedSecret::<EcdhIdent>::new(&remote_pk, &ephem_sk)
-            .map_err(|_| Discv5Error::KeyDerivationFailed)?;
-        // store as uncompressed, strip the first byte and send only 64 bytes.
-        let ephem_pk = ephem_pk.serialize()[1..].to_vec();
-        (secret, ephem_pk)
+        match remote_enr.public_key() {
+            CombinedPublicKey::Secp256k1(remote_pk) => {
+                let mut rng = rand::thread_rng();
+                let ephem_sk = secp256k1::SecretKey::random(&mut rng);
+                let ephem_pk = secp256k1::PublicKey::from_secret_key(&ephem_sk);
+                let secret = secp256k1::SharedSecret::<EcdhIdent>::new(&remote_pk, &ephem_sk)
+                    .map_err(|_| Discv5Error::KeyDerivationFailed)?;
+                // store as uncompressed, strip the first byte and send only 64 bytes.
+                let ephem_pk = ephem_pk.serialize()[1..].to_vec();
+                (secret, ephem_pk)
+            }
+            CombinedPublicKey::Ed25519(_) => {
+                return Err(Discv5Error::KeyTypeNotSupported("Ed25519"))
+            }
+        }
     };
 
     let (initiator_key, responder_key, auth_resp_key) =
@@ -80,21 +86,26 @@ fn derive_key(
 
 /// Derives the session keys for a public key type that matches the local keypair.
 pub fn derive_keys_from_pubkey(
-    local_key: &secp256k1::SecretKey,
+    local_key: &CombinedKey,
     local_id: &NodeId,
     remote_id: &NodeId,
     id_nonce: &Nonce,
     ephem_pubkey: &[u8],
 ) -> Result<(Key, Key, Key), Discv5Error> {
     let secret = {
-        // convert remote pubkey into secp256k1 public key
-        // the key type should match our own node record
-        let remote_pubkey = secp256k1::PublicKey::parse_slice(ephem_pubkey, None)
-            .map_err(|_| Discv5Error::InvalidRemotePublicKey)?;
+        match local_key {
+            CombinedKey::Secp256k1(key) => {
+                // convert remote pubkey into secp256k1 public key
+                // the key type should match our own node record
+                let remote_pubkey = secp256k1::PublicKey::parse_slice(ephem_pubkey, None)
+                    .map_err(|_| Discv5Error::InvalidRemotePublicKey)?;
 
-        let secret = secp256k1::SharedSecret::<EcdhIdent>::new(&remote_pubkey, local_key)
-            .map_err(|_| Discv5Error::KeyDerivationFailed)?;
-        secret.as_ref().to_vec()
+                let secret = secp256k1::SharedSecret::<EcdhIdent>::new(&remote_pubkey, key)
+                    .map_err(|_| Discv5Error::KeyDerivationFailed)?;
+                secret.as_ref().to_vec()
+            }
+            CombinedKey::Ed25519(_) => return Err(Discv5Error::KeyTypeNotSupported("Ed25519")),
+        }
     };
 
     derive_key(&secret, remote_id, local_id, id_nonce)
@@ -105,33 +116,44 @@ pub fn derive_keys_from_pubkey(
 /// Generates a signature of a nonce given a keypair. This prefixes the `NONCE_PREFIX` to the
 /// signature.
 pub fn sign_nonce(
-    signing_key: &secp256k1::SecretKey,
+    signing_key: &CombinedKey,
     nonce: &Nonce,
     ephem_pubkey: &[u8],
 ) -> Result<Vec<u8>, Discv5Error> {
     let signing_nonce = generate_signing_nonce(nonce, ephem_pubkey);
 
-    let m = secp256k1::Message::parse_slice(&signing_nonce)
-        .map_err(|_| Discv5Error::Custom("Could not parse nonce for signing"))?;
+    match signing_key {
+        CombinedKey::Secp256k1(key) => {
+            let m = secp256k1::Message::parse_slice(&signing_nonce)
+                .map_err(|_| Discv5Error::Custom("Could not parse nonce for signing"))?;
 
-    Ok(secp256k1::sign(&m, signing_key).0.serialize().to_vec())
+            Ok(secp256k1::sign(&m, key).0.serialize().to_vec())
+        }
+        CombinedKey::Ed25519(_) => return Err(Discv5Error::KeyTypeNotSupported("Ed25519")),
+    }
 }
 
 /// Verifies the authentication header nonce.
 pub fn verify_authentication_nonce(
-    remote_pubkey: &secp256k1::PublicKey,
+    remote_pubkey: &CombinedPublicKey,
     remote_ephem_pubkey: &[u8],
     nonce: &Nonce,
     sig: &[u8],
 ) -> bool {
     let signing_nonce = generate_signing_nonce(nonce, remote_ephem_pubkey);
 
-    Signature::parse_slice(sig)
-        .and_then(|s| {
-            secp256k1::Message::parse_slice(&signing_nonce)
-                .map(|m| secp256k1::verify(&m, &s, remote_pubkey))
-        })
-        .unwrap_or(false)
+    match remote_pubkey {
+        CombinedPublicKey::Secp256k1(key) => Signature::parse_slice(sig)
+            .and_then(|s| {
+                secp256k1::Message::parse_slice(&signing_nonce)
+                    .map(|m| secp256k1::verify(&m, &s, key))
+            })
+            .unwrap_or(false),
+        CombinedPublicKey::Ed25519(_) => {
+            // key not yet supported
+            false
+        }
+    }
 }
 
 /// Builds the signature for a given nonce.
@@ -295,7 +317,7 @@ mod tests {
         let mut nonce = [0u8; 32];
         nonce.copy_from_slice(&nonce_bytes);
         let key = secp256k1::SecretKey::parse_slice(&local_secret_key).unwrap();
-        let sig = sign_nonce(&key, &nonce, &ephemeral_pubkey).unwrap();
+        let sig = sign_nonce(&key.into(), &nonce, &ephemeral_pubkey).unwrap();
 
         assert_eq!(sig, expected_sig);
     }
@@ -313,7 +335,7 @@ mod tests {
         let mut nonce = [0u8; 32];
         nonce.copy_from_slice(&nonce_bytes);
         let key = secp256k1::SecretKey::parse_slice(&local_secret_key).unwrap();
-        let sig = sign_nonce(&key, &nonce, &ephemeral_pubkey).unwrap();
+        let sig = sign_nonce(&key.into(), &nonce, &ephemeral_pubkey).unwrap();
 
         let auth_pt = AuthResponse::new(&sig, None).encode();
 
@@ -343,9 +365,8 @@ mod tests {
 
     #[test]
     fn derive_symmetric_keys() {
-        let mut rng = rand::thread_rng();
-        let node1_key = secp256k1::SecretKey::random(&mut rng);
-        let node2_key = secp256k1::SecretKey::random(&mut rng);
+        let node1_key = CombinedKey::generate_secp256k1();
+        let node2_key = CombinedKey::generate_secp256k1();
 
         let node1_enr = EnrBuilder::new("v4").build(&node1_key).unwrap();
         let node2_enr = EnrBuilder::new("v4").build(&node2_key).unwrap();

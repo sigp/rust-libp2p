@@ -11,7 +11,7 @@
 
 use super::packet::{AuthHeader, AuthResponse, AuthTag, Nonce, Packet, Tag, MAGIC_LENGTH};
 use crate::Discv5Error;
-use enr::{Enr, NodeId};
+use enr::{CombinedKey, Enr, NodeId};
 use log::debug;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
@@ -35,7 +35,7 @@ pub struct Session {
     trusted: TrustedState,
 
     /// The ENR of the remote node. This may be unknown during `WhoAreYouSent` states.
-    remote_enr: Option<Enr>,
+    remote_enr: Option<Enr<CombinedKey>>,
 
     /// Last seen IP address and port. This is used to determine if the session is trusted or not.
     last_seen_socket: SocketAddr,
@@ -100,7 +100,7 @@ impl Session {
 
     /// Creates a new `Session` instance and generates a RANDOM packet to be sent along with this
     /// session being established. This session is set to `RandomSent` state.
-    pub fn new_random(tag: Tag, remote_enr: Enr) -> (Self, Packet) {
+    pub fn new_random(tag: Tag, remote_enr: Enr<CombinedKey>) -> (Self, Packet) {
         let random_packet = Packet::random(tag);
 
         let session = Session {
@@ -118,7 +118,7 @@ impl Session {
     pub fn new_whoareyou(
         node_id: &NodeId,
         enr_seq: u64,
-        remote_enr: Option<Enr>,
+        remote_enr: Option<Enr<CombinedKey>>,
         auth_tag: AuthTag,
     ) -> (Self, Packet) {
         // build the WHOAREYOU packet
@@ -159,7 +159,7 @@ impl Session {
     /// specifies if the Session is trusted or not.
     pub fn establish_from_header(
         &mut self,
-        local_key: &secp256k1::SecretKey,
+        local_key: &CombinedKey,
         local_id: &NodeId,
         remote_id: &NodeId,
         id_nonce: Nonce,
@@ -228,8 +228,8 @@ impl Session {
     pub fn encrypt_with_header(
         &mut self,
         tag: Tag,
-        local_key: &secp256k1::SecretKey,
-        updated_enr: Option<Enr>,
+        local_key: &CombinedKey,
+        updated_enr: Option<Enr<CombinedKey>>,
         local_node_id: &NodeId,
         id_nonce: &Nonce,
         message: &[u8],
@@ -391,7 +391,7 @@ impl Session {
 
     /* Session Helper Functions */
 
-    pub fn update_enr(&mut self, enr: Enr) -> bool {
+    pub fn update_enr(&mut self, enr: Enr<CombinedKey>) -> bool {
         if let Some(remote_enr) = &self.remote_enr {
             if remote_enr.seq() < enr.seq() {
                 self.remote_enr = Some(enr);
@@ -444,7 +444,7 @@ impl Session {
         }
     }
 
-    pub fn remote_enr(&self) -> &Option<Enr> {
+    pub fn remote_enr(&self) -> &Option<Enr<CombinedKey>> {
         &self.remote_enr
     }
 
