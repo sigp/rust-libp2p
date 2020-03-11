@@ -2,7 +2,6 @@
 use super::*;
 use crate::rpc::{Request, Response, RpcType};
 use enr::EnrBuilder;
-use libp2p_core::identity::Keypair;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use tokio::prelude::*;
@@ -19,24 +18,26 @@ fn simple_session_message() {
     let sender_port = 5000;
     let receiver_port = 5001;
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
-    let keypair = Keypair::generate_secp256k1();
-    let keypair_2 = Keypair::generate_secp256k1();
+
+    let mut rng = rand::thread_rng();
+    let key1 = secp256k1::SecretKey::random(&mut rng);
+    let key2 = secp256k1::SecretKey::random(&mut rng);
 
     let sender_enr = EnrBuilder::new("v4")
         .ip(ip)
         .udp(sender_port)
-        .build(&keypair)
+        .build(&key1)
         .unwrap();
     let receiver_enr = EnrBuilder::new("v4")
         .ip(ip)
         .udp(receiver_port)
-        .build(&keypair_2)
+        .build(&key2)
         .unwrap();
 
     let mut sender_service =
-        SessionService::new(sender_enr.clone(), keypair.clone(), ip.into()).unwrap();
+        SessionService::new(sender_enr.clone(), key1.clone(), ip.into()).unwrap();
     let mut receiver_service =
-        SessionService::new(receiver_enr.clone(), keypair_2.clone(), ip.into()).unwrap();
+        SessionService::new(receiver_enr.clone(), key2.clone(), ip.into()).unwrap();
 
     let send_message = ProtocolMessage {
         id: 1,
@@ -66,7 +67,7 @@ fn simple_session_message() {
             match message {
                 SessionEvent::WhoAreYouRequest { src, auth_tag, .. } => {
                     let seq = sender_enr.seq();
-                    let node_id = sender_enr.node_id();
+                    let node_id = &sender_enr.node_id();
                     receiver_service.send_whoareyou(
                         src,
                         node_id,
@@ -103,24 +104,25 @@ fn multiple_messages() {
     let sender_port = 5002;
     let receiver_port = 5003;
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
-    let keypair = Keypair::generate_secp256k1();
-    let keypair_2 = Keypair::generate_secp256k1();
+    let mut rng = rand::thread_rng();
+    let key1 = secp256k1::SecretKey::random(&mut rng);
+    let key2 = secp256k1::SecretKey::random(&mut rng);
 
     let sender_enr = EnrBuilder::new("v4")
         .ip(ip)
         .udp(sender_port)
-        .build(&keypair)
+        .build(&key1)
         .unwrap();
     let receiver_enr = EnrBuilder::new("v4")
         .ip(ip)
         .udp(receiver_port)
-        .build(&keypair_2)
+        .build(&key2)
         .unwrap();
 
     let mut sender_service =
-        SessionService::new(sender_enr.clone(), keypair.clone(), ip.into()).unwrap();
+        SessionService::new(sender_enr.clone(), key1.clone(), ip.into()).unwrap();
     let mut receiver_service =
-        SessionService::new(receiver_enr.clone(), keypair_2.clone(), ip.into()).unwrap();
+        SessionService::new(receiver_enr.clone(), key2.clone(), ip.into()).unwrap();
 
     let send_message = ProtocolMessage {
         id: 1,

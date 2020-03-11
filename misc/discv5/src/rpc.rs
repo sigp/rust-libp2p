@@ -436,7 +436,6 @@ pub enum PacketError {
 mod tests {
     use super::*;
     use enr::EnrBuilder;
-    use libp2p_core::identity::Keypair;
 
     #[test]
     fn ref_test_encode_request_ping() {
@@ -570,13 +569,12 @@ mod tests {
         let id = 1;
         let total = 1;
         // ENR needs to be constructed from a keypair
-        let secret_key = libp2p_core::identity::secp256k1::SecretKey::from_bytes(
-            hex::decode("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+        let key = secp256k1::SecretKey::parse_slice(
+            &hex::decode("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
                 .unwrap(),
         )
         .unwrap();
 
-        let key = Keypair::Secp256k1(libp2p_core::identity::secp256k1::Keypair::from(secret_key));
         let enr = EnrBuilder::new("v4").build(&key).unwrap();
         let body = RpcType::Response(Response::Nodes {
             total,
@@ -709,20 +707,21 @@ mod tests {
 
     #[test]
     fn encode_decode_nodes_response() {
-        let kp = Keypair::generate_ed25519();
+        let mut rng = rand::thread_rng();
+        let key = secp256k1::SecretKey::random(&mut rng);
         let enr1 = EnrBuilder::new("v4")
             .ip("127.0.0.1".parse().unwrap())
             .udp(500)
-            .build(&kp)
+            .build(&key)
             .unwrap();
         let enr2 = EnrBuilder::new("v4")
             .ip("10.0.0.1".parse().unwrap())
             .tcp(8080)
-            .build(&kp)
+            .build(&key)
             .unwrap();
         let enr3 = EnrBuilder::new("v4")
             .ip("10.4.5.6".parse().unwrap())
-            .build(&kp)
+            .build(&key)
             .unwrap();
 
         let enr_list = vec![enr1, enr2, enr3];

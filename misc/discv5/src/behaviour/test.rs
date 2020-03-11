@@ -14,8 +14,8 @@ use tokio::prelude::*;
 use tokio::runtime::Runtime;
 
 use crate::kbucket;
-use enr::NodeId;
 use enr::{Enr, EnrBuilder};
+use enr::{EnrKey, NodeId};
 use libp2p_secio::SecioConfig;
 use libp2p_yamux as yamux;
 use rand_core::{RngCore, SeedableRng};
@@ -39,10 +39,18 @@ fn build_swarms(n: usize, base_port: u16) -> Vec<SwarmType> {
 
     for port in base_port..base_port + n as u16 {
         let keypair = identity::Keypair::generate_secp256k1();
+
+        let sk = match keypair.clone() {
+            identity::Keypair::Secp256k1(key) => {
+                secp256k1::SecretKey::parse(&key.secret().to_bytes()).expect("valid key")
+            }
+            _ => unreachable!("Only secp256k1 keys"),
+        };
+
         let enr = EnrBuilder::new("v4")
             .ip(ip.clone().into())
             .udp(port)
-            .build(&keypair)
+            .build(&sk)
             .unwrap();
         // transport for building a swarm
         let transport = MemoryTransport::default()
@@ -52,7 +60,7 @@ fn build_swarms(n: usize, base_port: u16) -> Vec<SwarmType> {
             .map(|(p, m), _| (p, StreamMuxerBox::new(m)))
             .map_err(|e| panic!("Failed to create transport: {:?}", e))
             .boxed();
-        let discv5 = Discv5::new(enr, keypair.clone(), ip.into(), false).unwrap();
+        let discv5 = Discv5::new(enr, sk, ip.into(), false).unwrap();
         swarms.push(Swarm::new(
             transport,
             discv5,
@@ -63,40 +71,39 @@ fn build_swarms(n: usize, base_port: u16) -> Vec<SwarmType> {
 }
 
 /// Build `n` swarms using passed keypairs.
-fn build_swarms_from_keypairs(keypairs: Vec<identity::Keypair>) -> Vec<SwarmType> {
+fn build_swarms_from_keypairs(keys: Vec<secp256k1::SecretKey>) -> Vec<SwarmType> {
     let base_port = 10000u16;
     let mut swarms = Vec::new();
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
 
     // for port in base_port..base_port + keypairs.len() as u16 {
-    for i in 0..keypairs.len() {
+    for (i, key) in keys.into_iter().enumerate() {
         let port = base_port + i as u16;
-        let keypair = &keypairs[i];
+
         let enr = EnrBuilder::new("v4")
             .ip(ip.clone().into())
             .udp(port)
-            .build(&keypair)
+            .build(&key)
             .unwrap();
+
+        let secret_key = identity::secp256k1::SecretKey::from_bytes(key.serialize()).unwrap();
+        let kp = identity::Keypair::Secp256k1(identity::secp256k1::Keypair::from(secret_key));
         // transport for building a swarm
         let transport = MemoryTransport::default()
             .upgrade(libp2p_core::upgrade::Version::V1)
-            .authenticate(SecioConfig::new(keypair.clone()))
+            .authenticate(SecioConfig::new(kp.clone()))
             .multiplex(yamux::Config::default())
             .map(|(p, m), _| (p, StreamMuxerBox::new(m)))
             .map_err(|e| panic!("Failed to create transport: {:?}", e))
             .boxed();
-        let discv5 = Discv5::new(enr, keypair.clone(), ip.into(), false).unwrap();
-        swarms.push(Swarm::new(
-            transport,
-            discv5,
-            keypair.public().into_peer_id(),
-        ));
+        let discv5 = Discv5::new(enr, key.clone(), ip.into(), false).unwrap();
+        swarms.push(Swarm::new(transport, discv5, kp.public().into_peer_id()));
     }
     swarms
 }
 
 /// Generate `n` deterministic keypairs from a given seed.
-fn generate_deterministic_keypair(n: usize, seed: u64) -> Vec<identity::Keypair> {
+fn generate_deterministic_keypair(n: usize, seed: u64) -> Vec<secp256k1::SecretKey> {
     let mut keypairs = Vec::new();
     for i in 0..n {
         let sk = {
@@ -105,13 +112,12 @@ fn generate_deterministic_keypair(n: usize, seed: u64) -> Vec<identity::Keypair>
             loop {
                 // until a value is given within the curve order
                 rng.fill_bytes(&mut b);
-                if let Ok(k) = identity::secp256k1::SecretKey::from_bytes(&mut b) {
+                if let Ok(k) = secp256k1::SecretKey::parse_slice(&mut b) {
                     break k;
                 }
             }
         };
-        let kp = identity::Keypair::Secp256k1(identity::secp256k1::Keypair::from(sk));
-        keypairs.push(kp);
+        keypairs.push(sk);
     }
     keypairs
 }
@@ -301,23 +307,25 @@ fn test_findnode_query() {
 
 #[test]
 fn test_updating_connection_on_ping() {
-    let keypair = identity::Keypair::generate_secp256k1();
+    let mut rng = rand::thread_rng();
+    let key = secp256k1::SecretKey::random(&mut rng);
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
     let enr = EnrBuilder::new("v4")
         .ip(ip.clone().into())
         .udp(10001)
-        .build(&keypair)
+        .build(&key)
         .unwrap();
     let ip2: IpAddr = "127.0.0.1".parse().unwrap();
-    let keypair2 = identity::Keypair::generate_secp256k1();
+    let mut rng = rand::thread_rng();
+    let key2 = secp256k1::SecretKey::random(&mut rng);
     let enr2 = EnrBuilder::new("v4")
         .ip(ip2.clone().into())
         .udp(10002)
-        .build(&keypair2)
+        .build(&key2)
         .unwrap();
 
     // Set up discv5 with one disconnected node
-    let mut discv5: Discv5<Box<u64>> = Discv5::new(enr, keypair.clone(), ip.into(), false).unwrap();
+    let mut discv5: Discv5<Box<u64>> = Discv5::new(enr, key.clone(), ip.into(), false).unwrap();
     discv5.add_enr(enr2.clone());
     discv5.connection_updated(enr2.node_id().clone(), None, NodeStatus::Disconnected);
 
@@ -384,37 +392,39 @@ fn test_table_limits() {
 // Each bucket can have maximum 2 nodes in the same /24 subnet
 #[test]
 fn test_bucket_limits() {
-    let keypair = identity::Keypair::generate_secp256k1();
+    let mut rng = rand::thread_rng();
+    let key = secp256k1::SecretKey::random(&mut rng);
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
     let enr = EnrBuilder::new("v4")
         .ip(ip.clone().into())
         .udp(9500)
-        .build(&keypair)
+        .build(&key)
         .unwrap();
     let bucket_limit: usize = 2;
     // Generate `bucket_limit + 1` keypairs that go in `enr` node's 256th bucket.
-    let keypairs = {
-        let mut keypairs = Vec::new();
+    let keys = {
+        let mut keys = Vec::new();
         for _ in 0..bucket_limit + 1 {
             loop {
-                let keypair = identity::Keypair::generate_secp256k1();
-                let enr_new = EnrBuilder::new("v4").build(&keypair).unwrap();
-                let key: kbucket::Key<NodeId> = enr.node_id().clone().into();
-                let distance = key
+                let mut rng = rand::thread_rng();
+                let key = secp256k1::SecretKey::random(&mut rng);
+                let enr_new = EnrBuilder::new("v4").build(&key).unwrap();
+                let node_key: kbucket::Key<NodeId> = enr.node_id().clone().into();
+                let distance = node_key
                     .log2_distance(&enr_new.node_id().clone().into())
                     .unwrap();
                 if distance == 256 {
-                    keypairs.push(keypair);
+                    keys.push(key);
                     break;
                 }
             }
         }
-        keypairs
+        keys
     };
     // Generate `bucket_limit + 1` nodes in the same subnet.
     let enrs: Vec<Enr> = (1..=bucket_limit + 1)
         .map(|i| {
-            let kp = &keypairs[i - 1];
+            let kp = &keys[i - 1];
             let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, i as u8));
             EnrBuilder::new("v4")
                 .ip(ip.clone().into())
@@ -423,7 +433,7 @@ fn test_bucket_limits() {
                 .unwrap()
         })
         .collect();
-    let mut discv5: Discv5<Box<u64>> = Discv5::new(enr, keypair.clone(), ip.into(), true).unwrap();
+    let mut discv5: Discv5<Box<u64>> = Discv5::new(enr, key.clone(), ip.into(), true).unwrap();
     for enr in enrs {
         discv5.add_enr(enr.clone());
     }

@@ -83,4 +83,4 @@ members = [
 
 [patch.crates-io]
 libp2p-core = { path = "core" }
-enr = { version = "0.1.0-alpha-1", path = "misc/enr" }
+enr = { path = "misc/enr" }

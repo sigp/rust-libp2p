@@ -21,7 +21,7 @@ use super::service::Discv5Service;
 use crate::error::Discv5Error;
 use crate::rpc::ProtocolMessage;
 use crate::session::Session;
-use enr::{DefaultKey, Enr, EnrError, EnrKey, NodeId};
+use enr::{Enr, EnrError, NodeId};
 use futures::prelude::*;
 use log::{debug, error, trace, warn};
 use sha2::{Digest, Sha256};
@@ -55,8 +55,8 @@ pub struct SessionService {
     /// The local ENR.
     enr: Enr,
 
-    /// The keypair to sign the ENR and set up encrypted communication with peers.
-    key: DefaultKey,
+    /// The key to sign the ENR and set up encrypted communication with peers.
+    key: secp256k1::SecretKey,
 
     /// Pending raw requests. A list of raw messages we are awaiting a response from the remote.
     /// These are indexed by SocketAddr as WHOAREYOU messages do not return a source node id to
@@ -79,9 +79,9 @@ impl SessionService {
     /* Public Functions */
 
     /// A new Session service which instantiates the UDP socket.
-    pub fn new(enr: Enr, key: DefaultKey, ip: IpAddr) -> Result<Self, Discv5Error> {
+    pub fn new(enr: Enr, key: secp256k1::SecretKey, ip: IpAddr) -> Result<Self, Discv5Error> {
         // ensure the keypair matches the one that signed the enr.
-        if enr.public_key() != key.public() {
+        if enr.public_key() != secp256k1::PublicKey::from_secret_key(&key) {
             panic!("Discv5: Provided keypair does not match the provided ENR keypair");
         }
 
@@ -116,7 +116,7 @@ impl SessionService {
     }
 
     /// Generic function to modify a field in the local ENR.
-    pub fn enr_insert(&self, key: &str, value: Vec<u8>) -> Result<Option<Vec<u8>>, EnrError> {
+    pub fn enr_insert(&mut self, key: &str, value: Vec<u8>) -> Result<Option<Vec<u8>>, EnrError> {
         self.enr.insert(key, value, &self.key)
     }
 
@@ -143,7 +143,7 @@ impl SessionService {
 
     /// Updates a session if a new ENR or an updated ENR is discovered.
     pub fn update_enr(&mut self, enr: Enr) {
-        if let Some(session) = self.sessions.get_mut(enr.node_id()) {
+        if let Some(session) = self.sessions.get_mut(&enr.node_id()) {
             // if an ENR is updated to an address that was not the last seen address of the
             // session, we demote the session to untrusted.
             if session.update_enr(enr.clone()) {
@@ -173,7 +173,7 @@ impl SessionService {
             Discv5Error::InvalidEnr
         })?;
 
-        let session = match self.sessions.get(dst_id) {
+        let session = match self.sessions.get(&dst_id) {
             Some(s) if s.trusted_established() => s,
             Some(_) => {
                 // we are currently establishing a connection, add to pending messages
