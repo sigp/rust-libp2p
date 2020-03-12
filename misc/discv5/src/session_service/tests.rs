@@ -4,6 +4,7 @@ use crate::rpc::{Request, Response, RpcType};
 use enr::EnrBuilder;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::prelude::*;
 
 fn init() {
@@ -22,6 +23,8 @@ fn simple_session_message() {
     let key1 = CombinedKey::generate_secp256k1();
     let key2 = CombinedKey::generate_secp256k1();
 
+    let config = Discv5Config::default();
+
     let sender_enr = EnrBuilder::new("v4")
         .ip(ip)
         .udp(sender_port)
@@ -33,8 +36,20 @@ fn simple_session_message() {
         .build(&key2)
         .unwrap();
 
-    let mut sender_service = SessionService::new(sender_enr.clone(), key1, ip.into()).unwrap();
-    let mut receiver_service = SessionService::new(receiver_enr.clone(), key2, ip.into()).unwrap();
+    let mut sender_service = SessionService::new(
+        sender_enr.clone(),
+        key1,
+        sender_enr.udp_socket().unwrap(),
+        config.clone(),
+    )
+    .unwrap();
+    let mut receiver_service = SessionService::new(
+        receiver_enr.clone(),
+        key2,
+        receiver_enr.udp_socket().unwrap(),
+        config,
+    )
+    .unwrap();
 
     let send_message = ProtocolMessage {
         id: 1,
@@ -115,8 +130,20 @@ fn multiple_messages() {
         .build(&key2)
         .unwrap();
 
-    let mut sender_service = SessionService::new(sender_enr.clone(), key1, ip.into()).unwrap();
-    let mut receiver_service = SessionService::new(receiver_enr.clone(), key2, ip.into()).unwrap();
+    let mut sender_service = SessionService::new(
+        sender_enr.clone(),
+        key1,
+        sender_enr.udp_socket().unwrap(),
+        Discv5Config::default(),
+    )
+    .unwrap();
+    let mut receiver_service = SessionService::new(
+        receiver_enr.clone(),
+        key2,
+        receiver_enr.udp_socket().unwrap(),
+        Discv5Config::default(),
+    )
+    .unwrap();
 
     let send_message = ProtocolMessage {
         id: 1,
@@ -127,7 +154,7 @@ fn multiple_messages() {
         id: 1,
         body: RpcType::Response(Response::Ping {
             enr_seq: 1,
-            ip: ip,
+            ip,
             port: sender_port,
         }),
     };

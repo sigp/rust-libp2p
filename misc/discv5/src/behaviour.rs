@@ -21,7 +21,8 @@ use crate::query::{Query, QueryConfig, QueryState, ReturnPeer};
 use crate::rpc;
 use crate::service::MAX_PACKET_SIZE;
 use crate::session_service::{SessionEvent, SessionService};
-use enr::{CombinedKey, Enr, EnrError, NodeId};
+use crate::Discv5Config;
+use enr::{CombinedKey, Enr, EnrError, EnrKey, NodeId};
 use fnv::FnvHashMap;
 use futures::prelude::*;
 use libp2p_core::ConnectedPoint;
@@ -38,7 +39,7 @@ use log::{debug, error, info, trace, warn};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::{marker::PhantomData, time::Duration};
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_timer::Interval;
@@ -56,6 +57,9 @@ struct RpcRequest(RpcId, NodeId);
 pub struct Discv5<TSubstream> {
     /// Events yielded by this behaviour.
     events: SmallVec<[Discv5Event; 32]>,
+
+    /// Configuration parameters for the Discv5 service
+    config: Discv5Config,
 
     /// Abstract the NodeId from libp2p. For all known ENR's we keep a mapping of PeerId to NodeId.
     known_peer_ids: HashMap<PeerId, NodeId>,
@@ -75,25 +79,16 @@ pub struct Discv5<TSubstream> {
     active_nodes_responses: HashMap<NodeId, NodesResponse>,
 
     /// A map of votes nodes have made about our external IP address. We accept the majority.
-    ip_votes: IpVote,
+    ip_votes: Option<IpVote>,
 
     /// List of peers we have established sessions with and an interval for when to send a PING.
     connected_peers: HashMap<NodeId, Interval>,
-
-    /// The configuration for iterative queries.
-    query_config: QueryConfig,
 
     /// Identifier for the next query that we start.
     next_query_id: QueryId,
 
     /// Main discv5 UDP service that establishes sessions with peers.
     service: SessionService,
-
-    /// The time between pings to ensure connectivity amongst connected nodes.
-    ping_delay: Duration,
-
-    /// Config option for limiting ip's in same subnet
-    limit_ip: bool,
 
     /// Marker to pin the generics.
     marker: PhantomData<TSubstream>,
@@ -122,14 +117,12 @@ impl<TSubstream> Discv5<TSubstream> {
     ///
     /// `local_enr` is the `ENR` representing the local node. This contains node identifying information, such
     /// as IP addresses and ports which we wish to broadcast to other nodes via this discovery
-    /// mechanism. The `listen_address` determines which address the UDP socket will listen on, and the udp `port`
-    /// will be taken from the provided ENR. `limit_ip` indicates whether we want to limit ip's from the same
-    /// /24 subnet in the kbuckets table. This is to mitigate eclipse attacks.
+    /// mechanism. The `listen_socket` determines which UDP socket address the behaviour will listen on.
     pub fn new(
         local_enr: Enr<CombinedKey>,
         keypair: Keypair,
-        listen_address: IpAddr,
-        limit_ip: bool,
+        config: Discv5Config,
+        listen_socket: SocketAddr,
     ) -> Result<Self, Discv5Error> {
         let node_id = local_enr.node_id().clone();
         // Note: Currently only the secp256k1 keypair is supported. Perform the check here
@@ -141,28 +134,39 @@ impl<TSubstream> Discv5<TSubstream> {
                 ));
             }
         }
-        let enr_key = keypair.try_into().map_err(|_| {
+        let enr_key: CombinedKey = keypair.try_into().map_err(|_| {
             Discv5Error::KeyTypeNotSupported("This libp2p key type is not supported")
         })?;
 
-        let service = SessionService::new(local_enr, enr_key, listen_address)?;
-        let mut query_config = QueryConfig::default();
-        query_config.parallelism = 5;
+        // ensure the keypair matches the one that signed the enr.
+        if local_enr.public_key() != enr_key.public() {
+            return Err(Discv5Error::Custom(
+                "Discv5: Provided keypair does not match the provided ENR keypair",
+            ));
+        }
+
+        // process behaviour-level configuration parameters
+        let ip_votes = if config.enr_update {
+            Some(IpVote::new(config.enr_peer_update_min))
+        } else {
+            None
+        };
+
+        // build the sesison service
+        let service = SessionService::new(local_enr, enr_key, listen_socket, config.clone())?;
 
         Ok(Discv5 {
             events: SmallVec::new(),
+            config,
             known_peer_ids: HashMap::new(),
             kbuckets: KBucketsTable::new(node_id.into(), Duration::from_secs(60)),
             active_queries: Default::default(),
             active_rpc_requests: Default::default(),
             active_nodes_responses: HashMap::new(),
-            ip_votes: IpVote::new(),
+            ip_votes,
             connected_peers: Default::default(),
             next_query_id: 0,
-            query_config,
             service,
-            limit_ip,
-            ping_delay: Duration::from_secs(300),
             marker: PhantomData,
         })
     }
@@ -181,7 +185,7 @@ impl<TSubstream> Discv5<TSubstream> {
         let key = kbucket::Key::from(enr.node_id().clone());
 
         // should the ENR be inserted or updated to a value that would exceed the IP limit ban
-        let ip_limit_ban = self.limit_ip
+        let ip_limit_ban = self.config.ip_limit
             && !self
                 .kbuckets
                 .check(&key, &enr, { |v, o, l| ip_limiter(v, &o, l) });
@@ -211,9 +215,8 @@ impl<TSubstream> Discv5<TSubstream> {
                         }
                     }
                 }
-                return;
             }
-            kbucket::Entry::SelfEntry => return,
+            kbucket::Entry::SelfEntry => {}
         };
     }
 
@@ -236,11 +239,9 @@ impl<TSubstream> Discv5<TSubstream> {
                 // nothing to do, not updated
                 return false;
             }
-        } else {
-            if self.local_enr().udp_socket() == Some(socket_addr) {
-                // nothing to do, not updated
-                return false;
-            }
+        } else if self.local_enr().udp_socket() == Some(socket_addr) {
+            // nothing to do, not updated
+            return false;
         }
         // a new socket addr has been supplied
         if self
@@ -448,28 +449,13 @@ impl<TSubstream> Discv5<TSubstream> {
                 }
                 rpc::Response::Ping { enr_seq, ip, port } => {
                     let socket = SocketAddr::new(ip, port);
-                    self.ip_votes.insert(node_id.clone(), socket.clone());
-
-                    match self.local_enr().udp_socket() {
-                        Some(local_socket) => {
-                            let majority_socket = self.ip_votes.majority(local_socket.clone());
-                            if majority_socket != local_socket {
-                                info!("Local UDP socket updated to: {}", majority_socket);
-                                self.events
-                                    .push(Discv5Event::SocketUpdated(majority_socket));
-                                if self
-                                    .service
-                                    .update_local_enr_socket(majority_socket, false)
-                                    .is_ok()
-                                {
-                                    // alert known peers to our updated enr
-                                    self.ping_connected_peers();
-                                }
-                            }
-                        }
-                        None => {
-                            // current UDP socket not in the ENR, update to the majority regardless
-                            let majority_socket = self.ip_votes.majority(socket.clone());
+                    // perform ENR majority-based update if required.
+                    let local_socket = self.local_enr().udp_socket();
+                    if let Some(ref mut ip_votes) = self.ip_votes {
+                        ip_votes.insert(node_id.clone(), socket.clone());
+                        let majority_socket = ip_votes.majority();
+                        if majority_socket.is_some() && majority_socket != local_socket {
+                            let majority_socket = majority_socket.expect("is some");
                             info!("Local UDP socket updated to: {}", majority_socket);
                             self.events
                                 .push(Discv5Event::SocketUpdated(majority_socket));
@@ -485,19 +471,14 @@ impl<TSubstream> Discv5<TSubstream> {
                     }
 
                     // check if we need to request a new ENR
-                    let enr = self.find_enr(&node_id);
-
-                    match enr {
-                        Some(enr) => {
-                            if enr.seq() < enr_seq {
-                                // request an ENR update
-                                debug!("Requesting an ENR update from node: {}", node_id);
-                                let req = rpc::Request::FindNode { distance: 0 };
-                                self.send_rpc_request(&node_id, req, None);
-                            }
-                            self.connection_updated(node_id.clone(), None, NodeStatus::Connected)
+                    if let Some(enr) = self.find_enr(&node_id) {
+                        if enr.seq() < enr_seq {
+                            // request an ENR update
+                            debug!("Requesting an ENR update from node: {}", node_id);
+                            let req = rpc::Request::FindNode { distance: 0 };
+                            self.send_rpc_request(&node_id, req, None);
                         }
-                        None => (),
+                        self.connection_updated(node_id.clone(), None, NodeStatus::Connected)
                     }
                 }
                 _ => {} //TODO: Implement all RPC methods
@@ -734,12 +715,9 @@ impl<TSubstream> Discv5<TSubstream> {
         let target_key: kbucket::Key<QueryInfo> = target.clone().into();
 
         let known_closest_peers = self.kbuckets.closest_keys(&target_key);
-        let query = Query::with_config(
-            self.query_config.clone(),
-            target,
-            known_closest_peers,
-            query_iterations,
-        );
+        let mut query_config = QueryConfig::default();
+        query_config.parallelism = self.config.query_parallelism;
+        let query = Query::with_config(query_config, target, known_closest_peers, query_iterations);
 
         self.active_queries.insert(query_id, query);
     }
@@ -759,7 +737,7 @@ impl<TSubstream> Discv5<TSubstream> {
             self.events.push(Discv5Event::Discovered(peer.clone()));
 
             let key = kbucket::Key::from(peer.node_id());
-            if !self.limit_ip
+            if !self.config.ip_limit
                 || self
                     .kbuckets
                     .check(&key, &peer, { |v, o, l| ip_limiter(v, &o, l) })
@@ -827,7 +805,7 @@ impl<TSubstream> Discv5<TSubstream> {
                 .insert(enr.peer_id().clone(), enr.node_id());
 
             // should the ENR be inserted or updated to a value that would exceed the IP limit ban
-            if self.limit_ip
+            if self.config.ip_limit
                 && !self
                     .kbuckets
                     .check(&key, &enr, { |v, o, l| ip_limiter(v, &o, l) })
@@ -894,7 +872,7 @@ impl<TSubstream> Discv5<TSubstream> {
         self.connection_updated(node_id.clone(), Some(enr), NodeStatus::Connected);
         // send an initial ping and start the ping interval
         self.send_ping(&node_id);
-        let interval = Interval::new_interval(self.ping_delay);
+        let interval = Interval::new_interval(self.config.ping_interval);
         self.connected_peers.insert(node_id, interval);
     }
 

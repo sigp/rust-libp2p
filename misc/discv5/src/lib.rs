@@ -44,7 +44,7 @@
 //! use libp2p_core::identity::Keypair;
 //! use enr::{Enr,EnrBuilder};
 //! use std::net::Ipv4Addr;
-//! use libp2p_discv5::Discv5;
+//! use libp2p_discv5::{Discv5, Discv5Config};
 //! use std::convert::TryInto;
 //!
 //!   // generate a key for the node
@@ -59,12 +59,18 @@
 //!        .unwrap();
 //!
 //!     // display the ENR's node id and base64 encoding
-//!        println!("Node Id: {}", enr.node_id());
-//!        println!("Base64 ENR: {}", enr.to_base64());
+//!     println!("Node Id: {}", enr.node_id());
+//!     println!("Base64 ENR: {}", enr.to_base64());
+//!
+//!     // listen on the udp socket of the enr
+//!     let listen_address = enr.udp_socket().unwrap();
+//!
+//!     // use default settings for the discv5 service
+//!     let config = Discv5Config::default();
 //!
 //!    // construct the discv5 behaviour
 //!    // the substream type is removed for demonstrative purposes
-//!    let discv5: Discv5<()> = Discv5::new(enr, keypair, "0.0.0.0".parse::<Ipv4Addr>(). unwrap().into(), false).unwrap();
+//!    let discv5: Discv5<()> = Discv5::new(enr, keypair, config, listen_address).unwrap();
 //! ```
 //!
 //! To see a usage in a swarm environment, see the `discv5` example in `/examples`.
@@ -79,14 +85,18 @@
 //! [`Swarm`]: libp2p_core::swarm::Swarm
 
 mod behaviour;
+mod config;
 mod error;
 mod kbucket;
-pub mod packet;
+mod packet;
 mod query;
-pub mod rpc;
+mod rpc;
 mod service;
 mod session;
-pub(crate) mod session_service;
+mod session_service;
 
 pub use behaviour::{Discv5, Discv5Event};
+pub use config::{Discv5Config, Discv5ConfigBuilder};
 pub use error::Discv5Error;
+// re-export the ENR crate
+pub use enr;

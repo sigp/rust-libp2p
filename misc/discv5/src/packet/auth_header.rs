@@ -42,13 +42,6 @@ impl AuthHeader {
             auth_response: resp,
         }
     }
-
-    /// RLP-encodes the authentication header.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut s = RlpStream::new();
-        s.append(self);
-        s.drain()
-    }
 }
 
 /// An authentication response. This contains a signed challenge nonce, and optionally an updated

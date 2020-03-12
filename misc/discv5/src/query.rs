@@ -276,7 +276,7 @@ where
         let distance = key.distance(&self.target_key);
 
         match self.closest_peers.entry(distance) {
-            Entry::Vacant(_) => return,
+            Entry::Vacant(_) => {}
             Entry::Occupied(mut e) => match e.get().state {
                 QueryPeerState::Waiting => {
                     debug_assert!(self.num_waiting > 0);

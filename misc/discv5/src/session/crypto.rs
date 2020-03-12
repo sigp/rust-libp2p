@@ -129,7 +129,7 @@ pub fn sign_nonce(
 
             Ok(secp256k1::sign(&m, key).0.serialize().to_vec())
         }
-        CombinedKey::Ed25519(_) => return Err(Discv5Error::KeyTypeNotSupported("Ed25519")),
+        CombinedKey::Ed25519(_) => Err(Discv5Error::KeyTypeNotSupported("Ed25519")),
     }
 }
 

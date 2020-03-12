@@ -16,20 +16,20 @@
 //TODO: Document the event structure and WHOAREYOU requests to the protocol layer.
 //TODO: Limit packets per node to avoid DOS/Spam.
 
-use super::packet::{AuthHeader, AuthTag, Magic, Nonce, Packet, Tag, TAG_LENGTH};
 use super::service::Discv5Service;
+use crate::config::Discv5Config;
 use crate::error::Discv5Error;
+use crate::packet::{AuthHeader, AuthTag, Magic, Nonce, Packet, Tag, TAG_LENGTH};
 use crate::rpc::ProtocolMessage;
 use crate::session::Session;
-use enr::{CombinedKey, Enr, EnrError, EnrKey, NodeId};
+use enr::{CombinedKey, Enr, EnrError, NodeId};
 use futures::prelude::*;
 use log::{debug, error, trace, warn};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::default::Default;
-use std::net::{IpAddr, SocketAddr};
-use std::time::Duration;
+use std::net::SocketAddr;
 
 mod tests;
 mod timed_requests;
@@ -38,19 +38,12 @@ mod timed_sessions;
 use timed_requests::TimedRequests;
 use timed_sessions::TimedSessions;
 
-/// Seconds before a timeout expires.
-const REQUEST_TIMEOUT: u64 = 4;
-/// The number of times to retry a request.
-const REQUEST_RETRIES: u8 = 1;
-/// The timeout for a Session.
-//TODO: Make this a function of messages sent, to prevent nonce replay
-pub const SESSION_TIMEOUT: u64 = 86400;
-/// The number of seconds a session will wait to be established before being removed.
-pub const SESSION_ESTABLISH_TIMEOUT: u64 = 15;
-
 pub struct SessionService {
     /// Queue of events produced by the session service.
     events: VecDeque<SessionEvent>,
+
+    /// Configuration for the discv5 service.
+    config: Discv5Config,
 
     /// The local ENR.
     enr: Enr<CombinedKey>,
@@ -82,16 +75,9 @@ impl SessionService {
     pub fn new(
         enr: Enr<CombinedKey>,
         key: enr::CombinedKey,
-        ip: IpAddr,
+        listen_socket: SocketAddr,
+        config: Discv5Config,
     ) -> Result<Self, Discv5Error> {
-        // ensure the keypair matches the one that signed the enr.
-        if enr.public_key() != key.public() {
-            panic!("Discv5: Provided keypair does not match the provided ENR keypair");
-        }
-
-        let udp = enr.udp().unwrap_or_else(|| 9000);
-
-        let socket_addr = SocketAddr::new(ip, udp);
         // generates the WHOAREYOU magic packet for the local node-id
         let magic = {
             let mut hasher = Sha256::new();
@@ -106,11 +92,12 @@ impl SessionService {
             events: VecDeque::new(),
             enr,
             key,
-            pending_requests: TimedRequests::new(Duration::from_secs(REQUEST_TIMEOUT)),
+            pending_requests: TimedRequests::new(config.request_timeout),
             pending_messages: HashMap::default(),
-            sessions: TimedSessions::new(),
-            service: Discv5Service::new(socket_addr, magic)
+            sessions: TimedSessions::new(config.session_establish_timeout),
+            service: Discv5Service::new(listen_socket, magic)
                 .map_err(|e| Discv5Error::Error(format!("{:?}", e)))?,
+            config,
         })
     }
 
@@ -503,7 +490,7 @@ impl SessionService {
 
         // session has been established, update the timeout
         self.sessions
-            .update_timeout(&src_id, Duration::from_secs(SESSION_TIMEOUT));
+            .update_timeout(&src_id, self.config.session_timeout);
 
         // decrypt the message
         // continue on error
@@ -593,7 +580,7 @@ impl SessionService {
         // we have received a new message. Notify the behaviour.
         trace!("Message received: {} from: {}", message, src_id);
         let event = SessionEvent::Message {
-            src_id: src_id.clone(),
+            src_id,
             src,
             message: Box::new(message),
         };
@@ -646,13 +633,13 @@ impl SessionService {
                 let packet = session
                     .encrypt_message(tag, &msg.clone().encode())
                     .map_err(|e| warn!("Failed to encrypt message, Error: {:?}", e))?;
-                requests_to_send.push((dst_id.clone(), packet, Some(msg)));
+                requests_to_send.push((dst_id, packet, Some(msg)));
             }
         }
 
         for (dst_id, packet, message) in requests_to_send.into_iter() {
             debug!("Sending cached message");
-            self.process_request(dst, dst_id, packet, message);
+            self.process_request(dst, dst_id.clone(), packet, message);
         }
         Ok(())
     }
@@ -685,7 +672,7 @@ impl SessionService {
 
         while let Ok(Async::Ready(Some((dst, mut request)))) = self.pending_requests.poll() {
             let node_id = request.dst_id.clone();
-            if request.retries >= REQUEST_RETRIES {
+            if request.retries >= self.config.request_retries {
                 // the RPC has expired
                 // determine which kind of RPC has timed out
                 match request.packet {
@@ -693,10 +680,7 @@ impl SessionService {
                         // no response from peer, flush all pending messages
                         if let Some(pending_messages) = pending_messages_ref.remove(&node_id) {
                             for msg in pending_messages {
-                                events_ref.push_back(SessionEvent::RequestFailed(
-                                    node_id.clone(),
-                                    msg.id,
-                                ));
+                                events_ref.push_back(SessionEvent::RequestFailed(node_id, msg.id));
                             }
                         }
                         // drop the session
@@ -706,7 +690,7 @@ impl SessionService {
                     Packet::AuthMessage { .. } | Packet::Message { .. } => {
                         debug!("Message timed out with node: {}", node_id);
                         events_ref.push_back(SessionEvent::RequestFailed(
-                            node_id.clone(),
+                            node_id,
                             request.id().expect("Auth messages have an rpc id"),
                         ));
                     }
@@ -733,12 +717,12 @@ impl SessionService {
             if pending_requests_ref.exists(|req| req.dst_id == node_id) {
                 // add the session back in with the current request timeout
                 self.sessions
-                    .insert_at(node_id, session, Duration::from_secs(REQUEST_TIMEOUT));
+                    .insert_at(node_id, session, self.config.request_timeout);
             } else {
                 // fail all pending requests for this node
                 if let Some(pending_messages) = pending_messages_ref.remove(&node_id) {
                     for msg in pending_messages {
-                        events_ref.push_back(SessionEvent::RequestFailed(node_id.clone(), msg.id));
+                        events_ref.push_back(SessionEvent::RequestFailed(node_id, msg.id));
                     }
                 }
                 debug!("Session timed out for node: {}", node_id);

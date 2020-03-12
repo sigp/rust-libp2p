@@ -303,10 +303,15 @@ impl Packet {
 #[derive(Debug, Clone)]
 /// Types of packet errors.
 pub enum PacketError {
+    /// The packet has an unknown format.
     UnknownFormat,
+    /// The packet type is unknown.
     UnknownPacket,
+    /// Could not decode the packet.
     DecodingError(DecoderError),
+    /// The packet size was smaller than expected.
     TooSmall,
+    /// The packet size was incorrect.
     InvalidByteSize,
 }
 

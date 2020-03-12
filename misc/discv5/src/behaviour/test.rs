@@ -42,6 +42,7 @@ fn build_swarms(n: usize, base_port: u16) -> Vec<SwarmType> {
     for port in base_port..base_port + n as u16 {
         let keypair = identity::Keypair::generate_secp256k1();
         let enr_key: CombinedKey = keypair.clone().try_into().unwrap();
+        let config = Discv5Config::default();
 
         let enr = EnrBuilder::new("v4")
             .ip(ip.clone().into())
@@ -56,7 +57,8 @@ fn build_swarms(n: usize, base_port: u16) -> Vec<SwarmType> {
             .map(|(p, m), _| (p, StreamMuxerBox::new(m)))
             .map_err(|e| panic!("Failed to create transport: {:?}", e))
             .boxed();
-        let discv5 = Discv5::new(enr, keypair.clone(), ip.into(), false).unwrap();
+        let socket_addr = enr.udp_socket().unwrap();
+        let discv5 = Discv5::new(enr, keypair.clone(), config, socket_addr).unwrap();
         swarms.push(Swarm::new(
             transport,
             discv5,
@@ -77,6 +79,7 @@ fn build_swarms_from_keypairs(keys: Vec<identity::Keypair>) -> Vec<SwarmType> {
         let port = base_port + i as u16;
 
         let enr_key: CombinedKey = key.clone().try_into().unwrap();
+        let config = Discv5ConfigBuilder::new().ip_limit(false).build();
 
         let enr = EnrBuilder::new("v4")
             .ip(ip.clone().into())
@@ -92,7 +95,8 @@ fn build_swarms_from_keypairs(keys: Vec<identity::Keypair>) -> Vec<SwarmType> {
             .map(|(p, m), _| (p, StreamMuxerBox::new(m)))
             .map_err(|e| panic!("Failed to create transport: {:?}", e))
             .boxed();
-        let discv5 = Discv5::new(enr, key.clone(), ip.into(), false).unwrap();
+        let socket_addr = enr.udp_socket().unwrap();
+        let discv5 = Discv5::new(enr, key.clone(), config, socket_addr).unwrap();
         swarms.push(Swarm::new(transport, discv5, key.public().into_peer_id()));
     }
     swarms
@@ -335,6 +339,7 @@ fn test_updating_connection_on_ping() {
     let key = identity::Keypair::generate_secp256k1();
     let enr_key1: CombinedKey = key.clone().try_into().unwrap();
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
+    let config = Discv5Config::default();
     let enr = EnrBuilder::new("v4")
         .ip(ip.clone().into())
         .udp(10001)
@@ -349,7 +354,8 @@ fn test_updating_connection_on_ping() {
         .unwrap();
 
     // Set up discv5 with one disconnected node
-    let mut discv5: Discv5<Box<u64>> = Discv5::new(enr, key.clone(), ip.into(), false).unwrap();
+    let socket_addr = enr.udp_socket().unwrap();
+    let mut discv5: Discv5<Box<u64>> = Discv5::new(enr, key.clone(), config, socket_addr).unwrap();
     discv5.add_enr(enr2.clone());
     discv5.connection_updated(enr2.node_id().clone(), None, NodeStatus::Disconnected);
 
@@ -385,13 +391,16 @@ fn test_table_limits() {
     let keypairs = generate_deterministic_keypair(12, 9487);
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
     let enr_key: CombinedKey = keypairs[0].clone().try_into().unwrap();
-    let local_enr = EnrBuilder::new("v4")
+    let config = Discv5ConfigBuilder::new().ip_limit(true).build();
+    let enr = EnrBuilder::new("v4")
         .ip(ip.clone().into())
         .udp(9050)
         .build(&enr_key)
         .unwrap();
+
+    let socket_addr = enr.udp_socket().unwrap();
     let mut discv5: Discv5<Box<u64>> =
-        Discv5::new(local_enr, keypairs[0].clone(), ip.into(), true).unwrap();
+        Discv5::new(enr, keypairs[0].clone(), config, socket_addr).unwrap();
     let table_limit: usize = 10;
     // Generate `table_limit + 2` nodes in the same subnet.
     let enrs: Vec<Enr<CombinedKey>> = (1..=table_limit + 1)
@@ -458,7 +467,10 @@ fn test_bucket_limits() {
                 .unwrap()
         })
         .collect();
-    let mut discv5: Discv5<Box<u64>> = Discv5::new(enr, key.clone(), ip.into(), true).unwrap();
+
+    let config = Discv5ConfigBuilder::new().ip_limit(true).build();
+    let socket_addr = enr.udp_socket().unwrap();
+    let mut discv5: Discv5<Box<u64>> = Discv5::new(enr, key.clone(), config, socket_addr).unwrap();
     for enr in enrs {
         discv5.add_enr(enr.clone());
     }

@@ -384,7 +384,7 @@ impl Session {
             message_sent_state => {
                 // have sent a WHOAREYOU or a RandomPacket, session isn't established
                 self.state = message_sent_state;
-                return Err(Discv5Error::SessionNotEstablished);
+                Err(Discv5Error::SessionNotEstablished)
             }
         }
     }

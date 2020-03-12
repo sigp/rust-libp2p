@@ -345,8 +345,7 @@ impl ProtocolMessage {
                         // no records
                         vec![]
                     } else {
-                        let enr_list = enr_list_rlp.as_list::<Enr<CombinedKey>>()?;
-                        enr_list
+                        enr_list_rlp.as_list::<Enr<CombinedKey>>()?
                     }
                 };
                 RpcType::Response(Response::Nodes {
@@ -435,13 +434,6 @@ impl ProtocolMessage {
 
         Ok(ProtocolMessage { id, body })
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum PacketError {
-    UnknownFormat,
-    UnknownPacket,
-    TooSmall,
 }
 
 #[cfg(test)]
