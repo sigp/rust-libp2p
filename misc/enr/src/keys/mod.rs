@@ -1,31 +1,35 @@
 //! This module provides the [`EnrKey`] and [`EnrPublicKey`] traits. User's wishing to implement their
-//! own signing schemes can implement these traits and apply them to a [`EnrRaw`].
-
+//! own signing schemes can implement these traits and apply them to a [`Enr`].
+//!
 //! This module contains implementations for the `libsecp256k1` and `ed25519_dalek`
 //! secret key libraries, provided the `libsecp256k1` and `ed25519` features are set.
-
+//!
 //! [`EnrKey`]: crate::EnrKey
 //! [`EnrPublicKey`]: crate::EnrPublicKey
-//! [`EnrRaw`]: crate::enr::EnrRaw
-
-// the default implementation
-mod libsecp256k1;
+//! [`Enr`]: crate::enr::Enr
 
 #[cfg(any(feature = "ed25519", doc))]
 mod combined;
 #[cfg(any(feature = "ed25519", doc))]
 mod ed25519;
+#[cfg(any(feature = "libsecp256k1", doc))]
+mod libsecp256k1;
+
 #[cfg(any(feature = "ed25519", doc))]
 pub use combined::{CombinedKey, CombinedPublicKey};
-#[cfg(feature = "ed25519")]
+#[cfg(any(feature = "ed25519", doc))]
 pub use ed25519_dalek;
 #[cfg(feature = "libp2p")]
 use libp2p_core::PeerId;
-
+#[cfg(any(feature = "libsecp256k1", doc))]
 pub use secp256k1;
 
 use rlp::DecoderError;
-use std::{collections::BTreeMap, error::Error, fmt};
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    fmt::{self, Display},
+};
 
 /// The trait required for a key to sign and modify an ENR record.
 pub trait EnrKey {
@@ -37,10 +41,10 @@ pub trait EnrKey {
     /// Returns the public key associated with current key pair.
     fn public(&self) -> Self::PublicKey;
 
-    /// Provides a method to decode a raw public key from an ENR BTreeMap to a useable public key.
+    /// Provides a method to decode a raw public key from an ENR `BTreeMap` to a useable public key.
     ///
     /// This method allows a key type to decode the raw bytes in an ENR to a useable
-    /// `EnrPublicKey`. It takes the ENR's BTreeMap and returns a public key.
+    /// `EnrPublicKey`. It takes the ENR's `BTreeMap` and returns a public key.
     ///
     /// Note: This specifies the supported key schemes for an ENR.
     fn enr_to_public(content: &BTreeMap<String, Vec<u8>>) -> Result<Self::PublicKey, DecoderError>;
@@ -77,8 +81,9 @@ pub struct SigningError {
 }
 
 /// An error during encoding of key material.
+#[allow(dead_code)]
 impl SigningError {
-    pub(crate) fn new<S: ToString>(msg: S) -> Self {
+    pub(crate) fn new<S: Display>(msg: S) -> Self {
         Self {
             msg: msg.to_string(),
             source: None,

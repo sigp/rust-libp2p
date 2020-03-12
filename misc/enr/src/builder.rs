@@ -3,7 +3,23 @@ use rlp::RlpStream;
 use std::{collections::BTreeMap, marker::PhantomData, net::IpAddr};
 
 ///! The base builder for generating ENR records with arbitrary signing algorithms.
+#[cfg(any(feature = "libsecp256k1", doc))]
 pub struct EnrBuilder<K: EnrKey = secp256k1::SecretKey> {
+    /// The identity scheme used to build the ENR record.
+    id: String,
+
+    /// The starting sequence number for the ENR record.
+    seq: u64,
+
+    /// The key-value pairs for the ENR record.
+    content: BTreeMap<String, Vec<u8>>,
+
+    /// Pins the generic key types.
+    phantom: PhantomData<K>,
+}
+
+#[cfg(not(feature = "libsecp256k1"))]
+pub struct EnrBuilder<K: EnrKey> {
     /// The identity scheme used to build the ENR record.
     id: String,
 
@@ -22,7 +38,7 @@ impl<K: EnrKey> EnrBuilder<K> {
     /// Currently only supports the id v4 scheme and therefore disallows creation of any other
     /// scheme.
     pub fn new(id: impl Into<String>) -> Self {
-        EnrBuilder {
+        Self {
             id: id.into(),
             seq: 1,
             content: BTreeMap::new(),
@@ -101,7 +117,7 @@ impl<K: EnrKey> EnrBuilder<K> {
         let mut stream = RlpStream::new();
         stream.begin_list(self.content.len() * 2 + 1);
         stream.append(&self.seq);
-        for (k, v) in self.content.iter() {
+        for (k, v) in &self.content {
             stream.append(k);
             stream.append(v);
         }
@@ -124,7 +140,10 @@ impl<K: EnrKey> EnrBuilder<K> {
         self.add_value(key.enr_key(), key.encode());
     }
 
-    /// Constructs an ENR from the ENRBuilder struct.
+    /// Constructs an ENR from the `EnrBuilder`.
+    ///
+    /// # Errors
+    /// Fails if the identity scheme is not supported, or the record size exceeds `MAX_ENR_SIZE`.
     pub fn build(&mut self, key: &K) -> Result<Enr<K>, EnrError> {
         // add the identity scheme to the content
         if self.id != "v4" {
