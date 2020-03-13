@@ -14,4 +14,5 @@ pub enum Discv5Error {
     EncryptionFail(String),
     DecryptionFail(String),
     Custom(&'static str),
+    Error(String),
 }

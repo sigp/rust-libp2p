@@ -1,51 +1,55 @@
 //! The identifier for an ENR record. This is the keccak256 hash of the public key (for secp256k1
-//! this is the uncompressed encoded form of the public key).
+//! keys this is the uncompressed encoded form of the public key).
 
-use crate::enr_keypair::EnrPublicKey;
-use libp2p_core::identity::PublicKey;
+use crate::keys::EnrPublicKey;
 use sha3::{Digest, Keccak256};
 
 type RawNodeId = [u8; 32];
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// The `NodeId` of an ENR (a 32 byte identifier).
 pub struct NodeId {
     raw: RawNodeId,
 }
 
 impl NodeId {
-    pub fn new(raw_input: &[u8; 32]) -> Self {
-        NodeId { raw: raw_input.clone() }
+    /// Creates a new node record from 32 bytes.
+    #[must_use]
+    pub const fn new(raw_input: &[u8; 32]) -> Self {
+        Self { raw: *raw_input }
     }
 
+    /// Parses a byte slice to form a node Id. This fails if the slice isn't of length 32.
     pub fn parse(raw_input: &[u8]) -> Result<Self, &'static str> {
         if raw_input.len() > 32 {
             return Err("Input too large");
         }
 
-        let mut raw: RawNodeId = [0u8; 32];
+        let mut raw: RawNodeId = [0_u8; 32];
         raw[..std::cmp::min(32, raw_input.len())].copy_from_slice(raw_input);
 
-        Ok(NodeId { raw })
+        Ok(Self { raw })
     }
 
+    /// Generates a random `NodeId`.
+    #[must_use]
     pub fn random() -> Self {
-        NodeId {
+        Self {
             raw: rand::random(),
         }
     }
 
-    pub fn raw(&self) -> RawNodeId {
+    /// Returns a `RawNodeId` which is a 32 byte list.
+    #[must_use]
+    pub const fn raw(&self) -> RawNodeId {
         self.raw
     }
 }
 
-/// Returns the node-id of the associated ENR record. This is the keccak256
-/// hash of the public key. ENR records cannot be created without a valid public key.
-/// Therefore this will always return a value.
-impl From<PublicKey> for NodeId {
-    fn from(public_key: PublicKey) -> Self {
-        let pubkey_bytes = EnrPublicKey::from(public_key.clone()).encode_uncompressed();
-        NodeId::parse(&Keccak256::digest(&pubkey_bytes)).expect("must be the correct length")
+impl<T: EnrPublicKey> From<T> for NodeId {
+    fn from(public_key: T) -> Self {
+        let pubkey_bytes = public_key.encode_uncompressed();
+        Self::parse(&Keccak256::digest(&pubkey_bytes)).expect("must be the correct length")
     }
 }
 

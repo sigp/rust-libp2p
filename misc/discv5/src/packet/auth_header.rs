@@ -1,6 +1,6 @@
 ///! The Authentication header associated with Discv5 Packets.
 use super::{AuthTag, Nonce, AUTH_TAG_LENGTH, ID_NONCE_LENGTH};
-use enr::Enr;
+use enr::{CombinedKey, Enr};
 use log::debug;
 use rlp::{Decodable, DecoderError, Encodable, Rlp, RlpStream};
 
@@ -42,13 +42,6 @@ impl AuthHeader {
             auth_response: resp,
         }
     }
-
-    /// RLP-encodes the authentication header.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut s = RlpStream::new();
-        s.append(self);
-        s.drain()
-    }
 }
 
 /// An authentication response. This contains a signed challenge nonce, and optionally an updated
@@ -61,11 +54,11 @@ pub struct AuthResponse {
     pub signature: Vec<u8>,
 
     /// An optional ENR, required if the requester has an out-dated ENR.
-    pub node_record: Option<Enr>,
+    pub node_record: Option<Enr<CombinedKey>>,
 }
 
 impl AuthResponse {
-    pub fn new(sig: &[u8], node_record: Option<Enr>) -> Self {
+    pub fn new(sig: &[u8], node_record: Option<Enr<CombinedKey>>) -> Self {
         AuthResponse {
             version: AUTH_RESPONSE_VERSION,
             signature: sig.to_vec(),
@@ -107,7 +100,7 @@ impl Decodable for AuthResponse {
             if node_record_rlp.is_empty() {
                 None
             } else {
-                Some(node_record_rlp.as_val::<Enr>()?)
+                Some(node_record_rlp.as_val::<Enr<CombinedKey>>()?)
             }
         };
 
@@ -215,14 +208,13 @@ impl Decodable for AuthHeader {
 mod tests {
     use super::*;
     use enr::EnrBuilder;
-    use libp2p_core::identity::Keypair;
     use rand;
 
     #[test]
     fn encode_decode_auth_response() {
         let sig: [u8; 32] = rand::random();
 
-        let key = Keypair::generate_secp256k1();
+        let key = CombinedKey::generate_secp256k1();
         let tcp = 30303;
 
         let enr = {

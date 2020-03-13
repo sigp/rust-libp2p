@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio_timer::{delay_queue, DelayQueue};
 
+/// A collection of requests that have an associated timeout.
 pub struct TimedRequests {
     /// Pending raw requests with timeout keys for removing from a delay queue and to be identified during a timeout.
     /// These are indexed by SocketAddr as WHOAREYOU messages do not return a source node id to

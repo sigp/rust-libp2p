@@ -153,7 +153,6 @@
 #![doc(html_favicon_url = "https://libp2p.io/img/favicon.png")]
 
 pub use bytes;
-pub use enr;
 pub use futures;
 #[doc(inline)]
 pub use multiaddr;
@@ -281,7 +280,10 @@ pub fn build_tcp_ws_secio_mplex_yamux(
     CommonTransport::new()
         .upgrade(core::upgrade::Version::V1)
         .authenticate(secio::SecioConfig::new(keypair))
-        .multiplex(core::upgrade::SelectUpgrade::new(yamux::Config::default(), mplex::MplexConfig::new()))
+        .multiplex(core::upgrade::SelectUpgrade::new(
+            yamux::Config::default(),
+            mplex::MplexConfig::new(),
+        ))
         .map(|(peer, muxer), _| (peer, core::muxing::StreamMuxerBox::new(muxer)))
         .timeout(Duration::from_secs(20))
 }

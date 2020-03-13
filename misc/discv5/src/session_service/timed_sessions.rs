@@ -3,7 +3,6 @@
 //! This stores a hashmap of Sessions coupled with a delay queue to indicate when a session has
 //! expired.
 
-use super::SESSION_ESTABLISH_TIMEOUT;
 use crate::session::Session;
 use enr::NodeId;
 use futures::{Async, Poll, Stream};
@@ -11,25 +10,30 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio_timer::{delay_queue, DelayQueue};
 
+/// A collection of sessions and associated timeouts.
+///
+/// Sessions have an establishment timeout as
+/// well as lifetime.
 pub struct TimedSessions {
+    /// The sessions being established.
     sessions: HashMap<NodeId, (Session, delay_queue::Key)>,
+    /// A queue indicating when a session has timed out.
     timeouts: DelayQueue<NodeId>,
+    /// The time to wait for a session to be established.
+    session_establish_timeout: Duration,
 }
 
 impl TimedSessions {
-    pub fn new() -> Self {
+    pub fn new(session_establish_timeout: Duration) -> Self {
         TimedSessions {
             sessions: HashMap::new(),
             timeouts: DelayQueue::new(),
+            session_establish_timeout,
         }
     }
 
     pub fn insert(&mut self, node_id: NodeId, session: Session) {
-        self.insert_at(
-            node_id,
-            session,
-            Duration::from_secs(SESSION_ESTABLISH_TIMEOUT),
-        );
+        self.insert_at(node_id, session, self.session_establish_timeout);
     }
 
     pub fn insert_at(&mut self, node_id: NodeId, session: Session, duration: Duration) {

@@ -1,4 +1,4 @@
-use enr::Enr;
+use enr::{CombinedKey, Enr};
 use log::debug;
 use rlp::{DecoderError, RlpStream};
 use std::net::IpAddr;
@@ -28,10 +28,22 @@ pub enum Request {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Response {
-    Ping { enr_seq: u64, ip: IpAddr, port: u16 },
-    Nodes { total: u64, nodes: Vec<Enr> },
-    Ticket { ticket: Vec<u8>, wait_time: u64 },
-    RegisterTopic { registered: bool },
+    Ping {
+        enr_seq: u64,
+        ip: IpAddr,
+        port: u16,
+    },
+    Nodes {
+        total: u64,
+        nodes: Vec<Enr<CombinedKey>>,
+    },
+    Ticket {
+        ticket: Vec<u8>,
+        wait_time: u64,
+    },
+    RegisterTopic {
+        registered: bool,
+    },
 }
 
 impl Response {
@@ -333,8 +345,7 @@ impl ProtocolMessage {
                         // no records
                         vec![]
                     } else {
-                        let enr_list = enr_list_rlp.as_list::<Enr>()?;
-                        enr_list
+                        enr_list_rlp.as_list::<Enr<CombinedKey>>()?
                     }
                 };
                 RpcType::Response(Response::Nodes {
@@ -425,18 +436,10 @@ impl ProtocolMessage {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum PacketError {
-    UnknownFormat,
-    UnknownPacket,
-    TooSmall,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use enr::EnrBuilder;
-    use libp2p_core::identity::Keypair;
 
     #[test]
     fn ref_test_encode_request_ping() {
@@ -570,13 +573,13 @@ mod tests {
         let id = 1;
         let total = 1;
         // ENR needs to be constructed from a keypair
-        let secret_key = libp2p_core::identity::secp256k1::SecretKey::from_bytes(
-            hex::decode("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
+        let key: CombinedKey = secp256k1::SecretKey::parse_slice(
+            &hex::decode("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
                 .unwrap(),
         )
-        .unwrap();
+        .unwrap()
+        .into();
 
-        let key = Keypair::Secp256k1(libp2p_core::identity::secp256k1::Keypair::from(secret_key));
         let enr = EnrBuilder::new("v4").build(&key).unwrap();
         let body = RpcType::Response(Response::Nodes {
             total,
@@ -594,9 +597,9 @@ mod tests {
         // reference input
         let id = 1;
         let total = 1;
-        let enr = "enr:-HW4QBzimRxkmT18hMKaAL3IcZF1UcfTMPyi3Q1pxwZZbcZVRI8DC5infUAB_UauARLOJtYTxaagKoGmIjzQxO2qUygBgmlkgnY0iXNlY3AyNTZrMaEDymNMrg1JrLQB2KTGtv6MVbcNEVv0AHacwUAPMljNMTg".parse::<Enr>().unwrap();
+        let enr = "enr:-HW4QBzimRxkmT18hMKaAL3IcZF1UcfTMPyi3Q1pxwZZbcZVRI8DC5infUAB_UauARLOJtYTxaagKoGmIjzQxO2qUygBgmlkgnY0iXNlY3AyNTZrMaEDymNMrg1JrLQB2KTGtv6MVbcNEVv0AHacwUAPMljNMTg".parse::<Enr<CombinedKey>>().unwrap();
 
-        let enr2 = "enr:-HW4QNfxw543Ypf4HXKXdYxkyzfcxcO-6p9X986WldfVpnVTQX1xlTnWrktEWUbeTZnmgOuAY_KUhbVV1Ft98WoYUBMBgmlkgnY0iXNlY3AyNTZrMaEDDiy3QkHAxPyOgWbxp5oF1bDdlYE6dLCUUp8xfVw50jU".parse::<Enr>().unwrap();
+        let enr2 = "enr:-HW4QNfxw543Ypf4HXKXdYxkyzfcxcO-6p9X986WldfVpnVTQX1xlTnWrktEWUbeTZnmgOuAY_KUhbVV1Ft98WoYUBMBgmlkgnY0iXNlY3AyNTZrMaEDDiy3QkHAxPyOgWbxp5oF1bDdlYE6dLCUUp8xfVw50jU".parse::<Enr<CombinedKey>>().unwrap();
 
         let body = RpcType::Response(Response::Nodes {
             total,
@@ -615,8 +618,8 @@ mod tests {
     fn ref_decode_response_nodes_multiple() {
         let input = hex::decode("04f8f20101f8eef875b8401ce2991c64993d7c84c29a00bdc871917551c7d330fca2dd0d69c706596dc655448f030b98a77d4001fd46ae0112ce26d613c5a6a02a81a6223cd0c4edaa53280182696482763489736563703235366b31a103ca634cae0d49acb401d8a4c6b6fe8c55b70d115bf400769cc1400f3258cd3138f875b840d7f1c39e376297f81d7297758c64cb37dcc5c3beea9f57f7ce9695d7d5a67553417d719539d6ae4b445946de4d99e680eb8063f29485b555d45b7df16a1850130182696482763489736563703235366b31a1030e2cb74241c0c4fc8e8166f1a79a05d5b0dd95813a74b094529f317d5c39d235").unwrap();
 
-        let expected_enr1 = "enr:-HW4QBzimRxkmT18hMKaAL3IcZF1UcfTMPyi3Q1pxwZZbcZVRI8DC5infUAB_UauARLOJtYTxaagKoGmIjzQxO2qUygBgmlkgnY0iXNlY3AyNTZrMaEDymNMrg1JrLQB2KTGtv6MVbcNEVv0AHacwUAPMljNMTg".parse::<Enr>().unwrap();
-        let expected_enr2 = "enr:-HW4QNfxw543Ypf4HXKXdYxkyzfcxcO-6p9X986WldfVpnVTQX1xlTnWrktEWUbeTZnmgOuAY_KUhbVV1Ft98WoYUBMBgmlkgnY0iXNlY3AyNTZrMaEDDiy3QkHAxPyOgWbxp5oF1bDdlYE6dLCUUp8xfVw50jU".parse::<Enr>().unwrap();
+        let expected_enr1 = "enr:-HW4QBzimRxkmT18hMKaAL3IcZF1UcfTMPyi3Q1pxwZZbcZVRI8DC5infUAB_UauARLOJtYTxaagKoGmIjzQxO2qUygBgmlkgnY0iXNlY3AyNTZrMaEDymNMrg1JrLQB2KTGtv6MVbcNEVv0AHacwUAPMljNMTg".parse::<Enr<CombinedKey>>().unwrap();
+        let expected_enr2 = "enr:-HW4QNfxw543Ypf4HXKXdYxkyzfcxcO-6p9X986WldfVpnVTQX1xlTnWrktEWUbeTZnmgOuAY_KUhbVV1Ft98WoYUBMBgmlkgnY0iXNlY3AyNTZrMaEDDiy3QkHAxPyOgWbxp5oF1bDdlYE6dLCUUp8xfVw50jU".parse::<Enr<CombinedKey>>().unwrap();
 
         let decoded = ProtocolMessage::decode(input).unwrap();
 
@@ -709,20 +712,20 @@ mod tests {
 
     #[test]
     fn encode_decode_nodes_response() {
-        let kp = Keypair::generate_ed25519();
+        let key = CombinedKey::generate_secp256k1();
         let enr1 = EnrBuilder::new("v4")
             .ip("127.0.0.1".parse().unwrap())
             .udp(500)
-            .build(&kp)
+            .build(&key)
             .unwrap();
         let enr2 = EnrBuilder::new("v4")
             .ip("10.0.0.1".parse().unwrap())
             .tcp(8080)
-            .build(&kp)
+            .build(&key)
             .unwrap();
         let enr3 = EnrBuilder::new("v4")
             .ip("10.4.5.6".parse().unwrap())
-            .build(&kp)
+            .build(&key)
             .unwrap();
 
         let enr_list = vec![enr1, enr2, enr3];

@@ -11,8 +11,7 @@
 
 use super::packet::{AuthHeader, AuthResponse, AuthTag, Nonce, Packet, Tag, MAGIC_LENGTH};
 use crate::Discv5Error;
-use enr::{Enr, NodeId};
-use libp2p_core::identity::Keypair;
+use enr::{CombinedKey, Enr, NodeId};
 use log::debug;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
@@ -36,7 +35,7 @@ pub struct Session {
     trusted: TrustedState,
 
     /// The ENR of the remote node. This may be unknown during `WhoAreYouSent` states.
-    remote_enr: Option<Enr>,
+    remote_enr: Option<Enr<CombinedKey>>,
 
     /// Last seen IP address and port. This is used to determine if the session is trusted or not.
     last_seen_socket: SocketAddr,
@@ -101,7 +100,7 @@ impl Session {
 
     /// Creates a new `Session` instance and generates a RANDOM packet to be sent along with this
     /// session being established. This session is set to `RandomSent` state.
-    pub fn new_random(tag: Tag, remote_enr: Enr) -> (Self, Packet) {
+    pub fn new_random(tag: Tag, remote_enr: Enr<CombinedKey>) -> (Self, Packet) {
         let random_packet = Packet::random(tag);
 
         let session = Session {
@@ -119,7 +118,7 @@ impl Session {
     pub fn new_whoareyou(
         node_id: &NodeId,
         enr_seq: u64,
-        remote_enr: Option<Enr>,
+        remote_enr: Option<Enr<CombinedKey>>,
         auth_tag: AuthTag,
     ) -> (Self, Packet) {
         // build the WHOAREYOU packet
@@ -160,7 +159,7 @@ impl Session {
     /// specifies if the Session is trusted or not.
     pub fn establish_from_header(
         &mut self,
-        local_keypair: &Keypair,
+        local_key: &CombinedKey,
         local_id: &NodeId,
         remote_id: &NodeId,
         id_nonce: Nonce,
@@ -168,7 +167,7 @@ impl Session {
     ) -> Result<bool, Discv5Error> {
         // generate session keys
         let (decryption_key, encryption_key, auth_resp_key) = crypto::derive_keys_from_pubkey(
-            local_keypair,
+            local_key,
             local_id,
             remote_id,
             &id_nonce,
@@ -229,8 +228,8 @@ impl Session {
     pub fn encrypt_with_header(
         &mut self,
         tag: Tag,
-        keypair: &Keypair,
-        updated_enr: Option<Enr>,
+        local_key: &CombinedKey,
+        updated_enr: Option<Enr<CombinedKey>>,
         local_node_id: &NodeId,
         id_nonce: &Nonce,
         message: &[u8],
@@ -252,7 +251,7 @@ impl Session {
         };
 
         // construct the nonce signature
-        let sig = crypto::sign_nonce(keypair, id_nonce, &ephem_pubkey)
+        let sig = crypto::sign_nonce(local_key, id_nonce, &ephem_pubkey)
             .map_err(|_| Discv5Error::Custom("Could not sign WHOAREYOU nonce"))?;
 
         // generate the auth response to be encrypted
@@ -385,14 +384,14 @@ impl Session {
             message_sent_state => {
                 // have sent a WHOAREYOU or a RandomPacket, session isn't established
                 self.state = message_sent_state;
-                return Err(Discv5Error::SessionNotEstablished);
+                Err(Discv5Error::SessionNotEstablished)
             }
         }
     }
 
     /* Session Helper Functions */
 
-    pub fn update_enr(&mut self, enr: Enr) -> bool {
+    pub fn update_enr(&mut self, enr: Enr<CombinedKey>) -> bool {
         if let Some(remote_enr) = &self.remote_enr {
             if remote_enr.seq() < enr.seq() {
                 self.remote_enr = Some(enr);
@@ -445,7 +444,7 @@ impl Session {
         }
     }
 
-    pub fn remote_enr(&self) -> &Option<Enr> {
+    pub fn remote_enr(&self) -> &Option<Enr<CombinedKey>> {
         &self.remote_enr
     }
 

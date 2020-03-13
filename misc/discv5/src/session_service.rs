@@ -13,26 +13,23 @@
 //! IP address/port that doesn't match the source, is considered untrusted. Once the IP is updated
 //! to match the source, the `Session` is promoted to an established state. RPC requests are not sent
 //! to untrusted Sessions, only responses.
-//!
 //TODO: Document the event structure and WHOAREYOU requests to the protocol layer.
 //TODO: Limit packets per node to avoid DOS/Spam.
 
-use super::packet::{AuthHeader, AuthTag, Magic, Nonce, Packet, Tag, TAG_LENGTH};
 use super::service::Discv5Service;
+use crate::config::Discv5Config;
 use crate::error::Discv5Error;
+use crate::packet::{AuthHeader, AuthTag, Magic, Nonce, Packet, Tag, TAG_LENGTH};
 use crate::rpc::ProtocolMessage;
 use crate::session::Session;
-use enr::{Enr, NodeId};
+use enr::{CombinedKey, Enr, EnrError, NodeId};
 use futures::prelude::*;
-use libp2p_core::identity::Keypair;
 use log::{debug, error, trace, warn};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::default::Default;
-use std::io;
-use std::net::{IpAddr, SocketAddr};
-use std::time::Duration;
+use std::net::SocketAddr;
 
 mod tests;
 mod timed_requests;
@@ -41,25 +38,18 @@ mod timed_sessions;
 use timed_requests::TimedRequests;
 use timed_sessions::TimedSessions;
 
-/// Seconds before a timeout expires.
-const REQUEST_TIMEOUT: u64 = 4;
-/// The number of times to retry a request.
-const REQUEST_RETRIES: u8 = 1;
-/// The timeout for a Session.
-//TODO: Make this a function of messages sent, to prevent nonce replay
-pub const SESSION_TIMEOUT: u64 = 86400;
-/// The number of seconds a session will wait to be established before being removed.
-pub const SESSION_ESTABLISH_TIMEOUT: u64 = 15;
-
 pub struct SessionService {
     /// Queue of events produced by the session service.
     events: VecDeque<SessionEvent>,
 
-    /// The local ENR.
-    enr: Enr,
+    /// Configuration for the discv5 service.
+    config: Discv5Config,
 
-    /// The keypair to sign the ENR and set up encrypted communication with peers.
-    keypair: Keypair,
+    /// The local ENR.
+    enr: Enr<CombinedKey>,
+
+    /// The key to sign the ENR and set up encrypted communication with peers.
+    key: enr::CombinedKey,
 
     /// Pending raw requests. A list of raw messages we are awaiting a response from the remote.
     /// These are indexed by SocketAddr as WHOAREYOU messages do not return a source node id to
@@ -82,15 +72,12 @@ impl SessionService {
     /* Public Functions */
 
     /// A new Session service which instantiates the UDP socket.
-    pub fn new(enr: Enr, keypair: Keypair, ip: IpAddr) -> io::Result<Self> {
-        // ensure the keypair matches the one that signed the enr.
-        if enr.public_key().into_protobuf_encoding() != keypair.public().into_protobuf_encoding() {
-            panic!("Discv5: Provided keypair does not match the provided ENR keypair");
-        }
-
-        let udp = enr.udp().unwrap_or_else(|| 9000);
-
-        let socket_addr = SocketAddr::new(ip, udp);
+    pub fn new(
+        enr: Enr<CombinedKey>,
+        key: enr::CombinedKey,
+        listen_socket: SocketAddr,
+        config: Discv5Config,
+    ) -> Result<Self, Discv5Error> {
         // generates the WHOAREYOU magic packet for the local node-id
         let magic = {
             let mut hasher = Sha256::new();
@@ -104,59 +91,50 @@ impl SessionService {
         Ok(SessionService {
             events: VecDeque::new(),
             enr,
-            keypair,
-            pending_requests: TimedRequests::new(Duration::from_secs(REQUEST_TIMEOUT)),
+            key,
+            pending_requests: TimedRequests::new(config.request_timeout),
             pending_messages: HashMap::default(),
-            sessions: TimedSessions::new(),
-            service: Discv5Service::new(socket_addr, magic)?,
+            sessions: TimedSessions::new(config.session_establish_timeout),
+            service: Discv5Service::new(listen_socket, magic)
+                .map_err(|e| Discv5Error::Error(format!("{:?}", e)))?,
+            config,
         })
     }
 
     /// The local ENR of the service.
-    pub fn enr(&self) -> &Enr {
+    pub fn enr(&self) -> &Enr<CombinedKey> {
         &self.enr
     }
 
-    /// Update attestation subnet bitfield of local ENR.
-    pub fn update_enr_bitfield(&mut self, bitfield: &[u8]) -> bool {
-        match self.enr.set_attnets(bitfield, &self.keypair) {
-            Ok(status) => status,
-            Err(e) => {
-                warn!(
-                    "Could not update ENR attestation subnet bitfield. Error: {:?}",
-                    e
-                );
-                false
-            }
-        }
+    /// Generic function to modify a field in the local ENR.
+    pub fn enr_insert(&mut self, key: &str, value: Vec<u8>) -> Result<Option<Vec<u8>>, EnrError> {
+        self.enr.insert(key, value, &self.key)
     }
 
     /// Updates the local ENR `SocketAddr` for either the TCP or UDP port.
-    pub fn update_local_enr_socket(&mut self, socket: SocketAddr, is_tcp: bool) -> bool {
+    pub fn update_local_enr_socket(
+        &mut self,
+        socket: SocketAddr,
+        is_tcp: bool,
+    ) -> Result<(), EnrError> {
         // determine whether to update the TCP or UDP port
         if is_tcp {
-            match self.enr.set_tcp_socket(socket, &self.keypair) {
-                Ok(_) => true,
-                Err(e) => {
-                    warn!("Could not update the ENR IP address. Error: {:?}", e);
-                    false
-                }
-            }
+            self.enr.set_tcp_socket(socket, &self.key).map_err(|e| {
+                warn!("Could not update the ENR IP address. Error: {:?}", e);
+                e
+            })
         } else {
             // Update the UDP socket
-            match self.enr.set_udp_socket(socket, &self.keypair) {
-                Ok(_) => true,
-                Err(e) => {
-                    warn!("Could not update the ENR IP address. Error: {:?}", e);
-                    false
-                }
-            }
+            self.enr.set_udp_socket(socket, &self.key).map_err(|e| {
+                warn!("Could not update the ENR IP address. Error: {:?}", e);
+                e
+            })
         }
     }
 
     /// Updates a session if a new ENR or an updated ENR is discovered.
-    pub fn update_enr(&mut self, enr: Enr) {
-        if let Some(session) = self.sessions.get_mut(enr.node_id()) {
+    pub fn update_enr(&mut self, enr: Enr<CombinedKey>) {
+        if let Some(session) = self.sessions.get_mut(&enr.node_id()) {
             // if an ENR is updated to an address that was not the last seen address of the
             // session, we demote the session to untrusted.
             if session.update_enr(enr.clone()) {
@@ -172,7 +150,7 @@ impl SessionService {
     // address that we know of.
     pub fn send_request(
         &mut self,
-        dst_enr: &Enr,
+        dst_enr: &Enr<CombinedKey>,
         message: ProtocolMessage,
     ) -> Result<(), Discv5Error> {
         // check for an established session
@@ -186,7 +164,7 @@ impl SessionService {
             Discv5Error::InvalidEnr
         })?;
 
-        let session = match self.sessions.get(dst_id) {
+        let session = match self.sessions.get(&dst_id) {
             Some(s) if s.trusted_established() => s,
             Some(_) => {
                 // we are currently establishing a connection, add to pending messages
@@ -301,7 +279,7 @@ impl SessionService {
         dst: SocketAddr,
         node_id: &NodeId,
         enr_seq: u64,
-        remote_enr: Option<Enr>,
+        remote_enr: Option<Enr<CombinedKey>>,
         auth_tag: AuthTag,
     ) {
         // If a WHOAREYOU is already sent or a session is already established, ignore this request.
@@ -408,7 +386,7 @@ impl SessionService {
         // Generate session keys and encrypt the earliest packet with the authentication header
         let auth_packet = match session.encrypt_with_header(
             tag,
-            &self.keypair,
+            &self.key,
             updated_enr,
             &self.enr.node_id(),
             &id_nonce,
@@ -479,7 +457,7 @@ impl SessionService {
 
         // establish the session
         match session.establish_from_header(
-            &self.keypair,
+            &self.key,
             &self.enr.node_id(),
             &src_id,
             id_nonce,
@@ -512,7 +490,7 @@ impl SessionService {
 
         // session has been established, update the timeout
         self.sessions
-            .update_timeout(&src_id, Duration::from_secs(SESSION_TIMEOUT));
+            .update_timeout(&src_id, self.config.session_timeout);
 
         // decrypt the message
         // continue on error
@@ -602,7 +580,7 @@ impl SessionService {
         // we have received a new message. Notify the behaviour.
         trace!("Message received: {} from: {}", message, src_id);
         let event = SessionEvent::Message {
-            src_id: src_id.clone(),
+            src_id,
             src,
             message: Box::new(message),
         };
@@ -655,13 +633,13 @@ impl SessionService {
                 let packet = session
                     .encrypt_message(tag, &msg.clone().encode())
                     .map_err(|e| warn!("Failed to encrypt message, Error: {:?}", e))?;
-                requests_to_send.push((dst_id.clone(), packet, Some(msg)));
+                requests_to_send.push((dst_id, packet, Some(msg)));
             }
         }
 
         for (dst_id, packet, message) in requests_to_send.into_iter() {
             debug!("Sending cached message");
-            self.process_request(dst, dst_id, packet, message);
+            self.process_request(dst, dst_id.clone(), packet, message);
         }
         Ok(())
     }
@@ -694,7 +672,7 @@ impl SessionService {
 
         while let Ok(Async::Ready(Some((dst, mut request)))) = self.pending_requests.poll() {
             let node_id = request.dst_id.clone();
-            if request.retries >= REQUEST_RETRIES {
+            if request.retries >= self.config.request_retries {
                 // the RPC has expired
                 // determine which kind of RPC has timed out
                 match request.packet {
@@ -702,10 +680,7 @@ impl SessionService {
                         // no response from peer, flush all pending messages
                         if let Some(pending_messages) = pending_messages_ref.remove(&node_id) {
                             for msg in pending_messages {
-                                events_ref.push_back(SessionEvent::RequestFailed(
-                                    node_id.clone(),
-                                    msg.id,
-                                ));
+                                events_ref.push_back(SessionEvent::RequestFailed(node_id, msg.id));
                             }
                         }
                         // drop the session
@@ -715,7 +690,7 @@ impl SessionService {
                     Packet::AuthMessage { .. } | Packet::Message { .. } => {
                         debug!("Message timed out with node: {}", node_id);
                         events_ref.push_back(SessionEvent::RequestFailed(
-                            node_id.clone(),
+                            node_id,
                             request.id().expect("Auth messages have an rpc id"),
                         ));
                     }
@@ -742,12 +717,12 @@ impl SessionService {
             if pending_requests_ref.exists(|req| req.dst_id == node_id) {
                 // add the session back in with the current request timeout
                 self.sessions
-                    .insert_at(node_id, session, Duration::from_secs(REQUEST_TIMEOUT));
+                    .insert_at(node_id, session, self.config.request_timeout);
             } else {
                 // fail all pending requests for this node
                 if let Some(pending_messages) = pending_messages_ref.remove(&node_id) {
                     for msg in pending_messages {
-                        events_ref.push_back(SessionEvent::RequestFailed(node_id.clone(), msg.id));
+                        events_ref.push_back(SessionEvent::RequestFailed(node_id, msg.id));
                     }
                 }
                 debug!("Session timed out for node: {}", node_id);
@@ -806,7 +781,7 @@ impl SessionService {
 /// The output from polling the `SessionSerivce`.
 pub enum SessionEvent {
     /// A session has been established with a node.
-    Established(Enr),
+    Established(Enr<CombinedKey>),
 
     /// A message was received.
     Message {

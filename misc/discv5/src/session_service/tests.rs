@@ -2,9 +2,9 @@
 use super::*;
 use crate::rpc::{Request, Response, RpcType};
 use enr::EnrBuilder;
-use libp2p_core::identity::Keypair;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::prelude::*;
 
 fn init() {
@@ -19,24 +19,37 @@ fn simple_session_message() {
     let sender_port = 5000;
     let receiver_port = 5001;
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
-    let keypair = Keypair::generate_secp256k1();
-    let keypair_2 = Keypair::generate_secp256k1();
+
+    let key1 = CombinedKey::generate_secp256k1();
+    let key2 = CombinedKey::generate_secp256k1();
+
+    let config = Discv5Config::default();
 
     let sender_enr = EnrBuilder::new("v4")
         .ip(ip)
         .udp(sender_port)
-        .build(&keypair)
+        .build(&key1)
         .unwrap();
     let receiver_enr = EnrBuilder::new("v4")
         .ip(ip)
         .udp(receiver_port)
-        .build(&keypair_2)
+        .build(&key2)
         .unwrap();
 
-    let mut sender_service =
-        SessionService::new(sender_enr.clone(), keypair.clone(), ip.into()).unwrap();
-    let mut receiver_service =
-        SessionService::new(receiver_enr.clone(), keypair_2.clone(), ip.into()).unwrap();
+    let mut sender_service = SessionService::new(
+        sender_enr.clone(),
+        key1,
+        sender_enr.udp_socket().unwrap(),
+        config.clone(),
+    )
+    .unwrap();
+    let mut receiver_service = SessionService::new(
+        receiver_enr.clone(),
+        key2,
+        receiver_enr.udp_socket().unwrap(),
+        config,
+    )
+    .unwrap();
 
     let send_message = ProtocolMessage {
         id: 1,
@@ -66,7 +79,7 @@ fn simple_session_message() {
             match message {
                 SessionEvent::WhoAreYouRequest { src, auth_tag, .. } => {
                     let seq = sender_enr.seq();
-                    let node_id = sender_enr.node_id();
+                    let node_id = &sender_enr.node_id();
                     receiver_service.send_whoareyou(
                         src,
                         node_id,
@@ -103,24 +116,34 @@ fn multiple_messages() {
     let sender_port = 5002;
     let receiver_port = 5003;
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
-    let keypair = Keypair::generate_secp256k1();
-    let keypair_2 = Keypair::generate_secp256k1();
+    let key1 = CombinedKey::generate_secp256k1();
+    let key2 = CombinedKey::generate_secp256k1();
 
     let sender_enr = EnrBuilder::new("v4")
         .ip(ip)
         .udp(sender_port)
-        .build(&keypair)
+        .build(&key1)
         .unwrap();
     let receiver_enr = EnrBuilder::new("v4")
         .ip(ip)
         .udp(receiver_port)
-        .build(&keypair_2)
+        .build(&key2)
         .unwrap();
 
-    let mut sender_service =
-        SessionService::new(sender_enr.clone(), keypair.clone(), ip.into()).unwrap();
-    let mut receiver_service =
-        SessionService::new(receiver_enr.clone(), keypair_2.clone(), ip.into()).unwrap();
+    let mut sender_service = SessionService::new(
+        sender_enr.clone(),
+        key1,
+        sender_enr.udp_socket().unwrap(),
+        Discv5Config::default(),
+    )
+    .unwrap();
+    let mut receiver_service = SessionService::new(
+        receiver_enr.clone(),
+        key2,
+        receiver_enr.udp_socket().unwrap(),
+        Discv5Config::default(),
+    )
+    .unwrap();
 
     let send_message = ProtocolMessage {
         id: 1,
@@ -131,7 +154,7 @@ fn multiple_messages() {
         id: 1,
         body: RpcType::Response(Response::Ping {
             enr_seq: 1,
-            ip: ip,
+            ip,
             port: sender_port,
         }),
     };
@@ -140,15 +163,20 @@ fn multiple_messages() {
 
     let messages_to_send = 5;
 
-    for _ in 0..messages_to_send {
-        let _ = sender_service.send_request(&receiver_enr, send_message.clone());
-    }
+    // sender to send the first message then await for the session to be established
+    let _ = sender_service.send_request(&receiver_enr, send_message.clone());
 
     let mut message_count = 0;
 
     let sender = future::poll_fn(move || -> Poll<(), ()> {
         loop {
             match sender_service.poll() {
+                Async::Ready(SessionEvent::Established(_)) => {
+                    // now the session is established, send the rest of the messages
+                    for _ in 0..messages_to_send - 1 {
+                        let _ = sender_service.send_request(&receiver_enr, send_message.clone());
+                    }
+                }
                 Async::Ready(_) => {}
                 Async::NotReady => return Ok(Async::NotReady),
             };

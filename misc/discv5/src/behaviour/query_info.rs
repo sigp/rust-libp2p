@@ -1,8 +1,8 @@
 use crate::kbucket::Key;
 use crate::query::ReturnPeer;
 use crate::rpc::Request;
-use enr::Enr;
 use enr::NodeId;
+use enr::{CombinedKey, Enr};
 use sha2::digest::generic_array::GenericArray;
 use smallvec::SmallVec;
 
@@ -17,7 +17,7 @@ pub struct QueryInfo {
     pub query_type: QueryType,
 
     /// Temporary ENRs used when trying to reach nodes.
-    pub untrusted_enrs: SmallVec<[Enr; 16]>,
+    pub untrusted_enrs: SmallVec<[Enr<CombinedKey>; 16]>,
 }
 
 /// Additional information about the query.
