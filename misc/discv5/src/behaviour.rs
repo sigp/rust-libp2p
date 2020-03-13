@@ -179,6 +179,12 @@ impl<TSubstream> Discv5<TSubstream> {
     /// operations involving one of these peers, without having to dial
     /// them upfront.
     pub fn add_enr(&mut self, enr: Enr<CombinedKey>) {
+        // only add ENR's that have a valid udp socket.
+        if enr.udp_socket().is_none() {
+            warn!("ENR attempted to be added without a UDP socket has been ignored");
+            return;
+        }
+
         // add to the known_peer_ids mapping
         self.known_peer_ids
             .insert(enr.peer_id(), enr.node_id().clone());
