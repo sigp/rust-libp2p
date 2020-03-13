@@ -80,7 +80,3 @@ members = [
     "transports/websocket",
     "transports/wasm-ext"
 ]
-
-[patch.crates-io]
-libp2p-core = { path = "core" }
-enr = { path = "misc/enr" }
