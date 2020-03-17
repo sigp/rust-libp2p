@@ -90,7 +90,7 @@ mod error;
 mod kbucket;
 mod packet;
 mod query;
-mod query_new;
+mod query_pool;
 mod rpc;
 mod service;
 mod session;
