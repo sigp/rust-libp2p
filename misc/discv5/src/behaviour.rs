@@ -178,11 +178,11 @@ impl<TSubstream> Discv5<TSubstream> {
     /// addresses, so that they can be used immediately in following DHT
     /// operations involving one of these peers, without having to dial
     /// them upfront.
-    pub fn add_enr(&mut self, enr: Enr<CombinedKey>) {
+    pub fn add_enr(&mut self, enr: Enr<CombinedKey>) -> Result<(), &'static str> {
         // only add ENR's that have a valid udp socket.
         if enr.udp_socket().is_none() {
             warn!("ENR attempted to be added without a UDP socket has been ignored");
-            return;
+            return Err("Enr has no UDP socket to connect to");
         }
 
         // add to the known_peer_ids mapping
@@ -224,6 +224,7 @@ impl<TSubstream> Discv5<TSubstream> {
             }
             kbucket::Entry::SelfEntry => {}
         };
+        Ok(())
     }
 
     /// Returns the number of connected peers the behaviour knows about.
