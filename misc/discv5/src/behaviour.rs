@@ -17,8 +17,6 @@ use self::ip_vote::IpVote;
 use self::query_info::{QueryInfo, QueryType};
 use crate::error::Discv5Error;
 use crate::kbucket::{self, EntryRefView, KBucketsTable, NodeStatus};
-// use crate::query::{Query, QueryConfig, QueryState, ReturnPeer};
-// use crate::pee
 use crate::query_pool::{FindNodeQueryConfig, QueryId, QueryPool, QueryPoolState, ReturnPeer};
 use crate::rpc;
 use crate::service::MAX_PACKET_SIZE;
@@ -68,9 +66,7 @@ pub struct Discv5<TSubstream> {
     /// Storage of the ENR record for each node.
     kbuckets: KBucketsTable<NodeId, Enr<CombinedKey>>,
 
-    /// All the iterative queries we are currently performing, with their ID. The last parameter
-    /// is the list of accumulated providers for `GET_PROVIDERS` queries.
-    // active_queries: FnvHashMap<QueryId, Query<QueryInfo, NodeId>>,
+    /// All the iterative queries we are currently performing.
     queries: QueryPool<QueryInfo, NodeId>,
 
     /// RPC requests that have been sent and are awaiting a response. Some requests are linked to a
@@ -85,9 +81,6 @@ pub struct Discv5<TSubstream> {
 
     /// List of peers we have established sessions with and an interval for when to send a PING.
     connected_peers: HashMap<NodeId, Interval>,
-
-    /// Identifier for the next query that we start.
-    // next_query_id: QueryId,
 
     /// Main discv5 UDP service that establishes sessions with peers.
     service: SessionService,
@@ -162,13 +155,11 @@ impl<TSubstream> Discv5<TSubstream> {
             config,
             known_peer_ids: HashMap::new(),
             kbuckets: KBucketsTable::new(node_id.into(), Duration::from_secs(60)),
-            // active_queries: Default::default(),
             queries: QueryPool::new(),
             active_rpc_requests: Default::default(),
             active_nodes_responses: HashMap::new(),
             ip_votes,
             connected_peers: Default::default(),
-            // next_query_id: 0,
             service,
             marker: PhantomData,
         })
