@@ -496,9 +496,9 @@ where
                 },
                 RecvIdentityState::ReadPayload(mut read_payload) => {
                     if let Async::Ready((mut st, bytes)) = read_payload.poll()? {
-                        let pb: payload_proto::Identity = protobuf::parse_from_bytes(&bytes)?;
-                        if !pb.pubkey.is_empty() {
-                            let pk = identity::PublicKey::from_protobuf_encoding(pb.get_pubkey())
+                        let pb: payload_proto::NoiseHandshakePayload = protobuf::parse_from_bytes(&bytes)?;
+                        if !pb.identity_key.is_empty() {
+                            let pk = identity::PublicKey::from_protobuf_encoding(pb.get_identity_key())
                                 .map_err(|_| NoiseError::InvalidKey)?;
                             if let Some(ref k) = st.id_remote_pubkey {
                                 if k != &pk {
@@ -507,8 +507,8 @@ where
                             }
                             st.id_remote_pubkey = Some(pk);
                         }
-                        if !pb.signature.is_empty() {
-                            st.dh_remote_pubkey_sig = Some(pb.signature)
+                        if !pb.identity_sig.is_empty() {
+                            st.dh_remote_pubkey_sig = Some(pb.identity_sig)
                         }
                         return Ok(Async::Ready(st))
                     } else {
@@ -551,12 +551,12 @@ where
         loop {
             match mem::replace(&mut self.state, SendIdentityState::Done) {
                 SendIdentityState::Init(st) => {
-                    let mut pb = payload_proto::Identity::new();
+                    let mut pb = payload_proto::NoiseHandshakePayload::new();
                     if st.send_identity {
-                        pb.set_pubkey(st.identity.public.clone().into_protobuf_encoding());
+                        pb.set_identity_key(st.identity.public.clone().into_protobuf_encoding());
                     }
                     if let Some(ref sig) = st.identity.signature {
-                        pb.set_signature(sig.clone());
+                        pb.set_identity_sig(sig.clone());
                     }
                     let pb_bytes = pb.write_to_bytes()?;
                     let len = (pb_bytes.len() as u16).to_be_bytes();
