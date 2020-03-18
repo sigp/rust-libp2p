@@ -20,8 +20,8 @@
 
 mod peers;
 
-use peers::closest::{FindNodeQuery, FindNodeQueryConfig};
-use peers::{QueryState, ReturnPeer};
+pub use peers::closest::{FindNodeQuery, FindNodeQueryConfig};
+pub use peers::{QueryState, ReturnPeer};
 
 use crate::kbucket::Key;
 use fnv::FnvHashMap;
@@ -76,14 +76,17 @@ where
     }
 
     /// Adds a query to the pool that iterates towards the closest peers to the target.
-    pub fn add_findnode_query<T, I>(&mut self, target: TTarget, peers: I) -> QueryId
+    pub fn add_findnode_query<I>(
+        &mut self,
+        config: FindNodeQueryConfig,
+        target: TTarget,
+        peers: I,
+        iterations: usize,
+    ) -> QueryId
     where
-        I: IntoIterator<Item = Key<TNodeId>> + Eq + Clone,
+        I: IntoIterator<Item = Key<TNodeId>>,
     {
-        let cfg = FindNodeQueryConfig::default();
-        // Should be a passed parameter (Mostly Option<usize>)
-        let iterations = 3;
-        let findnode_query = FindNodeQuery::with_config(cfg, target, peers, iterations);
+        let findnode_query = FindNodeQuery::with_config(config, target.clone(), peers, iterations);
         let peer_iter = QueryPeerIter::FindNode(findnode_query);
         self.add(peer_iter, target)
     }
@@ -145,7 +148,7 @@ where
 
 /// Unique identifier for an active query.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct QueryId(usize);
+pub struct QueryId(pub usize);
 
 /// A query in a `QueryPool`.
 pub struct Query<TTarget, TNodeId> {
@@ -191,7 +194,7 @@ where
     /// Informs the query that the attempt to contact `peer` succeeded,
     /// possibly resulting in new peers that should be incorporated into
     /// the query, if applicable.
-    pub fn on_success<I>(&mut self, peer: &TNodeId, new_peers: Vec<TNodeId>) {
+    pub fn on_success(&mut self, peer: &TNodeId, new_peers: Vec<TNodeId>) {
         match &mut self.peer_iter {
             QueryPeerIter::FindNode(iter) => iter.on_success(peer, new_peers),
         }
@@ -213,6 +216,16 @@ where
             target: self.target,
             closest_peers: peers,
         }
+    }
+
+    /// Returns a reference to the query `target`.
+    pub fn target(&self) -> &TTarget {
+        &self.target
+    }
+
+    /// Returns a mutable reference to the query `target`.
+    pub fn target_mut(&mut self) -> &mut TTarget {
+        &mut self.target
     }
 }
 
