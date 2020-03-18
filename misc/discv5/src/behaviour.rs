@@ -264,7 +264,7 @@ impl<TSubstream> Discv5<TSubstream> {
         }
     }
 
-    /// Allows application layer to update local ENR's attestation subnet bitfield.
+    /// Allows application layer to insert an arbitrary field into the local ENR.
     pub fn enr_insert(&mut self, key: &str, value: Vec<u8>) -> Result<Option<Vec<u8>>, EnrError> {
         let result = self.service.enr_insert(key, value);
 
