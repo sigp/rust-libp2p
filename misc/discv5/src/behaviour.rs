@@ -17,7 +17,9 @@ use self::ip_vote::IpVote;
 use self::query_info::{QueryInfo, QueryType};
 use crate::error::Discv5Error;
 use crate::kbucket::{self, EntryRefView, KBucketsTable, NodeStatus};
-use crate::query_pool::{FindNodeQueryConfig, QueryId, QueryPool, QueryPoolState, ReturnPeer};
+use crate::query_pool::{
+    FindNodeQueryConfig, PredicateQueryConfig, QueryId, QueryPool, QueryPoolState, ReturnPeer,
+};
 use crate::rpc;
 use crate::service::MAX_PACKET_SIZE;
 use crate::session_service::{SessionEvent, SessionService};
@@ -285,7 +287,18 @@ impl<TSubstream> Discv5<TSubstream> {
     /// This will eventually produce an event containing the nodes of the DHT closest to the
     /// requested `PeerId`.
     pub fn find_node(&mut self, node_id: NodeId) {
-        self.start_query(QueryType::FindNode(node_id));
+        self.start_findnode_query(QueryType::FindNode(node_id));
+    }
+
+    /// Starts a `FIND_ENR_PREDICATE` request.
+    ///
+    /// This will eventually produce an event containing <= `num` nodes which satisfy the
+    /// `predicate` with passed `value`.
+    pub fn find_enr_predicate<F>(&mut self, node_id: NodeId, num: usize, predicate: F, value: &[u8])
+    where
+        F: Fn(&Enr<CombinedKey>, &[u8]) -> bool + 'static,
+    {
+        self.start_predicate_query(QueryType::PredicateSearch(node_id, num), predicate, value);
     }
 
     // private functions //
@@ -699,7 +712,7 @@ impl<TSubstream> Discv5<TSubstream> {
     }
 
     /// Internal function that starts a query.
-    fn start_query(&mut self, query_type: QueryType) {
+    fn start_findnode_query(&mut self, query_type: QueryType) {
         let target = QueryInfo {
             query_type,
             untrusted_enrs: Default::default(),
@@ -718,6 +731,35 @@ impl<TSubstream> Discv5<TSubstream> {
             target,
             known_closest_peers,
             query_iterations,
+        );
+    }
+
+    /// Internal function that starts a query.
+    fn start_predicate_query<F>(&mut self, query_type: QueryType, predicate: F, value: &[u8])
+    where
+        F: Fn(&Enr<CombinedKey>, &[u8]) -> bool + 'static,
+    {
+        let target = QueryInfo {
+            query_type,
+            untrusted_enrs: Default::default(),
+        };
+
+        // How many times to call the rpc per node.
+        // FINDNODE requires multiple iterations as it requests a specific distance.
+        let query_iterations = target.iterations();
+
+        let target_key: kbucket::Key<QueryInfo> = target.clone().into();
+
+        let known_closest_peers = self.kbuckets.closest_keys(&target_key);
+        let mut query_config = PredicateQueryConfig::default();
+        query_config.parallelism = self.config.query_parallelism;
+        self.queries.add_predicate_query(
+            query_config,
+            target,
+            known_closest_peers,
+            query_iterations,
+            predicate,
+            value.to_vec(),
         );
     }
 

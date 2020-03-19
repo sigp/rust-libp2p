@@ -20,7 +20,9 @@
 
 mod peers;
 
+use enr::{CombinedKey, Enr, NodeId};
 pub use peers::closest::{FindNodeQuery, FindNodeQueryConfig};
+pub use peers::predicate::{PredicateQuery, PredicateQueryConfig};
 pub use peers::{QueryState, ReturnPeer};
 
 use crate::kbucket::Key;
@@ -79,6 +81,25 @@ where
     {
         let findnode_query = FindNodeQuery::with_config(config, target.clone(), peers, iterations);
         let peer_iter = QueryPeerIter::FindNode(findnode_query);
+        self.add(peer_iter, target)
+    }
+
+    /// Adds a query to the pool that returns peers that satisfy a predicate.
+    pub fn add_predicate_query<I>(
+        &mut self,
+        config: PredicateQueryConfig,
+        target: TTarget,
+        peers: I,
+        iterations: usize,
+        predicate: impl Fn(&TNodeId, &[u8]) -> bool + 'static,
+        value: Vec<u8>,
+    ) -> QueryId
+    where
+        I: IntoIterator<Item = Key<TNodeId>>,
+    {
+        let predicate_query =
+            PredicateQuery::with_config(config, target, peers, iterations, predicate, value);
+        let peer_iter = QueryPeerIter::Predicate(predicate_query);
         self.add(peer_iter, target)
     }
 
@@ -149,6 +170,7 @@ pub struct Query<TTarget, TNodeId> {
 /// The peer selection strategies that can be used by queries.
 enum QueryPeerIter<TTarget, TNodeId> {
     FindNode(FindNodeQuery<TTarget, TNodeId>),
+    Predicate(PredicateQuery<TTarget, TNodeId>),
 }
 
 impl<TTarget, TNodeId> Query<TTarget, TNodeId>
@@ -174,6 +196,7 @@ where
     pub fn on_failure(&mut self, peer: &TNodeId) {
         match &mut self.peer_iter {
             QueryPeerIter::FindNode(iter) => iter.on_failure(peer),
+            QueryPeerIter::Predicate(iter) => iter.on_failure(peer),
         }
     }
 
@@ -183,6 +206,7 @@ where
     pub fn on_success(&mut self, peer: &TNodeId, new_peers: Vec<TNodeId>) {
         match &mut self.peer_iter {
             QueryPeerIter::FindNode(iter) => iter.on_success(peer, new_peers),
+            QueryPeerIter::Predicate(iter) => iter.on_success(peer, new_peers),
         }
     }
 

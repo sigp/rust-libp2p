@@ -1,11 +1,9 @@
 use super::*;
 use crate::kbucket::{Distance, Key, MAX_NODES_PER_BUCKET};
-use enr::{CombinedKey, Enr, NodeId};
 use std::collections::btree_map::{BTreeMap, Entry};
-use std::collections::HashSet;
 use std::iter::FromIterator;
 
-pub struct PredicateQuery<TTarget> {
+pub struct PredicateQuery<TTarget, TNodeId> {
     /// Target we're looking for.
     target: TTarget,
 
@@ -16,7 +14,7 @@ pub struct PredicateQuery<TTarget> {
     progress: QueryProgress,
 
     /// The closest peers to the target, ordered by increasing distance.
-    closest_peers: BTreeMap<Distance, QueryPeer<NodeId>>,
+    closest_peers: BTreeMap<Distance, QueryPeer<TNodeId>>,
 
     /// Maximum RPC iterations per peer.
     iterations: usize,
@@ -25,13 +23,13 @@ pub struct PredicateQuery<TTarget> {
     num_waiting: usize,
 
     /// The predicate function to be applied to filter the enr's found during the search.
-    predicate: Box<dyn Fn(Enr<CombinedKey>, &[u8]) -> bool + 'static>,
+    predicate: Box<dyn Fn(&TNodeId, &[u8]) -> bool + 'static>,
 
     /// The value to be passed to the predicate function to match against the enr value.
     value: Vec<u8>,
 
     /// Peers satisfying the predicate.
-    peers: HashSet<NodeId>,
+    peers: Vec<TNodeId>,
 
     /// The configuration of the query.
     config: PredicateQueryConfig,
@@ -64,9 +62,10 @@ impl Default for PredicateQueryConfig {
     }
 }
 
-impl<TTarget> PredicateQuery<TTarget>
+impl<TTarget, TNodeId> PredicateQuery<TTarget, TNodeId>
 where
     TTarget: Into<Key<TTarget>> + Clone,
+    TNodeId: Into<Key<TNodeId>> + Clone + Eq,
 {
     /// Creates a new query with the given configuration.
     pub fn with_config<I>(
@@ -74,11 +73,11 @@ where
         target: TTarget,
         known_closest_peers: I,
         iterations: usize,
-        predicate: Box<dyn Fn(Enr<CombinedKey>, &[u8]) -> bool + 'static>,
+        predicate: impl Fn(&TNodeId, &[u8]) -> bool + 'static,
         value: Vec<u8>,
     ) -> Self
     where
-        I: IntoIterator<Item = Key<NodeId>>,
+        I: IntoIterator<Item = Key<TNodeId>>,
     {
         let target_key = target.clone().into();
 
@@ -105,9 +104,9 @@ where
             closest_peers,
             iterations,
             num_waiting: 0,
-            predicate,
+            predicate: Box::new(predicate),
             value,
-            peers: Default::default(),
+            peers: Vec::new(),
         }
     }
 
@@ -136,12 +135,12 @@ where
     /// If the query is finished, the query is not currently waiting for a
     /// result from `peer`, or a result for `peer` has already been reported,
     /// calling this function has no effect.
-    pub fn on_success(&mut self, node_id: &NodeId, closer_peers: Vec<Enr<CombinedKey>>) {
+    pub fn on_success(&mut self, node_id: &TNodeId, closer_peers: Vec<TNodeId>) {
         if let QueryProgress::Finished = self.progress {
             return;
         }
 
-        let key: Key<NodeId> = node_id.clone().into();
+        let key = node_id.clone().into();
         let distance = key.distance(&self.target_key);
         let num_closest = self.closest_peers.len();
 
@@ -181,13 +180,13 @@ where
 
         // Incorporate the reported closer peers into the query.
         for enr in closer_peers {
-            let key = enr.node_id().into();
+            let key = enr.into();
             let distance = self.target_key.distance(&key);
             let peer = QueryPeer::new(key, QueryPeerState::NotContacted);
             self.closest_peers.entry(distance).or_insert(peer);
             // If enr satisfies the predicate, add to list of peers that satisfies predicate
-            if (self.predicate)(enr, &self.value) {
-                self.peers.insert(enr.node_id());
+            if (self.predicate)(&enr, &self.value) {
+                self.peers.push(enr);
             }
             // The query makes progress if the new peer is either closer to the target
             // than any peer seen so far (i.e. is the first entry), or the query did
@@ -226,12 +225,12 @@ where
     /// If the query is finished, the query is not currently waiting for a
     /// result from `peer`, or a result for `peer` has already been reported,
     /// calling this function has no effect.
-    pub fn on_failure(&mut self, peer: &NodeId) {
+    pub fn on_failure(&mut self, peer: &TNodeId) {
         if let QueryProgress::Finished = self.progress {
             return;
         }
 
-        let key: Key<NodeId> = peer.clone().into();
+        let key = peer.clone().into();
         let distance = key.distance(&self.target_key);
 
         match self.closest_peers.entry(distance) {
@@ -250,7 +249,7 @@ where
     /// Advances the state of the query, potentially getting a new peer to contact.
     ///
     /// See [`QueryState`].
-    pub fn next(&mut self) -> QueryState<NodeId> {
+    pub fn next(&mut self) -> QueryState<TNodeId> {
         if let QueryProgress::Finished = self.progress {
             return QueryState::Finished;
         }
@@ -328,7 +327,7 @@ where
     }
 
     /// Consumes the query, returning the peers who match the predicate.
-    pub fn into_result(self) -> impl Iterator<Item = NodeId> {
+    pub fn into_result(self) -> impl Iterator<Item = TNodeId> {
         self.peers.into_iter().take(self.config.num_results)
     }
 

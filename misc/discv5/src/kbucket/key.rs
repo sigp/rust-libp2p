@@ -19,7 +19,7 @@
 // DEALINGS IN THE SOFTWARE.
 
 use bigint::U256;
-use enr::NodeId;
+use enr::{CombinedKey, Enr, NodeId};
 use libp2p_core::PeerId;
 use multihash::Multihash;
 use sha2::{
@@ -126,6 +126,15 @@ impl From<NodeId> for Key<NodeId> {
         Key {
             preimage: node_id.clone(),
             hash: *GenericArray::from_slice(&node_id.raw()),
+        }
+    }
+}
+
+impl From<Enr<CombinedKey>> for Key<Enr<CombinedKey>> {
+    fn from(enr: Enr<CombinedKey>) -> Self {
+        Key {
+            preimage: enr.clone(),
+            hash: *GenericArray::from_slice(&enr.node_id().raw()),
         }
     }
 }
