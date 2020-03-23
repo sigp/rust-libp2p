@@ -252,7 +252,7 @@ where
     /// Advances the state of the query, potentially getting a new peer to contact.
     ///
     /// See [`QueryState`].
-    pub fn next(&mut self) -> QueryState<TNodeId> {
+    pub fn next(&mut self, now: Instant) -> QueryState<TNodeId> {
         if let QueryProgress::Finished = self.progress {
             return QueryState::Finished;
         }
@@ -272,7 +272,7 @@ where
                 QueryPeerState::PendingIteration | QueryPeerState::NotContacted => {
                     // This peer is waiting to be reiterated.
                     if !at_capacity {
-                        let timeout = Instant::now() + self.config.peer_timeout;
+                        let timeout = now + self.config.peer_timeout;
                         peer.state = QueryPeerState::Waiting(timeout);
                         self.num_waiting += 1;
                         let return_peer = ReturnPeer {
@@ -286,7 +286,7 @@ where
                 }
 
                 QueryPeerState::Waiting(timeout) => {
-                    if Instant::now() >= timeout {
+                    if now >= timeout {
                         // Peers that don't respond within timeout are set to `Failed`.
                         debug_assert!(self.num_waiting > 0);
                         self.num_waiting -= 1;
@@ -456,19 +456,18 @@ enum QueryPeerState {
     Succeeded,
 }
 
-/*
 #[cfg(test)]
 mod tests {
     use super::*;
     use libp2p_core::PeerId;
     use quickcheck::*;
-    use rand::{Rng, thread_rng};
-    use std::{iter, time::Duration};
+    use rand::{thread_rng, Rng};
+    use std::time::Duration;
 
-    type TestQuery = Query<PeerId, PeerId>;
+    type TestQuery = FindNodeQuery<PeerId, PeerId>;
 
     fn random_peers(n: usize) -> impl Iterator<Item = PeerId> + Clone {
-        (0 .. n).map(|_| PeerId::random())
+        (0..n).map(|_| PeerId::random())
     }
 
     fn random_query<G: Rng>(g: &mut G) -> TestQuery {
@@ -479,11 +478,14 @@ mod tests {
             num_results: g.gen_range(1, 25),
             peer_timeout: Duration::from_secs(g.gen_range(10, 30)),
         };
-        Query::with_config(config, target, known_closest_peers)
+        let iterations = 1;
+        FindNodeQuery::with_config(config, target, known_closest_peers, iterations)
     }
 
     fn sorted(target: &Key<PeerId>, peers: &Vec<Key<PeerId>>) -> bool {
-        peers.windows(2).all(|w| w[0].distance(&target) < w[1].distance(&target))
+        peers
+            .windows(2)
+            .all(|w| w[0].distance(&target) < w[1].distance(&target))
     }
 
     impl Arbitrary for TestQuery {
@@ -495,28 +497,33 @@ mod tests {
     #[test]
     fn new_query() {
         let query = random_query(&mut thread_rng());
-        let target = Key::from(query.target().clone());
+        let target = Key::from(query.target.clone());
 
-        let (keys, states): (Vec<_>, Vec<_>) = query.closest_peers
+        let (keys, states): (Vec<_>, Vec<_>) = query
+            .closest_peers
             .values()
             .map(|e| (e.key.clone(), &e.state))
             .unzip();
 
-        let none_contacted = states
-            .iter()
-            .all(|s| match s {
-                QueryPeerState::NotContacted => true,
-                _ => false
-            });
+        let none_contacted = states.iter().all(|s| match s {
+            QueryPeerState::NotContacted => true,
+            _ => false,
+        });
 
-        assert!(none_contacted,
-            "Unexpected peer state in new query.");
-        assert!(sorted(&target, &keys),
-            "Closest peers in new query not sorted by distance to target.");
-        assert_eq!(query.num_waiting(), 0,
-            "Unexpected peers in progress in new query.");
-        assert_eq!(query.into_result().closest_peers.count(), 0,
-            "Unexpected closest peers in new query");
+        assert!(none_contacted, "Unexpected peer state in new query.");
+        assert!(
+            sorted(&target, &keys),
+            "Closest peers in new query not sorted by distance to target."
+        );
+        assert_eq!(
+            query.num_waiting, 0,
+            "Unexpected peers in progress in new query."
+        );
+        assert_eq!(
+            query.into_result().count(),
+            0,
+            "Unexpected closest peers in new query"
+        );
     }
 
     #[test]
@@ -525,16 +532,19 @@ mod tests {
             let now = Instant::now();
             let mut rng = thread_rng();
 
-            let mut expected = query.closest_peers
+            let mut expected = query
+                .closest_peers
                 .values()
                 .map(|e| e.key.clone())
                 .collect::<Vec<_>>();
             let num_known = expected.len();
             let max_parallelism = usize::min(query.config.parallelism, num_known);
 
-            let target = Key::from(query.target().clone());
+            let target = Key::from(query.target.clone());
             let mut remaining;
             let mut num_failures = 0;
+
+            dbg!(&expected.len());
 
             'finished: loop {
                 if expected.len() == 0 {
@@ -543,8 +553,7 @@ mod tests {
                 // Split off the next up to `parallelism` expected peers.
                 else if expected.len() < max_parallelism {
                     remaining = Vec::new();
-                }
-                else {
+                } else {
                     remaining = expected.split_off(max_parallelism);
                 }
 
@@ -552,12 +561,12 @@ mod tests {
                 for k in expected.iter() {
                     match query.next(now) {
                         QueryState::Finished => break 'finished,
-                        QueryState::Waiting(Some(p)) => assert_eq!(p, k.preimage()),
+                        QueryState::Waiting(Some(p)) => assert_eq!(&p.node_id, k.preimage()),
                         QueryState::Waiting(None) => panic!("Expected another peer."),
-                        QueryState::WaitingAtCapacity => panic!("Unexpectedly reached capacity.")
+                        QueryState::WaitingAtCapacity => panic!("Unexpectedly reached capacity."),
                     }
                 }
-                let num_waiting = query.num_waiting();
+                let num_waiting = query.num_waiting;
                 assert_eq!(num_waiting, expected.len());
 
                 // Check the bounded parallelism.
@@ -577,7 +586,7 @@ mod tests {
                         num_failures += 1;
                         query.on_failure(k.preimage());
                     }
-                    assert_eq!(query.num_waiting(), num_waiting - (i + 1));
+                    assert_eq!(query.num_waiting, num_waiting - (i + 1));
                 }
 
                 // Re-sort the remaining expected peers for the next "round".
@@ -595,15 +604,15 @@ mod tests {
             // of results.
             let all_contacted = query.closest_peers.values().all(|e| match e.state {
                 QueryPeerState::NotContacted | QueryPeerState::Waiting { .. } => false,
-                _ => true
+                _ => true,
             });
 
-            let target = query.target().clone();
+            let target = query.target.clone();
             let num_results = query.config.num_results;
             let result = query.into_result();
-            let closest = result.closest_peers.map(Key::from).collect::<Vec<_>>();
+            let closest = result.map(Key::from).collect::<Vec<_>>();
 
-            assert_eq!(result.target, target);
+            // assert_eq!(result.target, target);
             assert!(sorted(&Key::from(target), &closest));
 
             if closest.len() < num_results {
@@ -631,24 +640,28 @@ mod tests {
             // A first peer reports a "closer" peer.
             let peer1 = match query.next(now) {
                 QueryState::Waiting(Some(p)) => p.clone(),
-                _ => panic!("No peer.")
+                _ => panic!("No peer."),
             };
-            query.on_success(&peer1, closer.clone());
+            query.on_success(&peer1.node_id, closer.clone());
             // Duplicate result from te same peer.
-            query.on_success(&peer1, closer.clone());
+            query.on_success(&peer1.node_id, closer.clone());
 
             // If there is a second peer, let it also report the same "closer" peer.
             match query.next(now) {
                 QueryState::Waiting(Some(p)) => {
                     let peer2 = p.clone();
-                    query.on_success(&peer2, closer.clone())
+                    query.on_success(&peer2.node_id, closer.clone())
                 }
                 QueryState::Finished => {}
                 _ => panic!("Unexpectedly query state."),
             };
 
             // The "closer" peer must only be in the query once.
-            let n = query.closest_peers.values().filter(|e| e.key.preimage() == &closer[0]).count();
+            let n = query
+                .closest_peers
+                .values()
+                .filter(|e| e.key.preimage() == &closer[0])
+                .count();
             assert_eq!(n, 1);
 
             true
@@ -661,12 +674,18 @@ mod tests {
     fn timeout() {
         fn prop(mut query: TestQuery) -> bool {
             let mut now = Instant::now();
-            let peer = query.closest_peers.values().next().unwrap().key.clone().into_preimage();
-
+            let peer = query
+                .closest_peers
+                .values()
+                .next()
+                .unwrap()
+                .key
+                .clone()
+                .into_preimage();
             // Poll the query for the first peer to be in progress.
             match query.next(now) {
-                QueryState::Waiting(Some(id)) => assert_eq!(id, &peer),
-                _ => panic!()
+                QueryState::Waiting(Some(id)) => assert_eq!(id.node_id, peer),
+                _ => panic!(),
             }
 
             // Artificially advance the clock.
@@ -675,30 +694,25 @@ mod tests {
             // Advancing the query again should mark the first peer as unresponsive.
             let _ = query.next(now);
             match &query.closest_peers.values().next().unwrap() {
-                QueryPeer { key, state: QueryPeerState::Unresponsive } => {
+                QueryPeer {
+                    key,
+                    state: QueryPeerState::Failed,
+                    ..
+                } => {
                     assert_eq!(key.preimage(), &peer);
-                },
-                QueryPeer { state, .. } => panic!("Unexpected peer state: {:?}", state)
+                }
+                QueryPeer { state, .. } => panic!("Unexpected peer state: {:?}", state),
             }
 
-            let finished = query.finished();
-            query.on_success(&peer, iter::empty());
-            let closest = query.into_result().closest_peers.collect::<Vec<_>>();
+            query.on_success(&peer, Vec::new());
+            let closest = query.into_result().collect::<Vec<_>>();
 
-            if finished {
-                // Delivering results when the query already finished must have
-                // no effect.
-                assert_eq!(Vec::<PeerId>::new(), closest)
-            } else {
-                // Unresponsive peers can still deliver results while the query
-                // is not finished.
-                assert_eq!(vec![peer], closest)
-            }
+            // Delivering results when the query already finished must have
+            // no effect.
+            assert_eq!(Vec::<PeerId>::new(), closest);
             true
         }
 
         QuickCheck::new().tests(10).quickcheck(prop as fn(_) -> _)
     }
 }
-
-*/

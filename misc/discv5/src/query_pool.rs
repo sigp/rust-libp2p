@@ -25,6 +25,7 @@ pub use peers::{QueryState, ReturnPeer};
 
 use crate::kbucket::Key;
 use fnv::FnvHashMap;
+use std::time::Instant;
 
 /// A `QueryPool` provides an aggregate state machine for driving `Query`s to completion.
 ///
@@ -187,8 +188,9 @@ where
 
     /// Advances the state of the underlying peer iterator.
     fn next(&mut self) -> QueryState<TNodeId> {
+        let now = Instant::now();
         match &mut self.peer_iter {
-            QueryPeerIter::FindNode(iter) => iter.next(),
+            QueryPeerIter::FindNode(iter) => iter.next(now),
         }
     }
 
