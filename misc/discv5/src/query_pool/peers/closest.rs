@@ -176,6 +176,24 @@ where
                         peer.state = QueryPeerState::PendingIteration;
                     }
                 }
+                QueryPeerState::Unresponsive => {
+                    let peer = e.get_mut();
+                    peer.peers_returned += num_closest;
+                    if peer.peers_returned >= self.config.num_results {
+                        peer.state = QueryPeerState::Succeeded;
+                    } else if self.iterations == peer.iteration {
+                        if peer.peers_returned > 0 {
+                            // mark the peer as succeeded
+                            peer.state = QueryPeerState::Succeeded;
+                        } else {
+                            peer.state = QueryPeerState::Failed; // didn't return any peers
+                        }
+                    } else {
+                        // still have iteration's to complete
+                        peer.iteration += 1;
+                        peer.state = QueryPeerState::PendingIteration;
+                    }
+                }
                 QueryPeerState::NotContacted
                 | QueryPeerState::Failed
                 | QueryPeerState::PendingIteration
@@ -244,6 +262,7 @@ where
                     self.num_waiting -= 1;
                     e.get_mut().state = QueryPeerState::Failed
                 }
+                QueryPeerState::Unresponsive => e.get_mut().state = QueryPeerState::Failed,
                 _ => {}
             },
         }
@@ -290,7 +309,7 @@ where
                         // Peers that don't respond within timeout are set to `Failed`.
                         debug_assert!(self.num_waiting > 0);
                         self.num_waiting -= 1;
-                        peer.state = QueryPeerState::Failed;
+                        peer.state = QueryPeerState::Unresponsive;
                     } else if at_capacity {
                         // The query is still waiting for a result from a peer and is
                         // at capacity w.r.t. the maximum number of peers being waited on.
@@ -316,7 +335,7 @@ where
                     }
                 }
 
-                QueryPeerState::Failed => {
+                QueryPeerState::Failed | QueryPeerState::Unresponsive => {
                     // Skip over unresponsive or failed peers.
                 }
             }
@@ -441,6 +460,12 @@ enum QueryPeerState {
 
     /// The query is waiting for a result from the peer.
     Waiting(Instant),
+
+    /// A result was not delivered for the peer within the configured timeout.
+    ///
+    /// The peer is not taken into account for the termination conditions
+    /// of the iterator until and unless it responds.
+    Unresponsive,
 
     /// The peer is waiting to to begin another iteration.
     PendingIteration,
@@ -696,7 +721,7 @@ mod tests {
             match &query.closest_peers.values().next().unwrap() {
                 QueryPeer {
                     key,
-                    state: QueryPeerState::Failed,
+                    state: QueryPeerState::Unresponsive,
                     ..
                 } => {
                     assert_eq!(key.preimage(), &peer);
@@ -704,12 +729,19 @@ mod tests {
                 QueryPeer { state, .. } => panic!("Unexpected peer state: {:?}", state),
             }
 
+            let finished = query.progress == QueryProgress::Finished;
             query.on_success(&peer, Vec::new());
             let closest = query.into_result().collect::<Vec<_>>();
 
-            // Delivering results when the query already finished must have
-            // no effect.
-            assert_eq!(Vec::<PeerId>::new(), closest);
+            if finished {
+                // Delivering results when the query already finished must have
+                // no effect.
+                assert_eq!(Vec::<PeerId>::new(), closest);
+            } else {
+                // Unresponsive peers can still deliver results while the iterator
+                // is not finished.
+                assert_eq!(vec![peer], closest)
+            }
             true
         }
 

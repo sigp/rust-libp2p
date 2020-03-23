@@ -7,6 +7,11 @@ pub struct Discv5Config {
     /// The request timeout for each UDP request. Default: 4 seconds.
     pub request_timeout: Duration,
 
+    /// The query timeout after which a `QueryPeer` is marked unresponsive.
+    /// Unresponsive peers don't count towards the parallelism limits for a query.
+    /// Hence, we may potentially end up making more requests to good peers.
+    pub query_timeout: Duration,
+
     /// The number of retries for each UDP request. Default: 1.
     pub request_retries: u8,
 
@@ -40,6 +45,7 @@ impl Default for Discv5Config {
     fn default() -> Self {
         Self {
             request_timeout: Duration::from_secs(4),
+            query_timeout: Duration::from_secs(2),
             request_retries: 1,
             session_timeout: Duration::from_secs(86400),
             session_establish_timeout: Duration::from_secs(15),
@@ -127,6 +133,7 @@ impl std::fmt::Debug for Discv5Config {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let mut builder = f.debug_struct("Discv5Config");
         let _ = builder.field("request_timeout", &self.request_timeout);
+        let _ = builder.field("query_timeout", &self.query_timeout);
         let _ = builder.field("request_retries", &self.request_retries);
         let _ = builder.field("session_timeout", &self.session_timeout);
         let _ = builder.field("session_establish_timeout", &self.session_establish_timeout);
