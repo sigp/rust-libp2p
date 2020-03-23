@@ -89,7 +89,6 @@ mod config;
 mod error;
 mod kbucket;
 mod packet;
-mod query;
 mod query_pool;
 mod rpc;
 mod service;
