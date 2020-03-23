@@ -22,8 +22,9 @@ use super::*;
 use crate::kbucket::{Distance, Key, MAX_NODES_PER_BUCKET};
 use std::collections::btree_map::{BTreeMap, Entry};
 use std::iter::FromIterator;
+use std::time::{Duration, Instant};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FindNodeQuery<TTarget, TNodeId> {
     /// Target we're looking for.
     target: TTarget,
@@ -63,6 +64,14 @@ pub struct FindNodeQueryConfig {
     /// for before it terminates. Defaults to the maximum number of entries in a
     /// single k-bucket, i.e. the `k` parameter in the Kademlia paper.
     pub num_results: usize,
+
+    /// The timeout for a single peer.
+    ///
+    /// If a successful result is not reported for a peer within this timeout
+    /// window, the iterator considers the peer unresponsive and will not wait for
+    /// the peer when evaluating the termination conditions, until and unless a
+    /// result is delivered. Defaults to `10` seconds.
+    pub peer_timeout: Duration,
 }
 
 impl Default for FindNodeQueryConfig {
@@ -70,6 +79,7 @@ impl Default for FindNodeQueryConfig {
         FindNodeQueryConfig {
             parallelism: 3,
             num_results: MAX_NODES_PER_BUCKET,
+            peer_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -146,7 +156,7 @@ where
         match self.closest_peers.entry(distance) {
             Entry::Vacant(..) => return,
             Entry::Occupied(mut e) => match e.get().state {
-                QueryPeerState::Waiting => {
+                QueryPeerState::Waiting(..) => {
                     debug_assert!(self.num_waiting > 0);
                     self.num_waiting -= 1;
                     let peer = e.get_mut();
@@ -229,7 +239,7 @@ where
         match self.closest_peers.entry(distance) {
             Entry::Vacant(_) => {}
             Entry::Occupied(mut e) => match e.get().state {
-                QueryPeerState::Waiting => {
+                QueryPeerState::Waiting(..) => {
                     debug_assert!(self.num_waiting > 0);
                     self.num_waiting -= 1;
                     e.get_mut().state = QueryPeerState::Failed
@@ -262,7 +272,8 @@ where
                 QueryPeerState::PendingIteration | QueryPeerState::NotContacted => {
                     // This peer is waiting to be reiterated.
                     if !at_capacity {
-                        peer.state = QueryPeerState::Waiting;
+                        let timeout = Instant::now() + self.config.peer_timeout;
+                        peer.state = QueryPeerState::Waiting(timeout);
                         self.num_waiting += 1;
                         let return_peer = ReturnPeer {
                             node_id: peer.key.preimage().clone(),
@@ -274,8 +285,13 @@ where
                     }
                 }
 
-                QueryPeerState::Waiting => {
-                    if at_capacity {
+                QueryPeerState::Waiting(timeout) => {
+                    if Instant::now() >= timeout {
+                        // Peers that don't respond within timeout are set to `Failed`.
+                        debug_assert!(self.num_waiting > 0);
+                        self.num_waiting -= 1;
+                        peer.state = QueryPeerState::Failed;
+                    } else if at_capacity {
                         // The query is still waiting for a result from a peer and is
                         // at capacity w.r.t. the maximum number of peers being waited on.
                         return QueryState::WaitingAtCapacity;
@@ -424,7 +440,7 @@ enum QueryPeerState {
     NotContacted,
 
     /// The query is waiting for a result from the peer.
-    Waiting,
+    Waiting(Instant),
 
     /// The peer is waiting to to begin another iteration.
     PendingIteration,
