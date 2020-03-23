@@ -65,16 +65,6 @@ where
         self.queries.values()
     }
 
-    /// Gets the current size of the pool, i.e. the number of running queries.
-    pub fn size(&self) -> usize {
-        self.queries.len()
-    }
-
-    /// Returns an iterator that allows modifying each query in the pool.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Query<TTarget, TNodeId>> {
-        self.queries.values_mut()
-    }
-
     /// Adds a query to the pool that iterates towards the closest peers to the target.
     pub fn add_findnode_query<I>(
         &mut self,
@@ -97,11 +87,6 @@ where
         let query = Query::new(id, peer_iter, target);
         self.queries.insert(id, query);
         id
-    }
-
-    /// Returns a reference to a query with the given ID, if it is in the pool.
-    pub fn get(&self, id: &QueryId) -> Option<&Query<TTarget, TNodeId>> {
-        self.queries.get(id)
     }
 
     /// Returns a mutablereference to a query with the given ID, if it is in the pool.

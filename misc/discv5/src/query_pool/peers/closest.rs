@@ -117,16 +117,6 @@ where
         }
     }
 
-    /// Borrows the underlying target of the query.
-    pub fn target(&self) -> &TTarget {
-        &self.target
-    }
-
-    /// Mutably borrows the underlying target of the query.
-    pub fn target_mut(&mut self) -> &mut TTarget {
-        &mut self.target
-    }
-
     /// Callback for delivering the result of a successful request to a peer
     /// that the query is waiting on.
     ///
