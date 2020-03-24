@@ -712,9 +712,7 @@ impl<TSubstream> Discv5<TSubstream> {
         let target_key: kbucket::Key<QueryInfo> = target.clone().into();
 
         let known_closest_peers = self.kbuckets.closest_keys(&target_key);
-        let mut query_config = FindNodeQueryConfig::default();
-        query_config.parallelism = self.config.query_parallelism;
-        query_config.peer_timeout = self.config.query_timeout;
+        let query_config = FindNodeQueryConfig::new_from_config(&self.config);
         self.queries.add_findnode_query(
             query_config,
             target,

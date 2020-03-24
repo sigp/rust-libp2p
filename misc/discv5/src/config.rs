@@ -81,6 +81,11 @@ impl Discv5ConfigBuilder {
         self
     }
 
+    pub fn query_timeout(&mut self, timeout: Duration) -> &mut Self {
+        self.config.query_timeout = timeout;
+        self
+    }
+
     pub fn request_retries(&mut self, retries: u8) -> &mut Self {
         self.config.request_retries = retries;
         self

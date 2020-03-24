@@ -19,6 +19,7 @@
 // DEALINGS IN THE SOFTWARE.
 
 use super::*;
+use crate::config::Discv5Config;
 use crate::kbucket::{Distance, Key, MAX_NODES_PER_BUCKET};
 use std::collections::btree_map::{BTreeMap, Entry};
 use std::iter::FromIterator;
@@ -74,12 +75,12 @@ pub struct FindNodeQueryConfig {
     pub peer_timeout: Duration,
 }
 
-impl Default for FindNodeQueryConfig {
-    fn default() -> Self {
-        FindNodeQueryConfig {
-            parallelism: 3,
+impl FindNodeQueryConfig {
+    pub fn new_from_config(config: &Discv5Config) -> Self {
+        Self {
+            parallelism: config.query_parallelism,
             num_results: MAX_NODES_PER_BUCKET,
-            peer_timeout: Duration::from_secs(10),
+            peer_timeout: config.query_timeout,
         }
     }
 }
