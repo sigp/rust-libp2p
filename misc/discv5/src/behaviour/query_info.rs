@@ -1,5 +1,5 @@
 use crate::kbucket::Key;
-use crate::query::ReturnPeer;
+use crate::query_pool::ReturnPeer;
 use crate::rpc::Request;
 use enr::NodeId;
 use enr::{CombinedKey, Enr};

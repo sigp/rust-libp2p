@@ -2,6 +2,7 @@
 
 use crate::behaviour::RpcRequest;
 use crate::kbucket::*;
+use crate::query_pool::QueryId;
 use crate::*;
 use crate::{Discv5, Discv5Event};
 use env_logger;
@@ -230,8 +231,8 @@ fn test_discovery_star_topology() {
             bootstrap_node.local_enr().node_id(),
             distance
         );
-        swarm.add_enr(bootstrap_node.local_enr().clone());
-        bootstrap_node.add_enr(swarm.local_enr().clone());
+        swarm.add_enr(bootstrap_node.local_enr().clone()).unwrap();
+        bootstrap_node.add_enr(swarm.local_enr().clone()).unwrap();
     }
     // Start a FINDNODE query of target
     let target_random_node_id = target_node.local_enr().node_id();
@@ -279,7 +280,7 @@ fn test_findnode_query() {
             .log2_distance(&previous_node_enr.node_id().clone().into())
             .unwrap();
         println!("Distance of node relative to next: {}", distance);
-        swarm.add_enr(previous_node_enr);
+        swarm.add_enr(previous_node_enr).unwrap();
     }
 
     // pick a random node target
@@ -356,7 +357,7 @@ fn test_updating_connection_on_ping() {
     // Set up discv5 with one disconnected node
     let socket_addr = enr.udp_socket().unwrap();
     let mut discv5: Discv5<Box<u64>> = Discv5::new(enr, key.clone(), config, socket_addr).unwrap();
-    discv5.add_enr(enr2.clone());
+    discv5.add_enr(enr2.clone()).unwrap();
     discv5.connection_updated(enr2.node_id().clone(), None, NodeStatus::Disconnected);
 
     let mut buckets = discv5.kbuckets.clone();
@@ -373,7 +374,7 @@ fn test_updating_connection_on_ping() {
     let req = RpcRequest(2, enr2.node_id().clone());
     discv5
         .active_rpc_requests
-        .insert(req, (Some(1), ping_request.clone()));
+        .insert(req, (Some(QueryId(1)), ping_request.clone()));
 
     // Handle the ping and expect the disconnected Node to become connected
     discv5.handle_rpc_response(enr2.node_id().clone(), 2, ping_response);
@@ -415,7 +416,7 @@ fn test_table_limits() {
         })
         .collect();
     for enr in enrs {
-        discv5.add_enr(enr.clone());
+        discv5.add_enr(enr.clone()).unwrap();
     }
     // Number of entries should be `table_limit`, i.e one node got restricted
     assert_eq!(
@@ -472,7 +473,7 @@ fn test_bucket_limits() {
     let socket_addr = enr.udp_socket().unwrap();
     let mut discv5: Discv5<Box<u64>> = Discv5::new(enr, key.clone(), config, socket_addr).unwrap();
     for enr in enrs {
-        discv5.add_enr(enr.clone());
+        discv5.add_enr(enr.clone()).unwrap();
     }
 
     // Number of entries should be equal to `bucket_limit`.
