@@ -251,6 +251,25 @@ where
         }
     }
 
+    pub fn closest_values<'a, T>(
+        &'a mut self,
+        target: &'a Key<T>,
+    ) -> impl Iterator<Item = TVal> + 'a
+    where
+        T: Clone,
+        TVal: Clone,
+    {
+        let keys = self.closest_keys(target);
+        keys.filter_map(|key| {
+            if let Entry::Present(mut entry, _) = self.entry(&key) {
+                let value: TVal = entry.value().clone();
+                Some(value)
+            } else {
+                None
+            }
+        })
+    }
+
     /// Returns a reference to a bucket given the key. Returns None if bucket does not exist.
     pub fn get_bucket<'a>(&'a self, key: &Key<TPeerId>) -> Option<&'a KBucket<TPeerId, TVal>> {
         let index = BucketIndex::new(&self.local_key.distance(key));

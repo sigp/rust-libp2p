@@ -69,7 +69,7 @@ pub struct Discv5<TSubstream> {
     kbuckets: KBucketsTable<NodeId, Enr<CombinedKey>>,
 
     /// All the iterative queries we are currently performing.
-    queries: QueryPool<QueryInfo, NodeId>,
+    queries: QueryPool<QueryInfo, NodeId, Enr<CombinedKey>>,
 
     /// RPC requests that have been sent and are awaiting a response. Some requests are linked to a
     /// query.
@@ -750,13 +750,18 @@ impl<TSubstream> Discv5<TSubstream> {
 
         let target_key: kbucket::Key<QueryInfo> = target.clone().into();
 
-        let known_closest_peers = self.kbuckets.closest_keys(&target_key);
+        let known_closest_enrs: Vec<kbucket::Key<Enr<CombinedKey>>> = self
+            .kbuckets
+            .closest_values(&target_key)
+            .map(|x| x.into())
+            .collect();
+        // let _: () = known_closest_enrs;
         let mut query_config = PredicateQueryConfig::default();
         query_config.parallelism = self.config.query_parallelism;
         self.queries.add_predicate_query(
             query_config,
             target,
-            known_closest_peers,
+            known_closest_enrs,
             query_iterations,
             predicate,
             value.to_vec(),

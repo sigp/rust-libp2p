@@ -3,7 +3,7 @@ use crate::kbucket::{Distance, Key, MAX_NODES_PER_BUCKET};
 use std::collections::btree_map::{BTreeMap, Entry};
 use std::iter::FromIterator;
 
-pub struct PredicateQuery<TTarget, TNodeId> {
+pub struct PredicateQuery<TTarget, TVal> {
     /// Target we're looking for.
     target: TTarget,
 
@@ -14,7 +14,7 @@ pub struct PredicateQuery<TTarget, TNodeId> {
     progress: QueryProgress,
 
     /// The closest peers to the target, ordered by increasing distance.
-    closest_peers: BTreeMap<Distance, QueryPeer<TNodeId>>,
+    closest_peers: BTreeMap<Distance, QueryPeer<TVal>>,
 
     /// Maximum RPC iterations per peer.
     iterations: usize,
@@ -23,13 +23,13 @@ pub struct PredicateQuery<TTarget, TNodeId> {
     num_waiting: usize,
 
     /// The predicate function to be applied to filter the enr's found during the search.
-    predicate: Box<dyn Fn(&TNodeId, &[u8]) -> bool + 'static>,
+    predicate: Box<dyn Fn(&TVal, &[u8]) -> bool + 'static>,
 
     /// The value to be passed to the predicate function to match against the enr value.
     value: Vec<u8>,
 
     /// Peers satisfying the predicate.
-    peers: Vec<TNodeId>,
+    peers: Vec<TVal>,
 
     /// The configuration of the query.
     config: PredicateQueryConfig,
@@ -62,10 +62,10 @@ impl Default for PredicateQueryConfig {
     }
 }
 
-impl<TTarget, TNodeId> PredicateQuery<TTarget, TNodeId>
+impl<TTarget, TVal> PredicateQuery<TTarget, TVal>
 where
     TTarget: Into<Key<TTarget>> + Clone,
-    TNodeId: Into<Key<TNodeId>> + Clone + Eq,
+    TVal: Into<Key<TVal>> + Clone + Eq,
 {
     /// Creates a new query with the given configuration.
     pub fn with_config<I>(
@@ -73,11 +73,11 @@ where
         target: TTarget,
         known_closest_peers: I,
         iterations: usize,
-        predicate: impl Fn(&TNodeId, &[u8]) -> bool + 'static,
+        predicate: impl Fn(&TVal, &[u8]) -> bool + 'static,
         value: Vec<u8>,
     ) -> Self
     where
-        I: IntoIterator<Item = Key<TNodeId>>,
+        I: IntoIterator<Item = Key<TVal>>,
     {
         let target_key = target.clone().into();
 
@@ -135,7 +135,7 @@ where
     /// If the query is finished, the query is not currently waiting for a
     /// result from `peer`, or a result for `peer` has already been reported,
     /// calling this function has no effect.
-    pub fn on_success(&mut self, node_id: &TNodeId, closer_peers: Vec<TNodeId>) {
+    pub fn on_success(&mut self, node_id: &TVal, closer_peers: Vec<TVal>) {
         if let QueryProgress::Finished = self.progress {
             return;
         }
@@ -225,7 +225,7 @@ where
     /// If the query is finished, the query is not currently waiting for a
     /// result from `peer`, or a result for `peer` has already been reported,
     /// calling this function has no effect.
-    pub fn on_failure(&mut self, peer: &TNodeId) {
+    pub fn on_failure(&mut self, peer: &TVal) {
         if let QueryProgress::Finished = self.progress {
             return;
         }
@@ -249,7 +249,7 @@ where
     /// Advances the state of the query, potentially getting a new peer to contact.
     ///
     /// See [`QueryState`].
-    pub fn next(&mut self) -> QueryState<TNodeId> {
+    pub fn next(&mut self) -> QueryState<TVal> {
         if let QueryProgress::Finished = self.progress {
             return QueryState::Finished;
         }
@@ -327,7 +327,7 @@ where
     }
 
     /// Consumes the query, returning the peers who match the predicate.
-    pub fn into_result(self) -> impl Iterator<Item = TNodeId> {
+    pub fn into_result(self) -> impl Iterator<Item = TVal> {
         self.peers.into_iter().take(self.config.num_results)
     }
 
@@ -385,9 +385,9 @@ enum QueryProgress {
 
 /// Representation of a peer in the context of a query.
 #[derive(Debug, Clone)]
-struct QueryPeer<TNodeId> {
+struct QueryPeer<TVal> {
     /// The `KBucket` key used to identify the peer.
-    key: Key<TNodeId>,
+    key: Key<TVal>,
 
     /// The current rpc request iteration that has been made on this peer.
     iteration: usize,
@@ -399,8 +399,8 @@ struct QueryPeer<TNodeId> {
     state: QueryPeerState,
 }
 
-impl<TNodeId> QueryPeer<TNodeId> {
-    pub fn new(key: Key<TNodeId>, state: QueryPeerState) -> Self {
+impl<TVal> QueryPeer<TVal> {
+    pub fn new(key: Key<TVal>, state: QueryPeerState) -> Self {
         QueryPeer {
             key,
             iteration: 1,
