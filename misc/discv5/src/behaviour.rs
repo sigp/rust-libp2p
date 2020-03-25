@@ -288,6 +288,27 @@ impl<TSubstream> Discv5<TSubstream> {
         self.start_query(QueryType::FindNode(node_id));
     }
 
+    /// Returns an ENR if one is known for the given NodeId. This does not start a query.
+    pub fn find_enr(&mut self, node_id: &NodeId) -> Option<Enr<CombinedKey>> {
+        // check if we know this node id in our routing table
+        let key = kbucket::Key::from(node_id.clone());
+        if let kbucket::Entry::Present(mut entry, _) = self.kbuckets.entry(&key) {
+            return Some(entry.value().clone());
+        }
+        // check the untrusted addresses for ongoing queries
+        for query in self.queries.iter() {
+            if let Some(enr) = query
+                .target()
+                .untrusted_enrs
+                .iter()
+                .find(|v| v.node_id() == *node_id)
+            {
+                return Some(enr.clone());
+            }
+        }
+        None
+    }
+
     // private functions //
 
     /// Processes an RPC request from a peer. Requests respond to the received socket address,
@@ -675,27 +696,6 @@ impl<TSubstream> Discv5<TSubstream> {
                 node_id
             );
         }
-    }
-
-    /// Returns an ENR if one is known for the given NodeId.
-    fn find_enr(&mut self, node_id: &NodeId) -> Option<Enr<CombinedKey>> {
-        // check if we know this node id in our routing table
-        let key = kbucket::Key::from(node_id.clone());
-        if let kbucket::Entry::Present(mut entry, _) = self.kbuckets.entry(&key) {
-            return Some(entry.value().clone());
-        }
-        // check the untrusted addresses for ongoing queries
-        for query in self.queries.iter() {
-            if let Some(enr) = query
-                .target()
-                .untrusted_enrs
-                .iter()
-                .find(|v| v.node_id() == *node_id)
-            {
-                return Some(enr.clone());
-            }
-        }
-        None
     }
 
     /// Internal function that starts a query.
