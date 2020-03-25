@@ -17,7 +17,7 @@ use self::ip_vote::IpVote;
 use self::query_info::{QueryInfo, QueryType};
 use crate::error::Discv5Error;
 use crate::kbucket::{self, EntryRefView, KBucketsTable, NodeStatus};
-use crate::query::{Query, QueryConfig, QueryState, ReturnPeer};
+use crate::query_pool::{FindNodeQueryConfig, QueryId, QueryPool, QueryPoolState, ReturnPeer};
 use crate::rpc;
 use crate::service::MAX_PACKET_SIZE;
 use crate::session_service::{SessionEvent, SessionService};
@@ -48,7 +48,6 @@ mod ip_vote;
 mod query_info;
 mod test;
 
-type QueryId = usize;
 type RpcId = u64;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -67,9 +66,8 @@ pub struct Discv5<TSubstream> {
     /// Storage of the ENR record for each node.
     kbuckets: KBucketsTable<NodeId, Enr<CombinedKey>>,
 
-    /// All the iterative queries we are currently performing, with their ID. The last parameter
-    /// is the list of accumulated providers for `GET_PROVIDERS` queries.
-    active_queries: FnvHashMap<QueryId, Query<QueryInfo, NodeId>>,
+    /// All the iterative queries we are currently performing.
+    queries: QueryPool<QueryInfo, NodeId>,
 
     /// RPC requests that have been sent and are awaiting a response. Some requests are linked to a
     /// query.
@@ -83,9 +81,6 @@ pub struct Discv5<TSubstream> {
 
     /// List of peers we have established sessions with and an interval for when to send a PING.
     connected_peers: HashMap<NodeId, Interval>,
-
-    /// Identifier for the next query that we start.
-    next_query_id: QueryId,
 
     /// Main discv5 UDP service that establishes sessions with peers.
     service: SessionService,
@@ -160,12 +155,11 @@ impl<TSubstream> Discv5<TSubstream> {
             config,
             known_peer_ids: HashMap::new(),
             kbuckets: KBucketsTable::new(node_id.into(), Duration::from_secs(60)),
-            active_queries: Default::default(),
+            queries: QueryPool::new(),
             active_rpc_requests: Default::default(),
             active_nodes_responses: HashMap::new(),
             ip_votes,
             connected_peers: Default::default(),
-            next_query_id: 0,
             service,
             marker: PhantomData,
         })
@@ -292,6 +286,27 @@ impl<TSubstream> Discv5<TSubstream> {
     /// requested `PeerId`.
     pub fn find_node(&mut self, node_id: NodeId) {
         self.start_query(QueryType::FindNode(node_id));
+    }
+
+    /// Returns an ENR if one is known for the given NodeId. This does not start a query.
+    pub fn find_enr(&mut self, node_id: &NodeId) -> Option<Enr<CombinedKey>> {
+        // check if we know this node id in our routing table
+        let key = kbucket::Key::from(node_id.clone());
+        if let kbucket::Entry::Present(mut entry, _) = self.kbuckets.entry(&key) {
+            return Some(entry.value().clone());
+        }
+        // check the untrusted addresses for ongoing queries
+        for query in self.queries.iter() {
+            if let Some(enr) = query
+                .target()
+                .untrusted_enrs
+                .iter()
+                .find(|v| v.node_id() == *node_id)
+            {
+                return Some(enr.clone());
+            }
+        }
+        None
     }
 
     // private functions //
@@ -632,7 +647,7 @@ impl<TSubstream> Discv5<TSubstream> {
             Err(e) => {
                 //dst node is local_key, report failure
                 error!("Send RPC: {}", e);
-                if let Some(query) = self.active_queries.get_mut(&query_id) {
+                if let Some(query) = self.queries.get_mut(&query_id) {
                     query.on_failure(&node_id);
                 }
                 return;
@@ -669,7 +684,7 @@ impl<TSubstream> Discv5<TSubstream> {
                 Err(_) => {
                     warn!("Sending request to node: {} failed", &node_id);
                     if let Some(query_id) = query_id {
-                        if let Some(query) = self.active_queries.get_mut(&query_id) {
+                        if let Some(query) = self.queries.get_mut(&query_id) {
                             query.on_failure(&node_id);
                         }
                     }
@@ -683,33 +698,8 @@ impl<TSubstream> Discv5<TSubstream> {
         }
     }
 
-    /// Returns an ENR if one is known for the given NodeId.
-    fn find_enr(&mut self, node_id: &NodeId) -> Option<Enr<CombinedKey>> {
-        // check if we know this node id in our routing table
-        let key = kbucket::Key::from(node_id.clone());
-        if let kbucket::Entry::Present(mut entry, _) = self.kbuckets.entry(&key) {
-            return Some(entry.value().clone());
-        }
-        // check the untrusted addresses for ongoing queries
-        for query in self.active_queries.values() {
-            if let Some(enr) = query
-                .target()
-                .untrusted_enrs
-                .iter()
-                .find(|v| v.node_id() == *node_id)
-            {
-                return Some(enr.clone());
-            }
-        }
-        None
-    }
-
     /// Internal function that starts a query.
     fn start_query(&mut self, query_type: QueryType) {
-        let query_id = self.next_query_id;
-        debug!("Starting a new query. Id: {}", query_id);
-        self.next_query_id += 1;
-
         let target = QueryInfo {
             query_type,
             untrusted_enrs: Default::default(),
@@ -722,11 +712,13 @@ impl<TSubstream> Discv5<TSubstream> {
         let target_key: kbucket::Key<QueryInfo> = target.clone().into();
 
         let known_closest_peers = self.kbuckets.closest_keys(&target_key);
-        let mut query_config = QueryConfig::default();
-        query_config.parallelism = self.config.query_parallelism;
-        let query = Query::with_config(query_config, target, known_closest_peers, query_iterations);
-
-        self.active_queries.insert(query_id, query);
+        let query_config = FindNodeQueryConfig::new_from_config(&self.config);
+        self.queries.add_findnode_query(
+            query_config,
+            target,
+            known_closest_peers,
+            query_iterations,
+        );
     }
 
     /// Processes discovered peers from a query.
@@ -777,7 +769,7 @@ impl<TSubstream> Discv5<TSubstream> {
 
         // if this is part of a query, update the query
         if let Some(query_id) = query_id {
-            if let Some(query) = self.active_queries.get_mut(&query_id) {
+            if let Some(query) = self.queries.get_mut(&query_id) {
                 let mut peer_count = 0;
                 for peer in others_iter.clone() {
                     if query
@@ -791,7 +783,7 @@ impl<TSubstream> Discv5<TSubstream> {
                     }
                     peer_count += 1;
                 }
-                debug!("{} peers found for query id {}", peer_count, query_id);
+                debug!("{} peers found for query id {:?}", peer_count, query_id);
                 query.on_success(source, others_iter.map(|kp| kp.node_id().clone()).collect())
             }
         }
@@ -910,7 +902,7 @@ impl<TSubstream> Discv5<TSubstream> {
                         // there was no partially downloaded nodes inform the query of the failure
                         // if it's part of a query
                         if let Some(query_id) = query_id_option {
-                            if let Some(query) = self.active_queries.get_mut(&query_id) {
+                            if let Some(query) = self.queries.get_mut(&query_id) {
                                 query.on_failure(&node_id);
                             }
                         } else {
@@ -921,9 +913,9 @@ impl<TSubstream> Discv5<TSubstream> {
                 // for all other requests, if any are queries, mark them as failures.
                 _ => {
                     if let Some(query_id) = query_id_option {
-                        if let Some(query) = self.active_queries.get_mut(&query_id) {
+                        if let Some(query) = self.queries.get_mut(&query_id) {
                             debug!(
-                                "Failed query request: {:?} for query: {} and node: {} ",
+                                "Failed query request: {:?} for query: {:?} and node: {} ",
                                 request, query_id, node_id
                             );
                             query.on_failure(&node_id);
@@ -1075,31 +1067,24 @@ where
             let mut finished_query = None;
             // If a query is waiting for an rpc to send, store it here and stop looping.
             let mut waiting_query = None;
-
-            for (&query_id, query) in self.active_queries.iter_mut() {
-                let target = query.target().clone();
-                match query.next() {
-                    QueryState::Finished => {
-                        finished_query = Some(query_id);
+            loop {
+                match self.queries.poll() {
+                    QueryPoolState::Finished(query) => {
+                        finished_query = Some(query);
                         break;
                     }
-                    QueryState::Waiting(Some(return_peer)) => {
-                        // break the loop to send the rpc request
-                        waiting_query = Some((query_id, target, return_peer));
+                    QueryPoolState::Waiting(Some((query, return_peer))) => {
+                        waiting_query = Some((query.id(), query.target().clone(), return_peer));
                         break;
                     }
-                    QueryState::Waiting(None) | QueryState::WaitingAtCapacity => {}
-                }
+                    QueryPoolState::Waiting(None) | QueryPoolState::Idle => break,
+                };
             }
 
             if let Some((query_id, target, return_peer)) = waiting_query {
                 self.send_rpc_query(query_id, target, &return_peer);
             } else if let Some(finished_query) = finished_query {
-                let result = self
-                    .active_queries
-                    .remove(&finished_query)
-                    .expect("finished_query was gathered when iterating active_queries; QED.")
-                    .into_result();
+                let result = finished_query.into_result();
 
                 match result.target.query_type {
                     QueryType::FindNode(node_id) => {
