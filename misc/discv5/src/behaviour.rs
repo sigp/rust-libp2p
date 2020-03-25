@@ -289,8 +289,8 @@ impl<TSubstream> Discv5<TSubstream> {
     }
 
     /// If an ENR is known for a PeerId it is returned.
-    pub fn enr_of_peer(&mut self, peer_id: PeerId) -> Option<Enr<CombinedKey>> {
-        let node_id = self.known_peer_ids.get(&peer_id)?.clone();
+    pub fn enr_of_peer(&mut self, peer_id: &PeerId) -> Option<Enr<CombinedKey>> {
+        let node_id = self.known_peer_ids.get(peer_id)?.clone();
         self.find_enr(&node_id)
     }
 
