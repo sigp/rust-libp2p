@@ -288,6 +288,12 @@ impl<TSubstream> Discv5<TSubstream> {
         self.start_query(QueryType::FindNode(node_id));
     }
 
+    /// If an ENR is known for a PeerId it is returned.
+    pub fn enr_of_peer(&mut self, peer_id: &PeerId) -> Option<Enr<CombinedKey>> {
+        let node_id = self.known_peer_ids.get(peer_id)?.clone();
+        self.find_enr(&node_id)
+    }
+
     // private functions //
 
     /// Processes an RPC request from a peer. Requests respond to the received socket address,
