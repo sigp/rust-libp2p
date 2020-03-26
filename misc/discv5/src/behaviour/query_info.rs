@@ -25,9 +25,6 @@ pub struct QueryInfo {
 pub enum QueryType {
     /// The user requested a `FIND_PEER` query to be performed. It should be reported when finished.
     FindNode(NodeId),
-    /// The user requested a predicate based search for `n` peers.
-    /// TODO: should we have a separate `QueryType` for this?
-    PredicateSearch(NodeId, usize),
 }
 
 impl QueryInfo {
@@ -42,11 +39,6 @@ impl QueryInfo {
                     .ok_or_else(|| "Requested a node find itself")?;
                 Request::FindNode { distance }
             }
-            QueryType::PredicateSearch(node_id, _) => {
-                let distance = findnode_log2distance(node_id, return_peer)
-                    .ok_or_else(|| "Requested a node find itself")?;
-                Request::FindNode { distance }
-            }
         };
 
         Ok(request)
@@ -55,7 +47,6 @@ impl QueryInfo {
     pub fn iterations(&self) -> usize {
         match &self.query_type {
             QueryType::FindNode(_) => MAX_FINDNODE_REQUESTS,
-            QueryType::PredicateSearch(_, _) => MAX_FINDNODE_REQUESTS,
         }
     }
 }
@@ -65,9 +56,6 @@ impl Into<Key<QueryInfo>> for QueryInfo {
         let cloned_self = self.clone();
         match self.query_type {
             QueryType::FindNode(node_id) => {
-                Key::new_raw(cloned_self, *GenericArray::from_slice(&node_id.raw()))
-            }
-            QueryType::PredicateSearch(node_id, _) => {
                 Key::new_raw(cloned_self, *GenericArray::from_slice(&node_id.raw()))
             }
         }

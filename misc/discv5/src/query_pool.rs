@@ -97,8 +97,14 @@ where
     where
         I: IntoIterator<Item = Key<TNodeId>>,
     {
-        let predicate_query =
-            PredicateQuery::with_config(config, target, peers, iterations, predicate, value);
+        let predicate_query = PredicateQuery::with_config(
+            config,
+            target.clone(),
+            peers,
+            iterations,
+            predicate,
+            value,
+        );
         let peer_iter = QueryPeerIter::Predicate(predicate_query);
         self.add(peer_iter, target)
     }

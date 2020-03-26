@@ -69,7 +69,7 @@ pub struct Discv5<TSubstream> {
     kbuckets: KBucketsTable<NodeId, Enr<CombinedKey>>,
 
     /// All the iterative queries we are currently performing.
-    queries: QueryPool<QueryInfo, NodeId, Enr<CombinedKey>>,
+    queries: QueryPool<QueryInfo, NodeId>,
 
     /// RPC requests that have been sent and are awaiting a response. Some requests are linked to a
     /// query.
@@ -294,11 +294,11 @@ impl<TSubstream> Discv5<TSubstream> {
     ///
     /// This will eventually produce an event containing <= `num` nodes which satisfy the
     /// `predicate` with passed `value`.
-    pub fn find_enr_predicate<F>(&mut self, node_id: NodeId, num: usize, predicate: F, value: &[u8])
+    pub fn find_enr_predicate<F>(&mut self, node_id: NodeId, predicate: F, value: &[u8])
     where
         F: Fn(&Enr<CombinedKey>, &[u8]) -> bool + 'static,
     {
-        self.start_predicate_query(QueryType::PredicateSearch(node_id, num), predicate, value);
+        self.start_predicate_query(QueryType::FindNode(node_id), predicate, value);
     }
 
     // private functions //
@@ -750,18 +750,13 @@ impl<TSubstream> Discv5<TSubstream> {
 
         let target_key: kbucket::Key<QueryInfo> = target.clone().into();
 
-        let known_closest_enrs: Vec<kbucket::Key<Enr<CombinedKey>>> = self
-            .kbuckets
-            .closest_values(&target_key)
-            .map(|x| x.into())
-            .collect();
-        // let _: () = known_closest_enrs;
-        let mut query_config = PredicateQueryConfig::default();
-        query_config.parallelism = self.config.query_parallelism;
+        let known_closest_peers = self.kbuckets.closest_keys(&target_key);
+
+        let query_config = PredicateQueryConfig::new_from_config(&self.config);
         self.queries.add_predicate_query(
             query_config,
             target,
-            known_closest_enrs,
+            known_closest_peers,
             query_iterations,
             predicate,
             value.to_vec(),
@@ -831,7 +826,7 @@ impl<TSubstream> Discv5<TSubstream> {
                     peer_count += 1;
                 }
                 debug!("{} peers found for query id {:?}", peer_count, query_id);
-                query.on_success(source, others_iter.map(|kp| kp.node_id().clone()).collect())
+                query.on_success(source, others_iter.collect())
             }
         }
     }
