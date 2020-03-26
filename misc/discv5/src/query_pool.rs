@@ -20,7 +20,7 @@
 
 mod peers;
 
-use enr::NodeId;
+use enr::{CombinedKey, Enr, NodeId};
 pub use peers::closest::{FindNodeQuery, FindNodeQueryConfig};
 pub use peers::predicate::{PredicateQuery, PredicateQueryConfig};
 pub use peers::{QueryState, ReturnPeer};
@@ -53,7 +53,7 @@ pub enum QueryPoolState<'a, TTarget, TNodeId> {
 impl<TTarget, TNodeId> QueryPool<TTarget, TNodeId>
 where
     TTarget: Into<Key<TTarget>> + Clone,
-    TNodeId: Into<NodeId> + Into<Key<TNodeId>> + Eq + Clone,
+    TNodeId: From<NodeId> + Into<Key<TNodeId>> + Eq + Clone,
 {
     /// Creates a new `QueryPool` with the given configuration.
     pub fn new() -> Self {
@@ -69,7 +69,7 @@ where
     }
 
     /// Adds a query to the pool that iterates towards the closest peers to the target.
-    pub fn add_findnode_query<I, T>(
+    pub fn add_findnode_query<I>(
         &mut self,
         config: FindNodeQueryConfig,
         target: TTarget,
@@ -77,8 +77,7 @@ where
         iterations: usize,
     ) -> QueryId
     where
-        I: IntoIterator<Item = T>,
-        T: Into<NodeId> + Into<TNodeId>,
+        I: IntoIterator<Item = Key<TNodeId>>,
     {
         let findnode_query = FindNodeQuery::with_config(config, target.clone(), peers, iterations);
         let peer_iter = QueryPeerIter::FindNode(findnode_query);
@@ -86,22 +85,21 @@ where
     }
 
     /// Adds a query to the pool that returns peers that satisfy a predicate.
-    pub fn add_predicate_query<I, T>(
+    pub fn add_predicate_query<I>(
         &mut self,
         config: PredicateQueryConfig,
         target: TTarget,
         peers: I,
         iterations: usize,
-        predicate: impl Fn(&T, &[u8]) -> bool + 'static,
+        predicate: impl Fn(&enr::Enr<enr::CombinedKey>, &[u8]) -> bool + 'static,
         value: Vec<u8>,
     ) -> QueryId
     where
-        I: IntoIterator<Item = T>,
-        T: Into<NodeId> + Into<TNodeId>,
+        I: IntoIterator<Item = Key<TNodeId>>,
     {
         let predicate_query =
             PredicateQuery::with_config(config, target, peers, iterations, predicate, value);
-        let peer_iter = QueryPeerIter::Predicate(Box::new(predicate_query));
+        let peer_iter = QueryPeerIter::Predicate(predicate_query);
         self.add(peer_iter, target)
     }
 
@@ -172,13 +170,13 @@ pub struct Query<TTarget, TNodeId> {
 /// The peer selection strategies that can be used by queries.
 enum QueryPeerIter<TTarget, TNodeId> {
     FindNode(FindNodeQuery<TTarget, TNodeId>),
-    Predicate(PredicateQuery<TTarget, TNodeId, enr::Enr<enr::CombinedKey>>),
+    Predicate(PredicateQuery<TTarget, TNodeId>),
 }
 
 impl<TTarget, TNodeId> Query<TTarget, TNodeId>
 where
     TTarget: Into<Key<TTarget>> + Clone,
-    TNodeId: Into<NodeId> + Into<Key<TNodeId>> + Eq + Clone,
+    TNodeId: From<NodeId> + Into<Key<TNodeId>> + Eq + Clone,
 {
     /// Creates a new query without starting it.
     fn new(id: QueryId, peer_iter: QueryPeerIter<TTarget, TNodeId>, target: TTarget) -> Self {
@@ -197,15 +195,15 @@ where
     /// Informs the query that the attempt to contact `peer` failed.
     pub fn on_failure(&mut self, peer: &TNodeId) {
         match &mut self.peer_iter {
-            QueryPeerIter::FindNode(iter) => iter.on_failure(peer),
-            QueryPeerIter::Predicate(iter) => iter.on_failure(peer),
+            QueryPeerIter::FindNode(iter) => iter.on_failure(&peer),
+            QueryPeerIter::Predicate(iter) => iter.on_failure(&peer),
         }
     }
 
     /// Informs the query that the attempt to contact `peer` succeeded,
     /// possibly resulting in new peers that should be incorporated into
     /// the query, if applicable.
-    pub fn on_success(&mut self, peer: &TNodeId, new_peers: Vec<TNodeId>) {
+    pub fn on_success(&mut self, peer: &TNodeId, new_peers: Vec<Enr<CombinedKey>>) {
         match &mut self.peer_iter {
             QueryPeerIter::FindNode(iter) => iter.on_success(peer, new_peers),
             QueryPeerIter::Predicate(iter) => iter.on_success(peer, new_peers),
@@ -222,7 +220,7 @@ where
     }
 
     /// Consumes the query, producing the final `QueryResult`.
-    pub fn into_result(self) -> QueryResult<TTarget, impl Iterator<Item = NodeId>> {
+    pub fn into_result(self) -> QueryResult<TTarget, impl Iterator<Item = TNodeId>> {
         let peers = match self.peer_iter {
             QueryPeerIter::FindNode(iter) => iter.into_result(),
             QueryPeerIter::Predicate(iter) => iter.into_result(),

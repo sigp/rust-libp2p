@@ -89,18 +89,17 @@ impl FindNodeQueryConfig {
 impl<TTarget, TNodeId> FindNodeQuery<TTarget, TNodeId>
 where
     TTarget: Into<Key<TTarget>> + Clone,
-    TNodeId: Into<NodeId> + Into<Key<TNodeId>> + Eq + Clone,
+    TNodeId: From<NodeId> + Into<Key<TNodeId>> + Eq + Clone,
 {
     /// Creates a new query with the given configuration.
-    pub fn with_config<I, T>(
+    pub fn with_config<I>(
         config: FindNodeQueryConfig,
         target: TTarget,
         known_closest_peers: I,
         iterations: usize,
     ) -> Self
     where
-        I: IntoIterator<Item = T>,
-        T: Into<NodeId> + Into<Key<TNodeId>>,
+        I: IntoIterator<Item = Key<TNodeId>>,
     {
         let target_key = target.clone().into();
 
@@ -146,9 +145,9 @@ where
     /// If the query is finished, the query is not currently waiting for a
     /// result from `peer`, or a result for `peer` has already been reported,
     /// calling this function has no effect.
-    pub fn on_success<T>(&mut self, node_id: &TNodeId, closer_peers: Vec<T>)
-    where
-        T: Into<NodeId> + Into<Key<TNodeId>>,
+    pub fn on_success(&mut self, node_id: &TNodeId, closer_peers: Vec<enr::Enr<enr::CombinedKey>>)
+    // where
+    //     T: Into<NodeId> + Into<Key<TNodeId>>,
     {
         if let QueryProgress::Finished = self.progress {
             return;
@@ -212,7 +211,9 @@ where
 
         // Incorporate the reported closer peers into the query.
         for peer in closer_peers {
-            let key = peer.into();
+            let key: NodeId = peer.node_id().clone();
+            let key: TNodeId = key.into();
+            let key: Key<TNodeId> = key.into();
             let distance = self.target_key.distance(&key);
             let peer = QueryPeer::new(key, QueryPeerState::NotContacted);
             self.closest_peers.entry(distance).or_insert(peer);
@@ -362,12 +363,12 @@ where
     }
 
     /// Consumes the query, returning the target and the closest peers.
-    pub fn into_result(self) -> Vec<NodeId> {
+    pub fn into_result(self) -> Vec<TNodeId> {
         self.closest_peers
             .into_iter()
             .filter_map(|(_, peer)| {
                 if let QueryPeerState::Succeeded = peer.state {
-                    Some(peer.key.into_preimage().into())
+                    Some(peer.key.into_preimage())
                 } else {
                     None
                 }

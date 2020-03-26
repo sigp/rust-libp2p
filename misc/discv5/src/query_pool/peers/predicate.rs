@@ -1,12 +1,12 @@
 use super::*;
 use crate::config::Discv5Config;
 use crate::kbucket::{Distance, Key, MAX_NODES_PER_BUCKET};
-use enr::NodeId;
+use enr::{CombinedKey, Enr, NodeId};
 use std::collections::btree_map::{BTreeMap, Entry};
 use std::iter::FromIterator;
 use std::time::{Duration, Instant};
 
-pub struct PredicateQuery<TTarget, TNodeId, T> {
+pub struct PredicateQuery<TTarget, TNodeId> {
     /// Target we're looking for.
     target: TTarget,
 
@@ -26,7 +26,7 @@ pub struct PredicateQuery<TTarget, TNodeId, T> {
     num_waiting: usize,
 
     /// The predicate function to be applied to filter the enr's found during the search.
-    predicate: Box<dyn Fn(&T, &[u8]) -> bool + 'static>,
+    predicate: Box<dyn Fn(&Enr<CombinedKey>, &[u8]) -> bool + 'static>,
 
     /// The value to be passed to the predicate function to match against the enr value.
     value: Vec<u8>,
@@ -74,11 +74,10 @@ impl PredicateQueryConfig {
     }
 }
 
-impl<TTarget, TNodeId, T> PredicateQuery<TTarget, TNodeId, T>
+impl<TTarget, TNodeId> PredicateQuery<TTarget, TNodeId>
 where
     TTarget: Into<Key<TTarget>> + Clone,
-    TNodeId: Into<NodeId> + Into<Key<TNodeId>> + Clone + Eq,
-    T: Into<NodeId> + Into<TNodeId>,
+    TNodeId: From<NodeId> + Into<Key<TNodeId>> + Eq + Clone,
 {
     /// Creates a new query with the given configuration.
     pub fn with_config<I>(
@@ -86,11 +85,11 @@ where
         target: TTarget,
         known_closest_peers: I,
         iterations: usize,
-        predicate: impl Fn(&T, &[u8]) -> bool + 'static,
+        predicate: impl Fn(&Enr<CombinedKey>, &[u8]) -> bool + 'static,
         value: Vec<u8>,
     ) -> Self
     where
-        I: IntoIterator<Item = TNodeId>,
+        I: IntoIterator<Item = Key<TNodeId>>,
     {
         let target_key = target.clone().into();
 
@@ -149,7 +148,7 @@ where
     /// If the query is finished, the query is not currently waiting for a
     /// result from `peer`, or a result for `peer` has already been reported,
     /// calling this function has no effect.
-    pub fn on_success(&mut self, node_id: &TNodeId, closer_peers: Vec<T>) {
+    pub fn on_success(&mut self, node_id: &TNodeId, closer_peers: Vec<Enr<CombinedKey>>) {
         if let QueryProgress::Finished = self.progress {
             return;
         }
@@ -212,14 +211,15 @@ where
 
         // Incorporate the reported closer peers into the query.
         for enr in closer_peers {
-            let key: TNodeId = enr.into();
+            let key: NodeId = enr.node_id().clone();
+            let key: TNodeId = key.into();
             let key: Key<TNodeId> = key.into();
             let distance = self.target_key.distance(&key);
             let peer = QueryPeer::new(key, QueryPeerState::NotContacted);
             self.closest_peers.entry(distance).or_insert(peer);
             // If enr satisfies the predicate, add to list of peers that satisfies predicate
             if (self.predicate)(&enr, &self.value) {
-                self.peers.push(enr.into());
+                self.peers.push(enr.node_id().clone());
             }
             // The query makes progress if the new peer is either closer to the target
             // than any peer seen so far (i.e. is the first entry), or the query did
@@ -366,7 +366,7 @@ where
     }
 
     /// Consumes the query, returning the peers who match the predicate.
-    pub fn into_result(self) -> Vec<NodeId> {
+    pub fn into_result(self) -> Vec<TNodeId> {
         self.peers
             .into_iter()
             .map(|n| n.into())
