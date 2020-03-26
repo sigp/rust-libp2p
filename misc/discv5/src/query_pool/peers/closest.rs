@@ -21,6 +21,7 @@
 use super::*;
 use crate::config::Discv5Config;
 use crate::kbucket::{Distance, Key, MAX_NODES_PER_BUCKET};
+use enr::NodeId;
 use std::collections::btree_map::{BTreeMap, Entry};
 use std::iter::FromIterator;
 use std::time::{Duration, Instant};
@@ -88,17 +89,18 @@ impl FindNodeQueryConfig {
 impl<TTarget, TNodeId> FindNodeQuery<TTarget, TNodeId>
 where
     TTarget: Into<Key<TTarget>> + Clone,
-    TNodeId: Into<Key<TNodeId>> + Eq + Clone,
+    TNodeId: Into<NodeId> + Into<Key<TNodeId>> + Eq + Clone,
 {
     /// Creates a new query with the given configuration.
-    pub fn with_config<I>(
+    pub fn with_config<I, T>(
         config: FindNodeQueryConfig,
         target: TTarget,
         known_closest_peers: I,
         iterations: usize,
     ) -> Self
     where
-        I: IntoIterator<Item = Key<TNodeId>>,
+        I: IntoIterator<Item = T>,
+        T: Into<NodeId> + Into<Key<TNodeId>>,
     {
         let target_key = target.clone().into();
 
@@ -107,6 +109,7 @@ where
             known_closest_peers
                 .into_iter()
                 .map(|key| {
+                    let key: Key<TNodeId> = key.into();
                     let distance = key.distance(&target_key);
                     let state = QueryPeerState::NotContacted;
                     (distance, QueryPeer::new(key, state))
@@ -143,12 +146,15 @@ where
     /// If the query is finished, the query is not currently waiting for a
     /// result from `peer`, or a result for `peer` has already been reported,
     /// calling this function has no effect.
-    pub fn on_success(&mut self, node_id: &TNodeId, closer_peers: Vec<TNodeId>) {
+    pub fn on_success<T>(&mut self, node_id: &TNodeId, closer_peers: Vec<T>)
+    where
+        T: Into<NodeId> + Into<Key<TNodeId>>,
+    {
         if let QueryProgress::Finished = self.progress {
             return;
         }
 
-        let key = node_id.clone().into();
+        let key: Key<TNodeId> = node_id.clone().into();
         let distance = key.distance(&self.target_key);
         let num_closest = self.closest_peers.len();
 
@@ -252,7 +258,7 @@ where
             return;
         }
 
-        let key = peer.clone().into();
+        let key: Key<TNodeId> = peer.clone().into();
         let distance = key.distance(&self.target_key);
 
         match self.closest_peers.entry(distance) {
@@ -356,20 +362,18 @@ where
     }
 
     /// Consumes the query, returning the target and the closest peers.
-    pub fn into_result(self) -> impl Iterator<Item = TNodeId> {
-        let closest_peers = self
-            .closest_peers
+    pub fn into_result(self) -> Vec<NodeId> {
+        self.closest_peers
             .into_iter()
             .filter_map(|(_, peer)| {
                 if let QueryPeerState::Succeeded = peer.state {
-                    Some(peer.key.into_preimage())
+                    Some(peer.key.into_preimage().into())
                 } else {
                     None
                 }
             })
-            .take(self.config.num_results);
-
-        closest_peers
+            .take(self.config.num_results)
+            .collect()
     }
 
     /// Checks if the query is at capacity w.r.t. the permitted parallelism.
