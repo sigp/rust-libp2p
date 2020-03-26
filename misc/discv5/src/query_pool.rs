@@ -20,6 +20,7 @@
 
 mod peers;
 
+use enr::NodeId;
 pub use peers::closest::{FindNodeQuery, FindNodeQueryConfig};
 pub use peers::predicate::{PredicateQuery, PredicateQueryConfig};
 pub use peers::{QueryState, ReturnPeer};
@@ -33,32 +34,26 @@ use std::time::Instant;
 /// Internally, a `Query` is in turn driven by an underlying `QueryPeerIter`
 /// that determines the peer selection strategy, i.e. the order in which the
 /// peers involved in the query should be contacted.
-pub struct QueryPool<TTarget, TNodeId, TVal> {
+pub struct QueryPool<TTarget, TNodeId> {
     next_id: usize,
-    queries: FnvHashMap<QueryId, Query<TTarget, ResponsePeer<TNodeId, TVal>>>,
+    queries: FnvHashMap<QueryId, Query<TTarget, TNodeId>>,
 }
 
 /// The observable states emitted by [`QueryPool::poll`].
-pub enum QueryPoolState<'a, TTarget, TNodeId, TVal> {
+pub enum QueryPoolState<'a, TTarget, TNodeId> {
     /// The pool is idle, i.e. there are no queries to process.
     Idle,
     /// At least one query is waiting for results. `Some(request)` indicates
     /// that a new request is now being waited on.
-    Waiting(
-        Option<(
-            &'a mut Query<TTarget, ResponsePeer<TNodeId, TVal>>,
-            ReturnPeer<TNodeId>,
-        )>,
-    ),
+    Waiting(Option<(&'a mut Query<TTarget, TNodeId>, ReturnPeer<TNodeId>)>),
     /// A query has finished.
-    Finished(Query<TTarget, ResponsePeer<TNodeId, TVal>>),
+    Finished(Query<TTarget, TNodeId>),
 }
 
-impl<TTarget, TNodeId, TVal> QueryPool<TTarget, TNodeId, TVal>
+impl<TTarget, TNodeId> QueryPool<TTarget, TNodeId>
 where
     TTarget: Into<Key<TTarget>> + Clone,
-    TNodeId: Into<Key<TNodeId>> + Eq + Clone,
-    TVal: Into<Key<TVal>> + Eq + Clone,
+    TNodeId: Into<NodeId> + Into<Key<TNodeId>> + Eq + Clone,
 {
     /// Creates a new `QueryPool` with the given configuration.
     pub fn new() -> Self {
@@ -69,12 +64,12 @@ where
     }
 
     /// Returns an iterator over the queries in the pool.
-    pub fn iter(&self) -> impl Iterator<Item = &Query<TTarget, TNodeId, TVal>> {
+    pub fn iter(&self) -> impl Iterator<Item = &Query<TTarget, TNodeId>> {
         self.queries.values()
     }
 
     /// Adds a query to the pool that iterates towards the closest peers to the target.
-    pub fn add_findnode_query<I>(
+    pub fn add_findnode_query<I, T>(
         &mut self,
         config: FindNodeQueryConfig,
         target: TTarget,
@@ -82,7 +77,8 @@ where
         iterations: usize,
     ) -> QueryId
     where
-        I: IntoIterator<Item = Key<TNodeId>>,
+        I: IntoIterator<Item = T>,
+        T: Into<NodeId> + Into<TNodeId>,
     {
         let findnode_query = FindNodeQuery::with_config(config, target.clone(), peers, iterations);
         let peer_iter = QueryPeerIter::FindNode(findnode_query);
@@ -90,29 +86,26 @@ where
     }
 
     /// Adds a query to the pool that returns peers that satisfy a predicate.
-    pub fn add_predicate_query<I>(
+    pub fn add_predicate_query<I, T>(
         &mut self,
         config: PredicateQueryConfig,
         target: TTarget,
         peers: I,
         iterations: usize,
-        predicate: impl Fn(&TVal, &[u8]) -> bool + 'static,
+        predicate: impl Fn(&T, &[u8]) -> bool + 'static,
         value: Vec<u8>,
     ) -> QueryId
     where
-        I: IntoIterator<Item = Key<TVal>>,
+        I: IntoIterator<Item = T>,
+        T: Into<NodeId> + Into<TNodeId>,
     {
         let predicate_query =
             PredicateQuery::with_config(config, target, peers, iterations, predicate, value);
-        let peer_iter = QueryPeerIter::Predicate(predicate_query);
+        let peer_iter = QueryPeerIter::Predicate(Box::new(predicate_query));
         self.add(peer_iter, target)
     }
 
-    fn add(
-        &mut self,
-        peer_iter: QueryPeerIter<TTarget, TNodeId, TVal>,
-        target: TTarget,
-    ) -> QueryId {
+    fn add(&mut self, peer_iter: QueryPeerIter<TTarget, TNodeId>, target: TTarget) -> QueryId {
         let id = QueryId(self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
         let query = Query::new(id, peer_iter, target);
@@ -121,12 +114,12 @@ where
     }
 
     /// Returns a mutablereference to a query with the given ID, if it is in the pool.
-    pub fn get_mut(&mut self, id: &QueryId) -> Option<&mut Query<TTarget, TNodeId, TVal>> {
+    pub fn get_mut(&mut self, id: &QueryId) -> Option<&mut Query<TTarget, TNodeId>> {
         self.queries.get_mut(id)
     }
 
     /// Polls the pool to advance the queries.
-    pub fn poll(&mut self) -> QueryPoolState<TTarget, TNodeId, TVal> {
+    pub fn poll(&mut self) -> QueryPoolState<TTarget, TNodeId> {
         let mut finished = None;
         let mut waiting = None;
 
@@ -167,34 +160,28 @@ where
 pub struct QueryId(pub usize);
 
 /// A query in a `QueryPool`.
-pub struct Query<TTarget, TNodeId, TVal> {
+pub struct Query<TTarget, TNodeId> {
     /// The unique ID of the query.
     id: QueryId,
     /// The peer iterator that drives the query state.
-    peer_iter: QueryPeerIter<TTarget, TNodeId, TVal>,
+    peer_iter: QueryPeerIter<TTarget, TNodeId>,
     /// Target we are looking for
     target: TTarget,
 }
 
-enum ResponsePeer<TNodeId, TVal> {
-    Node(TNodeId),
-    Val(TVal),
-}
-
 /// The peer selection strategies that can be used by queries.
-enum QueryPeerIter<TTarget, TNodeId, TVal> {
+enum QueryPeerIter<TTarget, TNodeId> {
     FindNode(FindNodeQuery<TTarget, TNodeId>),
-    Predicate(PredicateQuery<TTarget, TVal>),
+    Predicate(PredicateQuery<TTarget, TNodeId, enr::Enr<enr::CombinedKey>>),
 }
 
-impl<TTarget, TNodeId, TVal> Query<TTarget, TNodeId, TVal>
+impl<TTarget, TNodeId> Query<TTarget, TNodeId>
 where
     TTarget: Into<Key<TTarget>> + Clone,
-    TNodeId: Into<Key<TNodeId>> + Eq + Clone,
-    TVal: Into<Key<TVal>> + Eq + Clone,
+    TNodeId: Into<NodeId> + Into<Key<TNodeId>> + Eq + Clone,
 {
     /// Creates a new query without starting it.
-    fn new(id: QueryId, peer_iter: QueryPeerIter<TTarget, TNodeId, TVal>, target: TTarget) -> Self {
+    fn new(id: QueryId, peer_iter: QueryPeerIter<TTarget, TNodeId>, target: TTarget) -> Self {
         Query {
             id,
             peer_iter,
@@ -208,29 +195,17 @@ where
     }
 
     /// Informs the query that the attempt to contact `peer` failed.
-    pub fn on_failure(&mut self, peer: &ResponsePeer<TNodeId, TVal>) {
+    pub fn on_failure(&mut self, peer: &TNodeId) {
         match &mut self.peer_iter {
-            QueryPeerIter::FindNode(iter) => {
-                if let ResponsePeer::Node(peer) = peer {
-                    iter.on_failure(peer);
-                }
-            }
-            QueryPeerIter::Predicate(iter) => {
-                if let ResponsePeer::Val(peer) = peer {
-                    iter.on_failure(peer);
-                }
-            }
+            QueryPeerIter::FindNode(iter) => iter.on_failure(peer),
+            QueryPeerIter::Predicate(iter) => iter.on_failure(peer),
         }
     }
 
     /// Informs the query that the attempt to contact `peer` succeeded,
     /// possibly resulting in new peers that should be incorporated into
     /// the query, if applicable.
-    pub fn on_success(
-        &mut self,
-        peer: &ResponsePeer<TNodeId, TVal>,
-        new_peers: Vec<ResponsePeer<TNodeId, TVal>>,
-    ) {
+    pub fn on_success(&mut self, peer: &TNodeId, new_peers: Vec<TNodeId>) {
         match &mut self.peer_iter {
             QueryPeerIter::FindNode(iter) => iter.on_success(peer, new_peers),
             QueryPeerIter::Predicate(iter) => iter.on_success(peer, new_peers),
@@ -242,17 +217,19 @@ where
         let now = Instant::now();
         match &mut self.peer_iter {
             QueryPeerIter::FindNode(iter) => iter.next(now),
+            QueryPeerIter::Predicate(iter) => iter.next(now),
         }
     }
 
     /// Consumes the query, producing the final `QueryResult`.
-    pub fn into_result(self) -> QueryResult<TTarget, impl Iterator<Item = TNodeId>> {
+    pub fn into_result(self) -> QueryResult<TTarget, impl Iterator<Item = NodeId>> {
         let peers = match self.peer_iter {
             QueryPeerIter::FindNode(iter) => iter.into_result(),
+            QueryPeerIter::Predicate(iter) => iter.into_result(),
         };
         QueryResult {
             target: self.target,
-            closest_peers: peers,
+            closest_peers: peers.into_iter(),
         }
     }
 
