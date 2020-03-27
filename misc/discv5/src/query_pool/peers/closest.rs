@@ -145,10 +145,7 @@ where
     /// If the query is finished, the query is not currently waiting for a
     /// result from `peer`, or a result for `peer` has already been reported,
     /// calling this function has no effect.
-    pub fn on_success(&mut self, node_id: &TNodeId, closer_peers: Vec<enr::Enr<enr::CombinedKey>>)
-    // where
-    //     T: Into<NodeId> + Into<Key<TNodeId>>,
-    {
+    pub fn on_success(&mut self, node_id: &TNodeId, closer_peers: Vec<enr::Enr<enr::CombinedKey>>) {
         if let QueryProgress::Finished = self.progress {
             return;
         }

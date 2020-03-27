@@ -290,7 +290,7 @@ impl<TSubstream> Discv5<TSubstream> {
         self.start_findnode_query(QueryType::FindNode(node_id));
     }
 
-    /// Starts a `FIND_ENR_PREDICATE` request.
+    /// Starts a `FIND_NODE` request.
     ///
     /// This will eventually produce an event containing <= `num` nodes which satisfy the
     /// `predicate` with passed `value`.
