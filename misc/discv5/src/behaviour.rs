@@ -260,7 +260,7 @@ impl<TSubstream> Discv5<TSubstream> {
         }
     }
 
-    /// Allows application layer to update local ENR's attestation subnet bitfield.
+    /// Allows application layer to insert an arbitrary field into the local ENR.
     pub fn enr_insert(&mut self, key: &str, value: Vec<u8>) -> Result<Option<Vec<u8>>, EnrError> {
         let result = self.service.enr_insert(key, value);
 
@@ -304,6 +304,12 @@ impl<TSubstream> Discv5<TSubstream> {
         F: Fn(&Enr<CombinedKey>, &[u8]) -> bool + Send + 'static,
     {
         self.start_predicate_query(QueryType::FindNode(node_id), predicate, value, num_nodes);
+    }
+
+    /// If an ENR is known for a PeerId it is returned.
+    pub fn enr_of_peer(&mut self, peer_id: &PeerId) -> Option<Enr<CombinedKey>> {
+        let node_id = self.known_peer_ids.get(peer_id)?.clone();
+        self.find_enr(&node_id)
     }
 
     // private functions //
