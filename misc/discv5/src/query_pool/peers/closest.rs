@@ -28,6 +28,9 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct FindNodeQuery<TTarget, TNodeId> {
+    /// Target we're looking for.
+    target: TTarget,
+
     /// The target key we are looking for
     target_key: Key<TTarget>,
 
@@ -117,6 +120,7 @@ where
         let progress = QueryProgress::Iterating { no_progress: 0 };
 
         FindNodeQuery {
+            target,
             config,
             target_key,
             progress,
@@ -483,24 +487,30 @@ enum QueryPeerState {
     Succeeded,
 }
 
-/*
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libp2p_core::PeerId;
+    use enr::{CombinedKey, Enr, EnrBuilder};
     use quickcheck::*;
     use rand::{thread_rng, Rng};
     use std::time::Duration;
 
-    type TestQuery = FindNodeQuery<PeerId, PeerId>;
+    type TestQuery = FindNodeQuery<NodeId, NodeId>;
 
-    fn random_peers(n: usize) -> impl Iterator<Item = PeerId> + Clone {
-        (0..n).map(|_| PeerId::random())
+    fn random_nodes(n: usize) -> impl Iterator<Item = NodeId> + Clone {
+        (0..n).map(|_| NodeId::random())
+    }
+
+    fn random_enr(n: usize) -> impl Iterator<Item = Enr<CombinedKey>> + Clone {
+        (0..n).map(|_| {
+            let key = CombinedKey::generate_secp256k1();
+            EnrBuilder::new("v4").build(&key).unwrap()
+        })
     }
 
     fn random_query<G: Rng>(g: &mut G) -> TestQuery {
-        let known_closest_peers = random_peers(g.gen_range(1, 60)).map(Key::from);
-        let target = PeerId::random();
+        let known_closest_peers = random_nodes(g.gen_range(1, 60)).map(Key::from);
+        let target = NodeId::random();
         let config = FindNodeQueryConfig {
             parallelism: g.gen_range(1, 10),
             num_results: g.gen_range(1, 25),
@@ -510,7 +520,7 @@ mod tests {
         FindNodeQuery::with_config(config, target, known_closest_peers, iterations)
     }
 
-    fn sorted(target: &Key<PeerId>, peers: &Vec<Key<PeerId>>) -> bool {
+    fn sorted(target: &Key<NodeId>, peers: &Vec<Key<NodeId>>) -> bool {
         peers
             .windows(2)
             .all(|w| w[0].distance(&target) < w[1].distance(&target))
@@ -548,7 +558,7 @@ mod tests {
             "Unexpected peers in progress in new query."
         );
         assert_eq!(
-            query.into_result().count(),
+            query.into_result().iter().count(),
             0,
             "Unexpected closest peers in new query"
         );
@@ -607,8 +617,10 @@ mod tests {
                 for (i, k) in expected.iter().enumerate() {
                     if rng.gen_bool(0.75) {
                         let num_closer = rng.gen_range(0, query.config.num_results + 1);
-                        let closer_peers = random_peers(num_closer).collect::<Vec<_>>();
-                        remaining.extend(closer_peers.iter().cloned().map(Key::from));
+                        let closer_peers = random_enr(num_closer).collect::<Vec<_>>();
+                        // let _: () = remaining;
+                        remaining
+                            .extend(closer_peers.iter().map(|x| Key::from(x.node_id().clone())));
                         query.on_success(k.preimage(), closer_peers);
                     } else {
                         num_failures += 1;
@@ -638,7 +650,7 @@ mod tests {
             let target = query.target.clone();
             let num_results = query.config.num_results;
             let result = query.into_result();
-            let closest = result.map(Key::from).collect::<Vec<_>>();
+            let closest = result.into_iter().map(Key::from).collect::<Vec<_>>();
 
             // assert_eq!(result.target, target);
             assert!(sorted(&Key::from(target), &closest));
@@ -663,7 +675,7 @@ mod tests {
     fn no_duplicates() {
         fn prop(mut query: TestQuery) -> bool {
             let now = Instant::now();
-            let closer = random_peers(1).collect::<Vec<_>>();
+            let closer = random_enr(1).collect::<Vec<_>>();
 
             // A first peer reports a "closer" peer.
             let peer1 = match query.next(now) {
@@ -688,7 +700,7 @@ mod tests {
             let n = query
                 .closest_peers
                 .values()
-                .filter(|e| e.key.preimage() == &closer[0])
+                .filter(|e| e.key.preimage() == &closer[0].node_id())
                 .count();
             assert_eq!(n, 1);
 
@@ -734,12 +746,12 @@ mod tests {
 
             let finished = query.progress == QueryProgress::Finished;
             query.on_success(&peer, Vec::new());
-            let closest = query.into_result().collect::<Vec<_>>();
+            let closest = query.into_result();
 
             if finished {
                 // Delivering results when the query already finished must have
                 // no effect.
-                assert_eq!(Vec::<PeerId>::new(), closest);
+                assert_eq!(Vec::<NodeId>::new(), closest);
             } else {
                 // Unresponsive peers can still deliver results while the iterator
                 // is not finished.
@@ -751,4 +763,3 @@ mod tests {
         QuickCheck::new().tests(10).quickcheck(prop as fn(_) -> _)
     }
 }
-*/
