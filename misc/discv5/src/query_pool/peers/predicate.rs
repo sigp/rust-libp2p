@@ -7,9 +7,6 @@ use std::iter::FromIterator;
 use std::time::{Duration, Instant};
 
 pub struct PredicateQuery<TTarget, TNodeId> {
-    /// Target we're looking for.
-    target: TTarget,
-
     /// The target key we are looking for
     target_key: Key<TTarget>,
 
@@ -111,7 +108,6 @@ where
 
         PredicateQuery {
             config,
-            target,
             target_key,
             progress,
             closest_peers,
@@ -121,16 +117,6 @@ where
             value,
             peers: Vec::new(),
         }
-    }
-
-    /// Borrows the underlying target of the query.
-    pub fn target(&self) -> &TTarget {
-        &self.target
-    }
-
-    /// Mutably borrows the underlying target of the query.
-    pub fn target_mut(&mut self) -> &mut TTarget {
-        &mut self.target
     }
 
     /// Callback for delivering the result of a successful request to a peer

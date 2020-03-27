@@ -28,9 +28,6 @@ use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct FindNodeQuery<TTarget, TNodeId> {
-    /// Target we're looking for.
-    target: TTarget,
-
     /// The target key we are looking for
     target_key: Key<TTarget>,
 
@@ -121,7 +118,6 @@ where
 
         FindNodeQuery {
             config,
-            target,
             target_key,
             progress,
             closest_peers,
