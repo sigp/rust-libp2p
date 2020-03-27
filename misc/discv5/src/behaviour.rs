@@ -296,7 +296,7 @@ impl<TSubstream> Discv5<TSubstream> {
     /// `predicate` with passed `value`.
     pub fn find_enr_predicate<F>(&mut self, node_id: NodeId, predicate: F, value: &[u8])
     where
-        F: Fn(&Enr<CombinedKey>, &[u8]) -> bool + 'static,
+        F: Fn(&Enr<CombinedKey>, &[u8]) -> bool + Send + 'static,
     {
         self.start_predicate_query(QueryType::FindNode(node_id), predicate, value);
     }
@@ -737,7 +737,7 @@ impl<TSubstream> Discv5<TSubstream> {
     /// Internal function that starts a query.
     fn start_predicate_query<F>(&mut self, query_type: QueryType, predicate: F, value: &[u8])
     where
-        F: Fn(&Enr<CombinedKey>, &[u8]) -> bool + 'static,
+        F: Fn(&Enr<CombinedKey>, &[u8]) -> bool + Send + 'static,
     {
         let target = QueryInfo {
             query_type,

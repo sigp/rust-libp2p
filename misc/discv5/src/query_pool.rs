@@ -91,7 +91,7 @@ where
         target: TTarget,
         peers: I,
         iterations: usize,
-        predicate: impl Fn(&enr::Enr<enr::CombinedKey>, &[u8]) -> bool + 'static,
+        predicate: impl Fn(&enr::Enr<enr::CombinedKey>, &[u8]) -> bool + Send + 'static,
         value: Vec<u8>,
     ) -> QueryId
     where

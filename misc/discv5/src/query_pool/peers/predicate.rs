@@ -26,7 +26,7 @@ pub struct PredicateQuery<TTarget, TNodeId> {
     num_waiting: usize,
 
     /// The predicate function to be applied to filter the enr's found during the search.
-    predicate: Box<dyn Fn(&Enr<CombinedKey>, &[u8]) -> bool + 'static>,
+    predicate: Box<dyn Fn(&Enr<CombinedKey>, &[u8]) -> bool + Send + 'static>,
 
     /// The value to be passed to the predicate function to match against the enr value.
     value: Vec<u8>,
@@ -85,7 +85,7 @@ where
         target: TTarget,
         known_closest_peers: I,
         iterations: usize,
-        predicate: impl Fn(&Enr<CombinedKey>, &[u8]) -> bool + 'static,
+        predicate: impl Fn(&Enr<CombinedKey>, &[u8]) -> bool + Send + 'static,
         value: Vec<u8>,
     ) -> Self
     where

@@ -487,6 +487,7 @@ enum QueryPeerState {
     Succeeded,
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -754,3 +755,4 @@ mod tests {
         QuickCheck::new().tests(10).quickcheck(prop as fn(_) -> _)
     }
 }
+*/
