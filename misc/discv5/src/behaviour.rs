@@ -294,11 +294,16 @@ impl<TSubstream> Discv5<TSubstream> {
     ///
     /// This will eventually produce an event containing <= `num` nodes which satisfy the
     /// `predicate` with passed `value`.
-    pub fn find_enr_predicate<F>(&mut self, node_id: NodeId, predicate: F, value: &[u8])
-    where
+    pub fn find_enr_predicate<F>(
+        &mut self,
+        node_id: NodeId,
+        predicate: F,
+        value: &[u8],
+        num_nodes: usize,
+    ) where
         F: Fn(&Enr<CombinedKey>, &[u8]) -> bool + Send + 'static,
     {
-        self.start_predicate_query(QueryType::FindNode(node_id), predicate, value);
+        self.start_predicate_query(QueryType::FindNode(node_id), predicate, value, num_nodes);
     }
 
     // private functions //
@@ -735,8 +740,13 @@ impl<TSubstream> Discv5<TSubstream> {
     }
 
     /// Internal function that starts a query.
-    fn start_predicate_query<F>(&mut self, query_type: QueryType, predicate: F, value: &[u8])
-    where
+    fn start_predicate_query<F>(
+        &mut self,
+        query_type: QueryType,
+        predicate: F,
+        value: &[u8],
+        num_nodes: usize,
+    ) where
         F: Fn(&Enr<CombinedKey>, &[u8]) -> bool + Send + 'static,
     {
         let target = QueryInfo {
@@ -752,7 +762,8 @@ impl<TSubstream> Discv5<TSubstream> {
 
         let known_closest_peers = self.kbuckets.closest_keys(&target_key);
 
-        let query_config = PredicateQueryConfig::new_from_config(&self.config);
+        let mut query_config = PredicateQueryConfig::new_from_config(&self.config);
+        query_config.num_results = num_nodes;
         self.queries.add_predicate_query(
             query_config,
             target,
