@@ -216,7 +216,10 @@ where
     /// Informs the query that the attempt to contact `peer` succeeded,
     /// possibly resulting in new peers that should be incorporated into
     /// the query, if applicable.
-    pub fn on_success(&mut self, peer: &TNodeId, new_peers: Vec<TResult>) {
+    pub fn on_success<'a>(&mut self, peer: &TNodeId, new_peers: &'a Vec<TResult>)
+    where
+        &'a TResult: Into<TNodeId>,
+    {
         match &mut self.peer_iter {
             QueryPeerIter::FindNode(iter) => iter.on_success(
                 peer,

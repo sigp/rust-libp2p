@@ -129,7 +129,10 @@ where
     /// If the query is finished, the query is not currently waiting for a
     /// result from `peer`, or a result for `peer` has already been reported,
     /// calling this function has no effect.
-    pub fn on_success(&mut self, node_id: &TNodeId, closer_peers: Vec<TResult>) {
+    pub fn on_success<'a>(&mut self, node_id: &TNodeId, closer_peers: &'a [TResult])
+    where
+        &'a TResult: Into<TNodeId>,
+    {
         if let QueryProgress::Finished = self.progress {
             return;
         }
@@ -184,7 +187,7 @@ where
 
         // Incorporate the reported closer peers into the query.
         for result in closer_peers {
-            let key: TNodeId = result.clone().into();
+            let key: TNodeId = result.into();
             let key: Key<TNodeId> = key.into();
             let distance = self.target_key.distance(&key);
             let peer = QueryPeer::new(key, QueryPeerState::NotContacted);

@@ -832,7 +832,7 @@ impl<TSubstream> Discv5<TSubstream> {
                     peer_count += 1;
                 }
                 debug!("{} peers found for query id {:?}", peer_count, query_id);
-                query.on_success(source, others_iter.collect())
+                query.on_success(source, &others_iter.collect())
             }
         }
     }

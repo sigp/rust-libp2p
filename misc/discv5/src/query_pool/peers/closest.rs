@@ -21,7 +21,6 @@
 use super::*;
 use crate::config::Discv5Config;
 use crate::kbucket::{Distance, Key, MAX_NODES_PER_BUCKET};
-use enr::NodeId;
 use std::collections::btree_map::{BTreeMap, Entry};
 use std::iter::FromIterator;
 use std::time::{Duration, Instant};
@@ -477,6 +476,7 @@ enum QueryPeerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use enr::NodeId;
     use quickcheck::*;
     use rand::{thread_rng, Rng};
     use std::time::Duration;
