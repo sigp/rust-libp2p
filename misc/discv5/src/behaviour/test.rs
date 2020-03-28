@@ -532,21 +532,20 @@ fn test_predicate_search() {
     }
 
     // Predicate function for filtering enrs
-    let predicate = |enr: &Enr<CombinedKey>, value: &[u8]| {
+    let predicate = move |enr: &Enr<CombinedKey>| {
         if let Some(v) = enr.get("attnets") {
-            return *v == value;
+            return *v == required_attnet_value;
         } else {
             return false;
         }
     };
+
     // Start a find enr predicate query
     let target_random_node_id = target_node.local_enr().node_id();
-    swarms.first_mut().unwrap().find_enr_predicate(
-        target_random_node_id,
-        predicate,
-        required_attnet_value.as_slice(),
-        total_nodes,
-    );
+    swarms
+        .first_mut()
+        .unwrap()
+        .find_enr_predicate(target_random_node_id, predicate, total_nodes);
     swarms.push(bootstrap_node);
     Runtime::new()
         .unwrap()

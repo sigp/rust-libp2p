@@ -69,7 +69,7 @@ pub struct Discv5<TSubstream> {
     kbuckets: KBucketsTable<NodeId, Enr<CombinedKey>>,
 
     /// All the iterative queries we are currently performing.
-    queries: QueryPool<QueryInfo, NodeId>,
+    queries: QueryPool<QueryInfo, NodeId, Enr<CombinedKey>>,
 
     /// RPC requests that have been sent and are awaiting a response. Some requests are linked to a
     /// query.
@@ -286,24 +286,19 @@ impl<TSubstream> Discv5<TSubstream> {
     ///
     /// This will eventually produce an event containing the nodes of the DHT closest to the
     /// requested `PeerId`.
-    pub fn find_node(&mut self, node_id: NodeId) {
-        self.start_findnode_query(QueryType::FindNode(node_id));
+    pub fn find_node(&mut self, target_node: NodeId) {
+        self.start_findnode_query(target_node);
     }
 
     /// Starts a `FIND_NODE` request.
     ///
     /// This will eventually produce an event containing <= `num` nodes which satisfy the
     /// `predicate` with passed `value`.
-    pub fn find_enr_predicate<F>(
-        &mut self,
-        node_id: NodeId,
-        predicate: F,
-        value: &[u8],
-        num_nodes: usize,
-    ) where
-        F: Fn(&Enr<CombinedKey>, &[u8]) -> bool + Send + 'static,
+    pub fn find_enr_predicate<F>(&mut self, node_id: NodeId, predicate: F, num_nodes: usize)
+    where
+        F: Fn(&Enr<CombinedKey>) -> bool + Send + 'static,
     {
-        self.start_predicate_query(QueryType::FindNode(node_id), predicate, value, num_nodes);
+        self.start_predicate_query(node_id, predicate, num_nodes);
     }
 
     /// If an ENR is known for a PeerId it is returned.
@@ -723,9 +718,9 @@ impl<TSubstream> Discv5<TSubstream> {
     }
 
     /// Internal function that starts a query.
-    fn start_findnode_query(&mut self, query_type: QueryType) {
+    fn start_findnode_query(&mut self, target_node: NodeId) {
         let target = QueryInfo {
-            query_type,
+            query_type: QueryType::FindNode(target_node),
             untrusted_enrs: Default::default(),
         };
 
@@ -746,17 +741,12 @@ impl<TSubstream> Discv5<TSubstream> {
     }
 
     /// Internal function that starts a query.
-    fn start_predicate_query<F>(
-        &mut self,
-        query_type: QueryType,
-        predicate: F,
-        value: &[u8],
-        num_nodes: usize,
-    ) where
-        F: Fn(&Enr<CombinedKey>, &[u8]) -> bool + Send + 'static,
+    fn start_predicate_query<F>(&mut self, target_node: NodeId, predicate: F, num_nodes: usize)
+    where
+        F: Fn(&Enr<CombinedKey>) -> bool + Send + 'static,
     {
         let target = QueryInfo {
-            query_type,
+            query_type: QueryType::FindNode(target_node),
             untrusted_enrs: Default::default(),
         };
 
@@ -776,7 +766,6 @@ impl<TSubstream> Discv5<TSubstream> {
             known_closest_peers,
             query_iterations,
             predicate,
-            value.to_vec(),
         );
     }
 

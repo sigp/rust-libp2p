@@ -1,12 +1,11 @@
 use super::*;
 use crate::config::Discv5Config;
 use crate::kbucket::{Distance, Key, MAX_NODES_PER_BUCKET};
-use enr::{CombinedKey, Enr, NodeId};
 use std::collections::btree_map::{BTreeMap, Entry};
 use std::iter::FromIterator;
 use std::time::{Duration, Instant};
 
-pub struct PredicateQuery<TTarget, TNodeId> {
+pub struct PredicateQuery<TTarget, TNodeId, TResult> {
     /// The target key we are looking for
     target_key: Key<TTarget>,
 
@@ -22,14 +21,11 @@ pub struct PredicateQuery<TTarget, TNodeId> {
     /// The number of peers for which the query is currently waiting for results.
     num_waiting: usize,
 
-    /// The predicate function to be applied to filter the enr's found during the search.
-    predicate: Box<dyn Fn(&Enr<CombinedKey>, &[u8]) -> bool + Send + 'static>,
-
-    /// The value to be passed to the predicate function to match against the enr value.
-    value: Vec<u8>,
+    /// The predicate function to be applied to filter the ENR's found during the search.
+    predicate: Box<dyn Fn(&TResult) -> bool + Send + 'static>,
 
     /// Peers satisfying the predicate.
-    peers: Vec<NodeId>,
+    peers: Vec<TNodeId>,
 
     /// The configuration of the query.
     config: PredicateQueryConfig,
@@ -71,10 +67,11 @@ impl PredicateQueryConfig {
     }
 }
 
-impl<TTarget, TNodeId> PredicateQuery<TTarget, TNodeId>
+impl<TTarget, TNodeId, TResult> PredicateQuery<TTarget, TNodeId, TResult>
 where
     TTarget: Into<Key<TTarget>> + Clone,
-    TNodeId: From<NodeId> + Into<Key<TNodeId>> + Eq + Clone,
+    TNodeId: Into<Key<TNodeId>> + Eq + Clone,
+    TResult: Into<TNodeId> + Clone,
 {
     /// Creates a new query with the given configuration.
     pub fn with_config<I>(
@@ -82,8 +79,7 @@ where
         target: TTarget,
         known_closest_peers: I,
         iterations: usize,
-        predicate: impl Fn(&Enr<CombinedKey>, &[u8]) -> bool + Send + 'static,
-        value: Vec<u8>,
+        predicate: impl Fn(&TResult) -> bool + Send + 'static,
     ) -> Self
     where
         I: IntoIterator<Item = Key<TNodeId>>,
@@ -114,7 +110,6 @@ where
             iterations,
             num_waiting: 0,
             predicate: Box::new(predicate),
-            value,
             peers: Vec::new(),
         }
     }
@@ -134,7 +129,7 @@ where
     /// If the query is finished, the query is not currently waiting for a
     /// result from `peer`, or a result for `peer` has already been reported,
     /// calling this function has no effect.
-    pub fn on_success(&mut self, node_id: &TNodeId, closer_peers: Vec<Enr<CombinedKey>>) {
+    pub fn on_success(&mut self, node_id: &TNodeId, closer_peers: Vec<TResult>) {
         if let QueryProgress::Finished = self.progress {
             return;
         }
@@ -188,16 +183,15 @@ where
         let num_closest = self.closest_peers.len();
 
         // Incorporate the reported closer peers into the query.
-        for enr in closer_peers {
-            let key: NodeId = enr.node_id().clone();
-            let key: TNodeId = key.into();
+        for result in closer_peers {
+            let key: TNodeId = result.clone().into();
             let key: Key<TNodeId> = key.into();
             let distance = self.target_key.distance(&key);
             let peer = QueryPeer::new(key, QueryPeerState::NotContacted);
             self.closest_peers.entry(distance).or_insert(peer);
             // If enr satisfies the predicate, add to list of peers that satisfies predicate
-            if (self.predicate)(&enr, &self.value) {
-                self.peers.push(enr.node_id().clone());
+            if (self.predicate)(&result) {
+                self.peers.push(result.into());
             }
             // The query makes progress if the new peer is either closer to the target
             // than any peer seen so far (i.e. is the first entry), or the query did
@@ -347,7 +341,6 @@ where
     pub fn into_result(self) -> Vec<TNodeId> {
         self.peers
             .into_iter()
-            .map(|n| n.into())
             .take(self.config.num_results)
             .collect()
     }
