@@ -673,13 +673,6 @@ mod tests {
             };
 
             // The "closer" peer must only be in the query once.
-
-            dbg!(query
-                .closest_peers
-                .values()
-                .map(|v| v.key.preimage())
-                .collect::<Vec<_>>());
-
             let n = query
                 .closest_peers
                 .values()
