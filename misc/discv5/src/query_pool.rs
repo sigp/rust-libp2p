@@ -24,7 +24,7 @@ pub use peers::closest::{FindNodeQuery, FindNodeQueryConfig};
 pub use peers::predicate::{PredicateQuery, PredicateQueryConfig};
 pub use peers::{QueryState, ReturnPeer};
 
-use crate::kbucket::Key;
+use crate::kbucket::{Key, PredicateKey};
 use fnv::FnvHashMap;
 use std::time::Instant;
 
@@ -99,7 +99,7 @@ where
         predicate: impl Fn(&TResult) -> bool + Send + 'static,
     ) -> QueryId
     where
-        I: IntoIterator<Item = Key<TNodeId>>,
+        I: IntoIterator<Item = PredicateKey<TNodeId>>,
     {
         let predicate_query =
             PredicateQuery::with_config(config, target.clone(), peers, iterations, predicate);

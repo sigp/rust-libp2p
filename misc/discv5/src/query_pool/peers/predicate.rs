@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::Discv5Config;
-use crate::kbucket::{Distance, Key, MAX_NODES_PER_BUCKET};
+use crate::kbucket::{Distance, Key, PredicateKey, MAX_NODES_PER_BUCKET};
 use std::collections::btree_map::{BTreeMap, Entry};
 use std::iter::FromIterator;
 use std::time::{Duration, Instant};
@@ -23,9 +23,6 @@ pub struct PredicateQuery<TTarget, TNodeId, TResult> {
 
     /// The predicate function to be applied to filter the ENR's found during the search.
     predicate: Box<dyn Fn(&TResult) -> bool + Send + 'static>,
-
-    /// Peers satisfying the predicate.
-    peers: Vec<TNodeId>,
 
     /// The configuration of the query.
     config: PredicateQueryConfig,
@@ -82,7 +79,7 @@ where
         predicate: impl Fn(&TResult) -> bool + Send + 'static,
     ) -> Self
     where
-        I: IntoIterator<Item = Key<TNodeId>>,
+        I: IntoIterator<Item = PredicateKey<TNodeId>>,
     {
         let target_key = target.clone().into();
 
@@ -91,10 +88,12 @@ where
             known_closest_peers
                 .into_iter()
                 .map(|key| {
+                    let predicate_match = key.predicate_match;
                     let key: Key<TNodeId> = key.into();
                     let distance = key.distance(&target_key);
                     let state = QueryPeerState::NotContacted;
-                    (distance, QueryPeer::new(key, state))
+
+                    (distance, QueryPeer::new(key, state, predicate_match))
                 })
                 .take(config.num_results),
         );
@@ -110,7 +109,6 @@ where
             iterations,
             num_waiting: 0,
             predicate: Box::new(predicate),
-            peers: Vec::new(),
         }
     }
 
@@ -187,15 +185,13 @@ where
 
         // Incorporate the reported closer peers into the query.
         for result in closer_peers {
+            // If ENR satisfies the predicate, add to list of peers that satisfies predicate
+            let predicate_match = (self.predicate)(&result);
             let key: TNodeId = result.into();
             let key: Key<TNodeId> = key.into();
             let distance = self.target_key.distance(&key);
-            let peer = QueryPeer::new(key, QueryPeerState::NotContacted);
+            let peer = QueryPeer::new(key, QueryPeerState::NotContacted, predicate_match);
             self.closest_peers.entry(distance).or_insert(peer);
-            // If enr satisfies the predicate, add to list of peers that satisfies predicate
-            if (self.predicate)(&result) {
-                self.peers.push(result.into());
-            }
             // The query makes progress if the new peer is either closer to the target
             // than any peer seen so far (i.e. is the first entry), or the query did
             // not yet accumulate enough closest peers.
@@ -305,18 +301,23 @@ where
                         // `result_counter` did not yet reach `num_results`. Therefore
                         // the query is not yet done, regardless of already successful
                         // queries to peers farther from the target.
-                        result_counter = None;
+                        // Only count predicate peers.
+                        if peer.predicate_match {
+                            result_counter = None;
+                        }
                     }
                 }
 
                 QueryPeerState::Succeeded => {
                     if let Some(ref mut cnt) = result_counter {
-                        *cnt += 1;
-                        // If `num_results` successful results have been delivered for the
-                        // closest peers, the query is done.
-                        if *cnt >= self.config.num_results {
-                            self.progress = QueryProgress::Finished;
-                            return QueryState::Finished;
+                        if peer.predicate_match {
+                            *cnt += 1;
+                            // If `num_results` successful results have been delivered for the
+                            // closest peers, the query is done.
+                            if *cnt >= self.config.num_results {
+                                self.progress = QueryProgress::Finished;
+                                return QueryState::Finished;
+                            }
                         }
                     }
                 }
@@ -342,8 +343,19 @@ where
 
     /// Consumes the query, returning the peers who match the predicate.
     pub fn into_result(self) -> Vec<TNodeId> {
-        self.peers
+        self.closest_peers
             .into_iter()
+            .filter_map(|(_, peer)| {
+                if let QueryPeerState::Succeeded = peer.state {
+                    if peer.predicate_match {
+                        Some(peer.key.into_preimage())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
             .take(self.config.num_results)
             .collect()
     }
@@ -412,16 +424,20 @@ struct QueryPeer<TNodeId> {
     /// The number of peers that have been returned by this peer.
     peers_returned: usize,
 
+    /// Whether the peer has matched the predicate or not.
+    predicate_match: bool,
+
     /// The current query state of this peer.
     state: QueryPeerState,
 }
 
 impl<TNodeId> QueryPeer<TNodeId> {
-    pub fn new(key: Key<TNodeId>, state: QueryPeerState) -> Self {
+    pub fn new(key: Key<TNodeId>, state: QueryPeerState, predicate_match: bool) -> Self {
         QueryPeer {
             key,
             iteration: 1,
             peers_returned: 0,
+            predicate_match,
             state,
         }
     }

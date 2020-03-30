@@ -296,7 +296,7 @@ impl<TSubstream> Discv5<TSubstream> {
     /// `predicate` with passed `value`.
     pub fn find_enr_predicate<F>(&mut self, node_id: NodeId, predicate: F, num_nodes: usize)
     where
-        F: Fn(&Enr<CombinedKey>) -> bool + Send + 'static,
+        F: Fn(&Enr<CombinedKey>) -> bool + Send + Clone + 'static,
     {
         self.start_predicate_query(node_id, predicate, num_nodes);
     }
@@ -743,7 +743,7 @@ impl<TSubstream> Discv5<TSubstream> {
     /// Internal function that starts a query.
     fn start_predicate_query<F>(&mut self, target_node: NodeId, predicate: F, num_nodes: usize)
     where
-        F: Fn(&Enr<CombinedKey>) -> bool + Send + 'static,
+        F: Fn(&Enr<CombinedKey>) -> bool + Send + Clone + 'static,
     {
         let target = QueryInfo {
             query_type: QueryType::FindNode(target_node),
@@ -756,7 +756,9 @@ impl<TSubstream> Discv5<TSubstream> {
 
         let target_key: kbucket::Key<QueryInfo> = target.clone().into();
 
-        let known_closest_peers = self.kbuckets.closest_keys(&target_key);
+        let known_closest_peers = self
+            .kbuckets
+            .closest_keys_predicate(&target_key, predicate.clone());
 
         let mut query_config = PredicateQueryConfig::new_from_config(&self.config);
         query_config.num_results = num_nodes;
