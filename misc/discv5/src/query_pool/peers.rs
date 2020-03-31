@@ -39,6 +39,7 @@
 //! [`Finished`]: peers::PeersIterState::Finished
 
 pub mod closest;
+pub mod predicate;
 
 /// The state of the query reported by [`Query::next`].
 #[derive(Debug, Clone, PartialEq, Eq)]

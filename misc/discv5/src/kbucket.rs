@@ -83,6 +83,25 @@ const NUM_BUCKETS: usize = 256;
 /// Number of permitted nodes in the same /24 subnet
 const MAX_NODES_PER_SUBNET_TABLE: usize = 10;
 
+/// A key that can be returned from the `closest_keys` function, which indicates if the key matches the
+/// predicate or not.
+pub struct PredicateKey<TPeerId: Clone> {
+    pub key: Key<TPeerId>,
+    pub predicate_match: bool,
+}
+
+impl<TPeerId: Clone> AsRef<Key<TPeerId>> for PredicateKey<TPeerId> {
+    fn as_ref(&self) -> &Key<TPeerId> {
+        &self.key
+    }
+}
+
+impl<TPeerId: Clone> Into<Key<TPeerId>> for PredicateKey<TPeerId> {
+    fn into(self) -> Key<TPeerId> {
+        self.key
+    }
+}
+
 /// A `KBucketsTable` represents a Kademlia routing table.
 #[derive(Debug, Clone)]
 pub struct KBucketsTable<TPeerId, TVal> {
@@ -247,6 +266,34 @@ where
             buckets_iter: ClosestBucketsIter::new(distance),
             fmap: |b: &KBucket<_, _>| -> ArrayVec<_> {
                 b.iter().map(|(n, _)| n.key.clone()).collect()
+            },
+        }
+    }
+
+    /// Returns an iterator over the keys closest to `target`, ordered by
+    /// increasing distance specifying which keys agree with a value predicate.
+    pub fn closest_keys_predicate<'a, T, F>(
+        &'a mut self,
+        target: &'a Key<T>,
+        predicate: F,
+    ) -> impl Iterator<Item = PredicateKey<TPeerId>> + 'a
+    where
+        T: Clone,
+        F: Fn(&TVal) -> bool + 'a,
+    {
+        let distance = self.local_key.distance(target);
+        ClosestIter {
+            target,
+            iter: None,
+            table: self,
+            buckets_iter: ClosestBucketsIter::new(distance),
+            fmap: move |b: &KBucket<TPeerId, TVal>| -> ArrayVec<_> {
+                b.iter()
+                    .map(|(n, _)| PredicateKey {
+                        key: n.key.clone(),
+                        predicate_match: predicate(&n.value),
+                    })
+                    .collect()
             },
         }
     }
