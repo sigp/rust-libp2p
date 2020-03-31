@@ -70,8 +70,7 @@ fn build_swarms(n: usize, base_port: u16) -> Vec<SwarmType> {
 }
 
 /// Build `n` swarms using passed keypairs.
-fn build_swarms_from_keypairs(keys: Vec<identity::Keypair>) -> Vec<SwarmType> {
-    let base_port = 11000u16;
+fn build_swarms_from_keypairs(keys: Vec<identity::Keypair>, base_port: u16) -> Vec<SwarmType> {
     let mut swarms = Vec::new();
     let ip: IpAddr = "127.0.0.1".parse().unwrap();
 
@@ -208,12 +207,12 @@ fn find_seed_spread_bucket() {
 #[test]
 fn test_discovery_star_topology() {
     init();
-    let node_num = 10;
+    let total_nodes = 10;
     // Seed is chosen such that all nodes are in the 256th bucket of bootstrap
     let seed = 1652;
     // Generate `num_nodes` + bootstrap_node and target_node keypairs from given seed
-    let keypairs = generate_deterministic_keypair(node_num + 2, seed);
-    let mut swarms = build_swarms_from_keypairs(keypairs);
+    let keypairs = generate_deterministic_keypair(total_nodes + 2, seed);
+    let mut swarms = build_swarms_from_keypairs(keypairs, 11000);
     // Last node is bootstrap node in a star topology
     let mut bootstrap_node = swarms.remove(0);
     // target_node is not polled.
@@ -250,9 +249,9 @@ fn test_discovery_star_topology() {
                             println!(
                                 "Query found {} peers, Total peers {}",
                                 closer_peers.len(),
-                                node_num
+                                total_nodes
                             );
-                            assert!(closer_peers.len() == node_num);
+                            assert!(closer_peers.len() == total_nodes);
                             return Ok(Async::Ready(()));
                         }
                         Async::Ready(_) => (),
@@ -269,8 +268,8 @@ fn test_discovery_star_topology() {
 fn test_findnode_query() {
     init();
     // build a collection of 8 nodes
-    let node_num = 8;
-    let mut swarms = build_swarms(node_num, 30000);
+    let total_nodes = 8;
+    let mut swarms = build_swarms(total_nodes, 30000);
     let node_enrs: Vec<Enr<CombinedKey>> = swarms.iter().map(|n| n.local_enr().clone()).collect();
 
     // link the nodes together
@@ -296,7 +295,7 @@ fn test_findnode_query() {
     let expected_node_ids: Vec<NodeId> = node_enrs
         .iter()
         .map(|enr| enr.node_id().clone())
-        .take(node_num - 1)
+        .take(total_nodes - 1)
         .collect();
 
     let test_result = Arc::new(Mutex::new(true));
@@ -481,4 +480,97 @@ fn test_bucket_limits() {
         discv5.kbuckets_entries().collect::<Vec<_>>().len(),
         bucket_limit
     );
+}
+
+fn update_enr(swarm: &mut SwarmType, key: &str, value: &[u8]) -> bool {
+    if let Ok(_) = swarm.enr_insert(key, value.to_vec()) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+#[test]
+fn test_predicate_search() {
+    init();
+    let total_nodes = 10;
+    // Seed is chosen such that all nodes are in the 256th bucket of bootstrap
+    let seed = 1652;
+    // Generate `num_nodes` + bootstrap_node and target_node keypairs from given seed
+    let keypairs = generate_deterministic_keypair(total_nodes + 2, seed);
+    let mut swarms = build_swarms_from_keypairs(keypairs, 12000);
+    // Last node is bootstrap node in a star topology
+    let mut bootstrap_node = swarms.remove(0);
+    // target_node is not polled.
+    let target_node = swarms.pop().unwrap();
+
+    // Update `num_nodes` with the required attnet value
+    let num_nodes = total_nodes / 2;
+    let required_attnet_value = vec![1, 0, 0, 0];
+    let unwanted_attnet_value = vec![0, 0, 0, 0];
+    println!("Bootstrap node: {}", bootstrap_node.local_enr().node_id());
+    println!("Target node: {}", target_node.local_enr().node_id());
+
+    for (i, swarm) in swarms.iter_mut().enumerate() {
+        let key: kbucket::Key<NodeId> = swarm.local_enr().node_id().into();
+        let distance = key
+            .log2_distance(&bootstrap_node.local_enr().node_id().into())
+            .unwrap();
+        println!(
+            "Distance of node {} relative to node {}: {}",
+            swarm.local_enr().node_id(),
+            bootstrap_node.local_enr().node_id(),
+            distance
+        );
+        swarm.add_enr(bootstrap_node.local_enr().clone()).unwrap();
+        if i % 2 == 0 {
+            update_enr(swarm, "attnets", &unwanted_attnet_value);
+        } else {
+            update_enr(swarm, "attnets", &required_attnet_value);
+        }
+        bootstrap_node.add_enr(swarm.local_enr().clone()).unwrap();
+    }
+
+    // Predicate function for filtering enrs
+    let predicate = move |enr: &Enr<CombinedKey>| {
+        if let Some(v) = enr.get("attnets") {
+            return *v == required_attnet_value;
+        } else {
+            return false;
+        }
+    };
+
+    // Start a find enr predicate query
+    let target_random_node_id = target_node.local_enr().node_id();
+    swarms
+        .first_mut()
+        .unwrap()
+        .find_enr_predicate(target_random_node_id, predicate, total_nodes);
+    swarms.push(bootstrap_node);
+    Runtime::new()
+        .unwrap()
+        .block_on(future::poll_fn(move || -> Result<_, io::Error> {
+            for swarm in swarms.iter_mut() {
+                loop {
+                    match swarm.poll().unwrap() {
+                        Async::Ready(Some(Discv5Event::FindNodeResult {
+                            closer_peers, ..
+                        })) => {
+                            println!(
+                                "Query found {} peers, Total peers {}",
+                                closer_peers.len(),
+                                total_nodes
+                            );
+                            println!("Nodes expected to pass predicate search {}", num_nodes);
+                            assert!(closer_peers.len() == num_nodes);
+                            return Ok(Async::Ready(()));
+                        }
+                        Async::Ready(_) => (),
+                        Async::NotReady => break,
+                    }
+                }
+            }
+            Ok(Async::NotReady)
+        }))
+        .unwrap();
 }
