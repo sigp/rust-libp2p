@@ -152,12 +152,13 @@ impl<TSubstream> Discv5<TSubstream> {
         // build the sesison service
         let service = SessionService::new(local_enr, enr_key, listen_socket, config.clone())?;
 
+        let query_timeout = config.query_timeout;
         Ok(Discv5 {
             events: SmallVec::new(),
             config,
             known_peer_ids: HashMap::new(),
             kbuckets: KBucketsTable::new(node_id.into(), Duration::from_secs(60)),
-            queries: QueryPool::new(),
+            queries: QueryPool::new(query_timeout),
             active_rpc_requests: Default::default(),
             active_nodes_responses: HashMap::new(),
             ip_votes,
@@ -1125,6 +1126,10 @@ where
                     }
                     QueryPoolState::Waiting(Some((query, return_peer))) => {
                         waiting_query = Some((query.id(), query.target().clone(), return_peer));
+                        break;
+                    }
+                    QueryPoolState::Timeout(query) => {
+                        warn!("Query id: {:?} timed out", query.id());
                         break;
                     }
                     QueryPoolState::Waiting(None) | QueryPoolState::Idle => break,
