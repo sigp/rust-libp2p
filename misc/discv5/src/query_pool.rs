@@ -26,7 +26,7 @@ pub use peers::{QueryState, ReturnPeer};
 
 use crate::kbucket::{Key, PredicateKey};
 use fnv::FnvHashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// A `QueryPool` provides an aggregate state machine for driving `Query`s to completion.
 ///
@@ -35,6 +35,7 @@ use std::time::Instant;
 /// peers involved in the query should be contacted.
 pub struct QueryPool<TTarget, TNodeId, TResult> {
     next_id: usize,
+    query_timeout: Duration,
     queries: FnvHashMap<QueryId, Query<TTarget, TNodeId, TResult>>,
 }
 
@@ -52,6 +53,8 @@ pub enum QueryPoolState<'a, TTarget, TNodeId, TResult> {
     ),
     /// A query has finished.
     Finished(Query<TTarget, TNodeId, TResult>),
+    /// A query has timed out.
+    Timeout(Query<TTarget, TNodeId, TResult>),
 }
 
 impl<TTarget, TNodeId, TResult> QueryPool<TTarget, TNodeId, TResult>
@@ -61,9 +64,10 @@ where
     TResult: Into<TNodeId> + Clone,
 {
     /// Creates a new `QueryPool` with the given configuration.
-    pub fn new() -> Self {
+    pub fn new(query_timeout: Duration) -> Self {
         QueryPool {
             next_id: 0,
+            query_timeout,
             queries: Default::default(),
         }
     }
@@ -126,11 +130,14 @@ where
 
     /// Polls the pool to advance the queries.
     pub fn poll(&mut self) -> QueryPoolState<TTarget, TNodeId, TResult> {
+        let now = Instant::now();
         let mut finished = None;
         let mut waiting = None;
+        let mut timeout = None;
 
         for (&query_id, query) in self.queries.iter_mut() {
-            match query.next() {
+            query.started = query.started.or(Some(now));
+            match query.next(now) {
                 QueryState::Finished => {
                     finished = Some(query_id);
                     break;
@@ -139,7 +146,13 @@ where
                     waiting = Some((query_id, return_peer));
                     break;
                 }
-                QueryState::Waiting(None) | QueryState::WaitingAtCapacity => {}
+                QueryState::Waiting(None) | QueryState::WaitingAtCapacity => {
+                    let elapsed = now - query.started.unwrap_or(now);
+                    if elapsed >= self.query_timeout {
+                        timeout = Some(query_id);
+                        break;
+                    }
+                }
             }
         }
 
@@ -151,6 +164,11 @@ where
         if let Some(query_id) = finished {
             let query = self.queries.remove(&query_id).expect("s.a.");
             return QueryPoolState::Finished(query);
+        }
+
+        if let Some(query_id) = timeout {
+            let query = self.queries.remove(&query_id).expect("s.a.");
+            return QueryPoolState::Timeout(query);
         }
 
         if self.queries.is_empty() {
@@ -171,6 +189,9 @@ pub struct Query<TTarget, TNodeId, TResult> {
     id: QueryId,
     /// The peer iterator that drives the query state.
     peer_iter: QueryPeerIter<TTarget, TNodeId, TResult>,
+    /// The instant when the query started (i.e. began waiting for the first
+    /// result from a peer).
+    started: Option<Instant>,
     /// Target we are looking for.
     target: TTarget,
 }
@@ -197,6 +218,7 @@ where
             id,
             peer_iter,
             target,
+            started: None,
         }
     }
 
@@ -230,8 +252,7 @@ where
     }
 
     /// Advances the state of the underlying peer iterator.
-    fn next(&mut self) -> QueryState<TNodeId> {
-        let now = Instant::now();
+    fn next(&mut self, now: Instant) -> QueryState<TNodeId> {
         match &mut self.peer_iter {
             QueryPeerIter::FindNode(iter) => iter.next(now),
             QueryPeerIter::Predicate(iter) => iter.next(now),
