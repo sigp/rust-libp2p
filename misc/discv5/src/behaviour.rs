@@ -1130,6 +1130,7 @@ where
                     }
                     QueryPoolState::Timeout(query) => {
                         warn!("Query id: {:?} timed out", query.id());
+                        finished_query = Some(query);
                         break;
                     }
                     QueryPoolState::Waiting(None) | QueryPoolState::Idle => break,
