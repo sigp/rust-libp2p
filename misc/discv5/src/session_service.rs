@@ -283,12 +283,17 @@ impl SessionService {
         auth_tag: AuthTag,
     ) {
         // If a WHOAREYOU is already sent or a session is already established, ignore this request.
-        match self.sessions.get(node_id) {
-            Some(s) if s.trusted_established() || s.is_whoareyou_sent() => {
+        // However if a random packet was sent with an known ENR and this request has no known
+        // ENR. Use the ENR of the previously established Session.
+        let mut remote_enr = remote_enr;
+        if let Some(prev_session) = self.sessions.get(node_id) {
+            if prev_session.trusted_established() || prev_session.is_whoareyou_sent() {
                 warn!("Session exists. WhoAreYou packet not sent");
                 return;
             }
-            _ => {}
+            if remote_enr.is_none() && prev_session.remote_enr().is_some() {
+                remote_enr = prev_session.remote_enr().clone();
+            }
         }
 
         debug!("Sending WHOAREYOU packet to: {}", node_id);
@@ -351,25 +356,33 @@ impl SessionService {
         // sent during an establishing a connection, or their session has expired on one of our
         // sent messages and we need to re-encrypt it.
         let message = {
-            if let Packet::RandomPacket { .. } = req.packet {
-                // get the messages that are waiting for an established session
-                let messages = self
-                    .pending_messages
-                    .get_mut(&src_id)
-                    .ok_or_else(|| warn!("No pending messages found for WHOAREYOU request."))?;
+            match req.packet {
+                Packet::RandomPacket { .. } => {
+                    // get the messages that are waiting for an established session
+                    let messages = self
+                        .pending_messages
+                        .get_mut(&src_id)
+                        .ok_or_else(|| warn!("No pending messages found for WHOAREYOU request."))?;
 
-                if messages.is_empty() {
-                    // This could happen for an established connection and another peer (from the
-                    // the same socketaddr) sends a WHOAREYOU packet
-                    debug!("No pending messages found for WHOAREYOU request.");
+                    if messages.is_empty() {
+                        // This could happen for an established connection and another peer (from the
+                        // the same socketaddr) sends a WHOAREYOU packet
+                        debug!("No pending messages found for WHOAREYOU request.");
+                        return Err(());
+                    }
+                    // select the first message in the queue
+                    messages.remove(0)
+                }
+                Packet::WhoAreYou { .. } => {
+                    // a WhoAreYou packet was received in response to a WHOAREYOU.
+                    warn!("A WHOAREYOU packet was received in response to a WHOAREYOU. Dropping packet and marking messages as failed");
                     return Err(());
                 }
-                // select the first message in the queue
-                messages.remove(0)
-            } else {
-                // re-send the original message
-                req.message
-                    .expect("All non-random requests must have an unencrypted message")
+                _ => {
+                    // re-send the original message
+                    req.message
+                        .expect("All non-random requests must have an unencrypted message")
+                }
             }
         };
 

@@ -59,7 +59,7 @@ impl PredicateQueryConfig {
         Self {
             parallelism: config.query_parallelism,
             num_results: MAX_NODES_PER_BUCKET,
-            peer_timeout: config.query_timeout,
+            peer_timeout: config.query_peer_timeout,
         }
     }
 }
