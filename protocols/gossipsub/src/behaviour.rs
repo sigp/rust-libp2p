@@ -111,7 +111,7 @@ impl<TSubstream> Gossipsub<TSubstream> {
                 gs_config.history_length,
                 gs_config.message_id_fn,
             ),
-            received: LruCache::new(256), // keep track of the last 256 messages
+            received: LruCache::new(100_000), // keep track of the last 256 messages
             heartbeat: Interval::new(
                 Instant::now() + gs_config.heartbeat_initial_delay,
                 gs_config.heartbeat_interval,
