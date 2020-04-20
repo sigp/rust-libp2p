@@ -389,12 +389,6 @@ impl<TSubstream> Discv5<TSubstream> {
             }
             match res {
                 rpc::Response::Nodes { total, mut nodes } => {
-                    trace!(
-                        "Received a nodes response of len: {}, total: {}, from node_id: {}",
-                        nodes.len(),
-                        total,
-                        node_id
-                    );
                     // Currently a maximum of 16 peers can be returned. Datagrams have a max
                     // size of 1280 and ENR's have a max size of 300 bytes. There should be no
                     // more than 5 responses, to return 16 peers.
@@ -499,7 +493,7 @@ impl<TSubstream> Discv5<TSubstream> {
                             let req = rpc::Request::FindNode { distance: 0 };
                             self.send_rpc_request(&node_id, req, None);
                         }
-                        self.connection_updated(node_id.clone(), None, NodeStatus::Connected)
+                        self.connection_updated(node_id.clone(), Some(enr), NodeStatus::Connected)
                     }
                 }
                 _ => {} //TODO: Implement all RPC methods
