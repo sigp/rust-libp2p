@@ -112,6 +112,16 @@ impl Packet {
         }
     }
 
+    /// Returns true if the packet is a RANDOM packet.
+    pub fn is_random(&self) -> bool {
+        match &self {
+            Packet::RandomPacket { .. } => true,
+            Packet::AuthMessage { .. } => false,
+            Packet::Message { .. } => false,
+            Packet::WhoAreYou { .. } => false,
+        }
+    }
+
     /// Encodes a packet to bytes.
     pub fn encode(&self) -> Vec<u8> {
         match self {
