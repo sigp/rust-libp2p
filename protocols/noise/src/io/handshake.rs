@@ -24,16 +24,19 @@ mod payload_proto {
     include!(concat!(env!("OUT_DIR"), "/payload.proto.rs"));
 }
 
+use super::NoiseOutput;
 use crate::error::NoiseError;
-use crate::protocol::{Protocol, PublicKey, KeypairIdentity};
 use crate::io::SnowState;
-use libp2p_core::identity;
+use crate::protocol::{KeypairIdentity, Protocol, PublicKey};
+use futures::io::AsyncReadExt;
 use futures::prelude::*;
 use futures::task;
-use futures::io::AsyncReadExt;
+use libp2p_core::identity;
 use prost::Message;
-use std::{pin::Pin, task::Context};
-use super::NoiseOutput;
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 /// The identity of the remote established during a handshake.
 pub enum RemoteIdentity<C> {
@@ -59,7 +62,7 @@ pub enum RemoteIdentity<C> {
     /// > **Note**: To rule out active attacks like a MITM, trust in the public key must
     /// > still be established, e.g. by comparing the key against an expected or
     /// > otherwise known public key.
-    IdentityKey(identity::PublicKey)
+    IdentityKey(identity::PublicKey),
 }
 
 /// The options for identity exchange in an authenticated handshake.
@@ -87,14 +90,12 @@ pub enum IdentityExchange {
     ///
     /// The remote identity is known, thus identities must be mutually known
     /// in order for the handshake to succeed.
-    None { remote: identity::PublicKey }
+    None { remote: identity::PublicKey },
 }
 
 /// A future performing a Noise handshake pattern.
 pub struct Handshake<T, C>(
-    Pin<Box<dyn Future<
-        Output = Result<(RemoteIdentity<C>, NoiseOutput<T>), NoiseError>,
-    > + Send>>
+    Pin<Box<dyn Future<Output = Result<(RemoteIdentity<C>, NoiseOutput<T>), NoiseError>> + Send>>,
 );
 
 impl<T, C> Future for Handshake<T, C> {
@@ -126,11 +127,11 @@ pub fn rt1_initiator<T, C>(
     io: T,
     session: Result<snow::HandshakeState, NoiseError>,
     identity: KeypairIdentity,
-    identity_x: IdentityExchange
+    identity_x: IdentityExchange,
 ) -> Handshake<T, C>
 where
     T: AsyncWrite + AsyncRead + Send + Unpin + 'static,
-    C: Protocol<C> + AsRef<[u8]>
+    C: Protocol<C> + AsRef<[u8]>,
 {
     Handshake(Box::pin(async move {
         let mut state = State::new(io, session, identity, identity_x)?;
@@ -164,7 +165,7 @@ pub fn rt1_responder<T, C>(
 ) -> Handshake<T, C>
 where
     T: AsyncWrite + AsyncRead + Send + Unpin + 'static,
-    C: Protocol<C> + AsRef<[u8]>
+    C: Protocol<C> + AsRef<[u8]>,
 {
     Handshake(Box::pin(async move {
         let mut state = State::new(io, session, identity, identity_x)?;
@@ -196,11 +197,11 @@ pub fn rt15_initiator<T, C>(
     io: T,
     session: Result<snow::HandshakeState, NoiseError>,
     identity: KeypairIdentity,
-    identity_x: IdentityExchange
+    identity_x: IdentityExchange,
 ) -> Handshake<T, C>
 where
     T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
-    C: Protocol<C> + AsRef<[u8]>
+    C: Protocol<C> + AsRef<[u8]>,
 {
     Handshake(Box::pin(async move {
         let mut state = State::new(io, session, identity, identity_x)?;
@@ -233,11 +234,11 @@ pub fn rt15_responder<T, C>(
     io: T,
     session: Result<snow::HandshakeState, NoiseError>,
     identity: KeypairIdentity,
-    identity_x: IdentityExchange
+    identity_x: IdentityExchange,
 ) -> Handshake<T, C>
 where
     T: AsyncWrite + AsyncRead + Unpin + Send + 'static,
-    C: Protocol<C> + AsRef<[u8]>
+    C: Protocol<C> + AsRef<[u8]>,
 {
     Handshake(Box::pin(async move {
         let mut state = State::new(io, session, identity, identity_x)?;
@@ -276,40 +277,37 @@ impl<T> State<T> {
         io: T,
         session: Result<snow::HandshakeState, NoiseError>,
         identity: KeypairIdentity,
-        identity_x: IdentityExchange
+        identity_x: IdentityExchange,
     ) -> Result<Self, NoiseError> {
         let (id_remote_pubkey, send_identity) = match identity_x {
             IdentityExchange::Mutual => (None, true),
             IdentityExchange::Send { remote } => (Some(remote), true),
             IdentityExchange::Receive => (None, false),
-            IdentityExchange::None { remote } => (Some(remote), false)
+            IdentityExchange::None { remote } => (Some(remote), false),
         };
-        session.map(|s|
-            State {
-                identity,
-                io: NoiseOutput::new(io, SnowState::Handshake(s)),
-                dh_remote_pubkey_sig: None,
-                id_remote_pubkey,
-                send_identity
-            }
-        )
+        session.map(|s| State {
+            identity,
+            io: NoiseOutput::new(io, SnowState::Handshake(s)),
+            dh_remote_pubkey_sig: None,
+            id_remote_pubkey,
+            send_identity,
+        })
     }
 }
 
-impl<T> State<T>
-{
+impl<T> State<T> {
     /// Finish a handshake, yielding the established remote identity and the
     /// [`NoiseOutput`] for communicating on the encrypted channel.
     fn finish<C>(self) -> Result<(RemoteIdentity<C>, NoiseOutput<T>), NoiseError>
     where
-        C: Protocol<C> + AsRef<[u8]>
+        C: Protocol<C> + AsRef<[u8]>,
     {
         let dh_remote_pubkey = match self.io.session.get_remote_static() {
             None => None,
             Some(k) => match C::public_from_bytes(k) {
                 Err(e) => return Err(e),
-                Ok(dh_pk) => Some(dh_pk)
-            }
+                Ok(dh_pk) => Some(dh_pk),
+            },
         };
         match self.io.session.into_transport_mode() {
             Err(e) => Err(e.into()),
@@ -321,11 +319,17 @@ impl<T> State<T>
                         if C::verify(&id_pk, &dh_pk, &self.dh_remote_pubkey_sig) {
                             RemoteIdentity::IdentityKey(id_pk)
                         } else {
-                            return Err(NoiseError::InvalidKey)
+                            return Err(NoiseError::InvalidKey);
                         }
                     }
                 };
-                Ok((remote, NoiseOutput { session: SnowState::Transport(s), .. self.io }))
+                Ok((
+                    remote,
+                    NoiseOutput {
+                        session: SnowState::Transport(s),
+                        ..self.io
+                    },
+                ))
             }
         }
     }
@@ -337,7 +341,7 @@ impl<T> State<T>
 /// A future for receiving a Noise handshake message with an empty payload.
 async fn recv_empty<T>(state: &mut State<T>) -> Result<(), NoiseError>
 where
-    T: AsyncRead + Unpin
+    T: AsyncRead + Unpin,
 {
     state.io.read(&mut []).await?;
     Ok(())
@@ -346,7 +350,7 @@ where
 /// A future for sending a Noise handshake message with an empty payload.
 async fn send_empty<T>(state: &mut State<T>) -> Result<(), NoiseError>
 where
-    T: AsyncWrite + Unpin
+    T: AsyncWrite + Unpin,
 {
     state.io.write(&[]).await?;
     state.io.flush().await?;
@@ -359,12 +363,11 @@ async fn recv_identity<T>(state: &mut State<T>) -> Result<(), NoiseError>
 where
     T: AsyncRead + Unpin,
 {
-    let mut len_buf = [0,0];
-    state.io.read_exact(&mut len_buf).await?;
-    let len = u16::from_be_bytes(len_buf) as usize;
+    log::debug!("Reading identity");
+    let mut payload_buf = Vec::with_capacity(64);
 
-    let mut payload_buf = vec![0; len];
-    state.io.read_exact(&mut payload_buf).await?;
+    let bytes_read = ReadToEnd::new(&mut state.io, &mut payload_buf).await?;
+    log::debug!("Total bytes read: {}", bytes_read);
     let pb = payload_proto::NoiseHandshakePayload::decode(&payload_buf[..])?;
 
     if !pb.identity_key.is_empty() {
@@ -372,7 +375,7 @@ where
             .map_err(|_| NoiseError::InvalidKey)?;
         if let Some(ref k) = state.id_remote_pubkey {
             if k != &pk {
-                return Err(NoiseError::InvalidKey)
+                return Err(NoiseError::InvalidKey);
             }
         }
         state.id_remote_pubkey = Some(pk);
@@ -397,10 +400,130 @@ where
         pb.identity_sig = sig.clone()
     }
     let mut buf = Vec::with_capacity(pb.encoded_len());
-    pb.encode(&mut buf).expect("Vec<u8> provides capacity as needed");
-    let len = (buf.len() as u16).to_be_bytes();
-    state.io.write_all(&len).await?;
+    pb.encode(&mut buf)
+        .expect("Vec<u8> provides capacity as needed");
     state.io.write_all(&buf).await?;
     state.io.flush().await?;
     Ok(())
+}
+
+// NOTE: THIS IS A VERY DIRTY HACK AS A TEMPORARY WORKAROUND
+// Hack to read identity buffer without a length prefix
+//
+// Modified AsyncReadExt::ReadToEnd()
+use std::io;
+use std::ptr;
+
+#[inline]
+unsafe fn initialize<R: AsyncRead>(_reader: &R, buf: &mut [u8]) {
+    #[cfg(feature = "read-initializer")]
+    {
+        if !_reader.initializer().should_initialize() {
+            return;
+        }
+    }
+    ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len())
+}
+
+#[derive(Debug)]
+pub struct ReadToEnd<'a, R: ?Sized> {
+    reader: &'a mut R,
+    buf: &'a mut Vec<u8>,
+    start_len: usize,
+}
+
+impl<R: ?Sized + Unpin> Unpin for ReadToEnd<'_, R> {}
+
+impl<'a, R: AsyncRead + ?Sized + Unpin> ReadToEnd<'a, R> {
+    pub(super) fn new(reader: &'a mut R, buf: &'a mut Vec<u8>) -> Self {
+        let start_len = buf.len();
+        Self {
+            reader,
+            buf,
+            start_len,
+        }
+    }
+}
+
+struct Guard<'a> {
+    buf: &'a mut Vec<u8>,
+    len: usize,
+}
+
+impl Drop for Guard<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.buf.set_len(self.len);
+        }
+    }
+}
+
+// This uses an adaptive system to extend the vector when it fills. We want to
+// avoid paying to allocate and zero a huge chunk of memory if the reader only
+// has 4 bytes while still making large reads if the reader does have a ton
+// of data to return. Simply tacking on an extra DEFAULT_BUF_SIZE space every
+// time is 4,500 times (!) slower than this if the reader has a very small
+// amount of data to return.
+//
+// Because we're extending the buffer with uninitialized data for trusted
+// readers, we need to make sure to truncate that if any of this panics.
+pub(super) fn read_to_end_internal<R: AsyncRead + ?Sized>(
+    mut rd: Pin<&mut R>,
+    cx: &mut Context<'_>,
+    buf: &mut Vec<u8>,
+    start_len: usize,
+) -> Poll<io::Result<usize>> {
+    let mut g = Guard {
+        len: buf.len(),
+        buf,
+    };
+    let mut first_poll = true;
+    let ret;
+    loop {
+        if g.len == g.buf.len() {
+            unsafe {
+                g.buf.reserve(32);
+                let capacity = g.buf.capacity();
+                g.buf.set_len(capacity);
+                initialize(&rd, &mut g.buf[g.len..]);
+            }
+        }
+
+        match rd.as_mut().poll_read(cx, &mut g.buf[g.len..]) {
+            Poll::Ready(Ok(0)) => {
+                ret = Poll::Ready(Ok(g.len - start_len));
+                break;
+            }
+            Poll::Ready(Ok(n)) => {
+                g.len += n;
+                first_poll = false;
+            }
+            Poll::Pending => {
+                if first_poll {
+                    return Poll::Pending;
+                } else {
+                    ret = Poll::Ready(Ok(g.len - start_len));
+                    break;
+                }
+            }
+            Poll::Ready(Err(e)) => {
+                ret = Poll::Ready(Err(e));
+                break;
+            }
+        }
+    }
+
+    ret
+}
+
+impl<A> Future for ReadToEnd<'_, A>
+where
+    A: AsyncRead + ?Sized + Unpin,
+{
+    type Output = io::Result<usize>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = &mut *self;
+        read_to_end_internal(Pin::new(&mut this.reader), cx, this.buf, this.start_len)
+    }
 }
