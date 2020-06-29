@@ -33,10 +33,7 @@ use futures::prelude::*;
 use futures::task;
 use libp2p_core::identity;
 use prost::Message;
-use std::{
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::{pin::Pin, task::Context};
 
 /// The identity of the remote established during a handshake.
 pub enum RemoteIdentity<C> {
@@ -364,11 +361,10 @@ where
     T: AsyncRead + Unpin,
 {
     log::debug!("Reading identity");
-    let mut payload_buf = Vec::with_capacity(64);
-
-    let bytes_read = ReadToEnd::new(&mut state.io, &mut payload_buf).await?;
+    let mut payload_buf = [0u8; 128];
+    let bytes_read = state.io.read(&mut payload_buf).await?;
     log::debug!("Total bytes read: {}", bytes_read);
-    let pb = payload_proto::NoiseHandshakePayload::decode(&payload_buf[..])?;
+    let pb = payload_proto::NoiseHandshakePayload::decode(&payload_buf[..bytes_read])?;
 
     if !pb.identity_key.is_empty() {
         let pk = identity::PublicKey::from_protobuf_encoding(&pb.identity_key)
@@ -405,125 +401,4 @@ where
     state.io.write_all(&buf).await?;
     state.io.flush().await?;
     Ok(())
-}
-
-// NOTE: THIS IS A VERY DIRTY HACK AS A TEMPORARY WORKAROUND
-// Hack to read identity buffer without a length prefix
-//
-// Modified AsyncReadExt::ReadToEnd()
-use std::io;
-use std::ptr;
-
-#[inline]
-unsafe fn initialize<R: AsyncRead>(_reader: &R, buf: &mut [u8]) {
-    #[cfg(feature = "read-initializer")]
-    {
-        if !_reader.initializer().should_initialize() {
-            return;
-        }
-    }
-    ptr::write_bytes(buf.as_mut_ptr(), 0, buf.len())
-}
-
-#[derive(Debug)]
-pub struct ReadToEnd<'a, R: ?Sized> {
-    reader: &'a mut R,
-    buf: &'a mut Vec<u8>,
-    start_len: usize,
-}
-
-impl<R: ?Sized + Unpin> Unpin for ReadToEnd<'_, R> {}
-
-impl<'a, R: AsyncRead + ?Sized + Unpin> ReadToEnd<'a, R> {
-    pub(super) fn new(reader: &'a mut R, buf: &'a mut Vec<u8>) -> Self {
-        let start_len = buf.len();
-        Self {
-            reader,
-            buf,
-            start_len,
-        }
-    }
-}
-
-struct Guard<'a> {
-    buf: &'a mut Vec<u8>,
-    len: usize,
-}
-
-impl Drop for Guard<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            self.buf.set_len(self.len);
-        }
-    }
-}
-
-// This uses an adaptive system to extend the vector when it fills. We want to
-// avoid paying to allocate and zero a huge chunk of memory if the reader only
-// has 4 bytes while still making large reads if the reader does have a ton
-// of data to return. Simply tacking on an extra DEFAULT_BUF_SIZE space every
-// time is 4,500 times (!) slower than this if the reader has a very small
-// amount of data to return.
-//
-// Because we're extending the buffer with uninitialized data for trusted
-// readers, we need to make sure to truncate that if any of this panics.
-pub(super) fn read_to_end_internal<R: AsyncRead + ?Sized>(
-    mut rd: Pin<&mut R>,
-    cx: &mut Context<'_>,
-    buf: &mut Vec<u8>,
-    start_len: usize,
-) -> Poll<io::Result<usize>> {
-    let mut g = Guard {
-        len: buf.len(),
-        buf,
-    };
-    let mut first_poll = true;
-    let ret;
-    loop {
-        if g.len == g.buf.len() {
-            unsafe {
-                g.buf.reserve(32);
-                let capacity = g.buf.capacity();
-                g.buf.set_len(capacity);
-                initialize(&rd, &mut g.buf[g.len..]);
-            }
-        }
-
-        match rd.as_mut().poll_read(cx, &mut g.buf[g.len..]) {
-            Poll::Ready(Ok(0)) => {
-                ret = Poll::Ready(Ok(g.len - start_len));
-                break;
-            }
-            Poll::Ready(Ok(n)) => {
-                g.len += n;
-                first_poll = false;
-            }
-            Poll::Pending => {
-                if first_poll {
-                    return Poll::Pending;
-                } else {
-                    ret = Poll::Ready(Ok(g.len - start_len));
-                    break;
-                }
-            }
-            Poll::Ready(Err(e)) => {
-                ret = Poll::Ready(Err(e));
-                break;
-            }
-        }
-    }
-
-    ret
-}
-
-impl<A> Future for ReadToEnd<'_, A>
-where
-    A: AsyncRead + ?Sized + Unpin,
-{
-    type Output = io::Result<usize>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = &mut *self;
-        read_to_end_internal(Pin::new(&mut this.reader), cx, this.buf, this.start_len)
-    }
 }
