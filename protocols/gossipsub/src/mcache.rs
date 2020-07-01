@@ -72,17 +72,22 @@ impl MessageCache {
         }
     }
 
-    /// Put a message into the memory cache
-    pub fn put(&mut self, msg: GossipsubMessage) {
+    /// Put a message into the memory cache.
+    ///
+    /// Returns the message if it already exists.
+    pub fn put(&mut self, msg: GossipsubMessage) -> Option<GossipsubMessage> {
         let message_id = (self.msg_id)(&msg);
         let cache_entry = CacheEntry {
             mid: message_id.clone(),
             topics: msg.topics.clone(),
         };
 
-        self.msgs.insert(message_id, msg);
-
-        self.history[0].push(cache_entry);
+        let seen_message = self.msgs.insert(message_id, msg);
+        if seen_message.is_none() {
+            // Don't add duplicate entries to the cache.
+            self.history[0].push(cache_entry);
+        }
+        seen_message
     }
 
     /// Get a message with `message_id`
@@ -142,6 +147,8 @@ mod tests {
             data,
             sequence_number,
             topics,
+            signature: None,
+            key: None,
         };
         m
     }

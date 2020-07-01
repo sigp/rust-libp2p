@@ -80,24 +80,17 @@ enum OutboundSubstreamState {
 
 impl GossipsubHandler {
     /// Builds a new `GossipsubHandler`.
-    pub fn new(protocol_id: impl Into<Cow<'static, [u8]>>, max_transmit_size: usize) -> Self {
+    pub fn new(
+        protocol_id: impl Into<Cow<'static, [u8]>>,
+        max_transmit_size: usize,
+        verify_signatures: bool,
+    ) -> Self {
         GossipsubHandler {
             listen_protocol: SubstreamProtocol::new(ProtocolConfig::new(
                 protocol_id,
                 max_transmit_size,
+                verify_signatures,
             )),
-            inbound_substream: None,
-            outbound_substream: None,
-            send_queue: SmallVec::new(),
-            keep_alive: KeepAlive::Yes,
-        }
-    }
-}
-
-impl Default for GossipsubHandler {
-    fn default() -> Self {
-        GossipsubHandler {
-            listen_protocol: SubstreamProtocol::new(ProtocolConfig::default()),
             inbound_substream: None,
             outbound_substream: None,
             send_queue: SmallVec::new(),
@@ -198,9 +191,9 @@ impl ProtocolsHandler for GossipsubHandler {
                             return Poll::Ready(ProtocolsHandlerEvent::Custom(message));
                         }
                         Poll::Ready(Some(Err(e))) => {
-                            debug!("Inbound substream error while awaiting input: {:?}", e);
+                            warn!("Invalid message received. Error: {}", e);
                             self.inbound_substream =
-                                Some(InboundSubstreamState::Closing(substream));
+                                Some(InboundSubstreamState::WaitingInput(substream));
                         }
                         // peer closed the stream
                         Poll::Ready(None) => {

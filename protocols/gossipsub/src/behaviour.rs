@@ -18,25 +18,23 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-use crate::config::GossipsubConfig;
+use crate::config::{GossipsubConfig, Signing};
+use crate::error::PublishError;
 use crate::handler::GossipsubHandler;
 use crate::mcache::MessageCache;
 use crate::protocol::{
     GossipsubControlAction, GossipsubMessage, GossipsubSubscription, GossipsubSubscriptionAction,
-    MessageId,
+    MessageId, SIGNING_PREFIX,
 };
+use crate::rpc_proto;
 use crate::topic::{Topic, TopicHash};
 use futures::prelude::*;
-use libp2p_core::{Multiaddr, PeerId, connection::ConnectionId};
+use libp2p_core::{connection::ConnectionId, identity::error::SigningError, Multiaddr, PeerId};
 use libp2p_swarm::{
-    NetworkBehaviour,
-    NetworkBehaviourAction,
-    NotifyHandler,
-    PollParameters,
-    ProtocolsHandler
+    NetworkBehaviour, NetworkBehaviourAction, NotifyHandler, PollParameters, ProtocolsHandler,
 };
 use log::{debug, error, info, trace, warn};
-use lru::LruCache;
+use prost::Message;
 use rand;
 use rand::{seq::SliceRandom, thread_rng};
 use std::{
@@ -62,8 +60,9 @@ pub struct Gossipsub {
     /// Pools non-urgent control messages between heartbeats.
     control_pool: HashMap<PeerId, Vec<GossipsubControlAction>>,
 
-    /// Peer id of the local node. Used for the source of the messages that we publish.
-    local_peer_id: PeerId,
+    /// The `PeerId` that will be the source of published messages. This can be set to an arbitrary
+    /// PeerId when the config is initialised via the `Signing` enum.
+    message_author: PeerId,
 
     /// A map of all connected peers - A map of topic hash to a list of gossipsub peer Ids.
     topic_peers: HashMap<TopicHash, Vec<PeerId>>,
@@ -83,43 +82,57 @@ pub struct Gossipsub {
     /// Message cache for the last few heartbeats.
     mcache: MessageCache,
 
-    // We keep track of the messages we received (in the format `string(source ID, seq_no)`) so that
-    // we don't dispatch the same message twice if we receive it twice on the network.
-    received: LruCache<MessageId, ()>,
-
     /// Heartbeat interval stream.
     heartbeat: Interval,
+
+    /// The public `peer_id` to add to messages if signing is enabled and the current libp2p key is
+    /// not inlined in the `PeerId`.  
+    key: Option<Vec<u8>>,
 }
 
 impl Gossipsub {
-    /// Creates a `Gossipsub` struct given a set of parameters specified by `gs_config`.
-    pub fn new(local_peer_id: PeerId, gs_config: GossipsubConfig) -> Self {
-        let local_peer_id = if gs_config.no_source_id {
-            PeerId::from_bytes(crate::config::IDENTITY_SOURCE.to_vec()).expect("Valid peer id")
-        } else {
-            local_peer_id
+    /// Creates a `Gossipsub` struct given a set of parameters specified by via a `GossipsubConfig`.
+    pub fn new(config: GossipsubConfig) -> Self {
+        // Set up the router given the configuration settings.
+
+        // Set up the author and inlined key if required.
+        let (message_author, inlined_key) = match config.signing {
+            Signing::Enabled(ref kp) => {
+                let public_key = kp.public();
+                let key_enc = public_key.clone().into_protobuf_encoding();
+                let key = if key_enc.len() <= 42 {
+                    // The public key can be inlined in [`rpc_proto::Message::from`], so we don't include it
+                    // specifically in the [`rpc_proto::Message::key`] field.
+                    None
+                } else {
+                    // Include the protobuf encoding of the public key in the message.
+                    Some(key_enc)
+                };
+                (public_key.into_peer_id(), key)
+            }
+            Signing::Disabled(ref peer_id) => (peer_id.clone(), None),
         };
 
         Gossipsub {
-            config: gs_config.clone(),
             events: VecDeque::new(),
             control_pool: HashMap::new(),
-            local_peer_id,
+            message_author,
             topic_peers: HashMap::new(),
             peer_topics: HashMap::new(),
             mesh: HashMap::new(),
             fanout: HashMap::new(),
             fanout_last_pub: HashMap::new(),
             mcache: MessageCache::new(
-                gs_config.history_gossip,
-                gs_config.history_length,
-                gs_config.message_id_fn,
+                config.history_gossip,
+                config.history_length,
+                config.message_id_fn,
             ),
-            received: LruCache::new(256), // keep track of the last 256 messages
             heartbeat: Interval::new_at(
-                Instant::now() + gs_config.heartbeat_initial_delay,
-                gs_config.heartbeat_interval,
+                Instant::now() + config.heartbeat_initial_delay,
+                config.heartbeat_interval,
             ),
+            key: inlined_key,
+            config,
         }
     }
 
@@ -134,29 +147,26 @@ impl Gossipsub {
             return false;
         }
 
-        // send subscription request to all peers in the topic
-        if let Some(peer_list) = self.topic_peers.get(&topic_hash) {
-            let mut fixed_event = None; // initialise the event once if needed
-            if fixed_event.is_none() {
-                fixed_event = Some(Arc::new(GossipsubRpc {
-                    messages: Vec::new(),
-                    subscriptions: vec![GossipsubSubscription {
-                        topic_hash: topic_hash.clone(),
-                        action: GossipsubSubscriptionAction::Subscribe,
-                    }],
-                    control_msgs: Vec::new(),
-                }));
-            }
-
-            let event = fixed_event.expect("event has been initialised");
+        // send subscription request to all peers
+        let peer_list = self.peer_topics.keys().collect::<Vec<_>>();
+        if !peer_list.is_empty() {
+            let event = Arc::new(GossipsubRpc {
+                messages: Vec::new(),
+                subscriptions: vec![GossipsubSubscription {
+                    topic_hash: topic_hash.clone(),
+                    action: GossipsubSubscriptionAction::Subscribe,
+                }],
+                control_msgs: Vec::new(),
+            });
 
             for peer in peer_list {
                 debug!("Sending SUBSCRIBE to peer: {:?}", peer);
-                self.events.push_back(NetworkBehaviourAction::NotifyHandler {
-                    peer_id: peer.clone(),
-                    handler: NotifyHandler::Any,
-                    event: event.clone(),
-                });
+                self.events
+                    .push_back(NetworkBehaviourAction::NotifyHandler {
+                        peer_id: peer.clone(),
+                        handler: NotifyHandler::Any,
+                        event: event.clone(),
+                    });
             }
         }
 
@@ -180,29 +190,26 @@ impl Gossipsub {
             return false;
         }
 
-        // announce to all peers in the topic
-        let mut fixed_event = None; // initialise the event once if needed
-        if let Some(peer_list) = self.topic_peers.get(topic_hash) {
-            if fixed_event.is_none() {
-                fixed_event = Some(Arc::new(GossipsubRpc {
-                    messages: Vec::new(),
-                    subscriptions: vec![GossipsubSubscription {
-                        topic_hash: topic_hash.clone(),
-                        action: GossipsubSubscriptionAction::Unsubscribe,
-                    }],
-                    control_msgs: Vec::new(),
-                }));
-            }
-
-            let event = fixed_event.expect("event has been initialised");
+        // announce to all peers
+        let peer_list = self.peer_topics.keys().collect::<Vec<_>>();
+        if !peer_list.is_empty() {
+            let event = Arc::new(GossipsubRpc {
+                messages: Vec::new(),
+                subscriptions: vec![GossipsubSubscription {
+                    topic_hash: topic_hash.clone(),
+                    action: GossipsubSubscriptionAction::Unsubscribe,
+                }],
+                control_msgs: Vec::new(),
+            });
 
             for peer in peer_list {
                 debug!("Sending UNSUBSCRIBE to peer: {:?}", peer);
-                self.events.push_back(NetworkBehaviourAction::NotifyHandler {
-                    peer_id: peer.clone(),
-                    event: event.clone(),
-                    handler: NotifyHandler::Any,
-                });
+                self.events
+                    .push_back(NetworkBehaviourAction::NotifyHandler {
+                        peer_id: peer.clone(),
+                        event: event.clone(),
+                        handler: NotifyHandler::Any,
+                    });
             }
         }
 
@@ -215,41 +222,45 @@ impl Gossipsub {
     }
 
     /// Publishes a message to the network.
-    pub fn publish(&mut self, topic: &Topic, data: impl Into<Vec<u8>>) {
+    pub fn publish(&mut self, topic: &Topic, data: impl Into<Vec<u8>>) -> Result<(), PublishError> {
         self.publish_many(iter::once(topic.clone()), data)
     }
 
     /// Publishes a message with multiple topics to the network.
     pub fn publish_many(
         &mut self,
-        topic: impl IntoIterator<Item = Topic>,
+        topics: impl IntoIterator<Item = Topic>,
         data: impl Into<Vec<u8>>,
-    ) {
-        let message = GossipsubMessage {
-            source: self.local_peer_id.clone(),
-            data: data.into(),
-            // To be interoperable with the go-implementation this is treated as a 64-bit
-            // big-endian uint.
-            sequence_number: rand::random(),
-            topics: topic.into_iter().map(|t| self.topic_hash(t)).collect(),
-        };
+    ) -> Result<(), PublishError> {
+        let message = self.build_message(
+            topics.into_iter().map(|t| self.topic_hash(t)).collect(),
+            data.into(),
+        )?;
+        let msg_id = (self.config.message_id_fn)(&message);
+        // Add published message to our received caches
+        if self.mcache.put(message.clone()).is_some() {
+            // This message has already been seen. We don't re-publish messages that have already
+            // been published on the network.
+            warn!(
+                "Not publishing a message that has already been published. Msg-id {}",
+                msg_id
+            );
+            return Err(PublishError::Duplicate);
+        }
 
-        debug!(
-            "Publishing message: {:?}",
-            (self.config.message_id_fn)(&message)
-        );
+        debug!("Publishing message: {:?}", msg_id);
 
-        // forward the message to mesh peers
-        let local_peer_id = self.local_peer_id.clone();
-        self.forward_msg(message.clone(), &local_peer_id);
+        // Forward the message to mesh peers.
+        let message_source = &self.message_author.clone();
+        let mesh_peers_sent = self.forward_msg(message.clone(), message_source);
 
         let mut recipient_peers = HashSet::new();
         for topic_hash in &message.topics {
-            // if not subscribed to the topic, use fanout peers
+            // If not subscribed to the topic, use fanout peers.
             if self.mesh.get(&topic_hash).is_none() {
                 debug!("Topic: {:?} not in the mesh", topic_hash);
-                // build a list of peers to forward the message to
-                // if we have fanout peers add them to the map
+                // Build a list of peers to forward the message to
+                // if we have fanout peers add them to the map.
                 if self.fanout.contains_key(&topic_hash) {
                     for peer in self.fanout.get(&topic_hash).expect("Topic must exist") {
                         recipient_peers.insert(peer.clone());
@@ -274,12 +285,9 @@ impl Gossipsub {
             }
         }
 
-        // add published message to our received caches
-        let msg_id = (self.config.message_id_fn)(&message);
-        self.mcache.put(message.clone());
-        self.received.put(msg_id.clone(), ());
-
-        info!("Published message: {:?}", msg_id);
+        if recipient_peers.is_empty() && !mesh_peers_sent {
+            return Err(PublishError::InsufficientPeers);
+        }
 
         let event = Arc::new(GossipsubRpc {
             subscriptions: Vec::new(),
@@ -289,12 +297,16 @@ impl Gossipsub {
         // Send to peers we know are subscribed to the topic.
         for peer_id in recipient_peers.iter() {
             debug!("Sending message to peer: {:?}", peer_id);
-            self.events.push_back(NetworkBehaviourAction::NotifyHandler {
-                peer_id: peer_id.clone(),
-                event: event.clone(),
-                handler: NotifyHandler::Any,
-            });
+            self.events
+                .push_back(NetworkBehaviourAction::NotifyHandler {
+                    peer_id: peer_id.clone(),
+                    event: event.clone(),
+                    handler: NotifyHandler::Any,
+                });
         }
+
+        info!("Published message: {:?}", msg_id);
+        Ok(())
     }
 
     /// This function should be called when `config.manual_propagation` is `true` in order to
@@ -431,7 +443,7 @@ impl Gossipsub {
             }
 
             for id in ids {
-                if !self.received.contains(&id) {
+                if self.mcache.get(&id).is_none() {
                     // have not seen this message, request it
                     iwant_ids.insert(id);
                 }
@@ -470,15 +482,16 @@ impl Gossipsub {
             debug!("IWANT: Sending cached messages to peer: {:?}", peer_id);
             // Send the messages to the peer
             let message_list = cached_messages.into_iter().map(|entry| entry.1).collect();
-            self.events.push_back(NetworkBehaviourAction::NotifyHandler {
-                peer_id: peer_id.clone(),
-                handler: NotifyHandler::Any,
-                event: Arc::new(GossipsubRpc {
-                    subscriptions: Vec::new(),
-                    messages: message_list,
-                    control_msgs: Vec::new(),
-                }),
-            });
+            self.events
+                .push_back(NetworkBehaviourAction::NotifyHandler {
+                    peer_id: peer_id.clone(),
+                    handler: NotifyHandler::Any,
+                    event: Arc::new(GossipsubRpc {
+                        subscriptions: Vec::new(),
+                        messages: message_list,
+                        control_msgs: Vec::new(),
+                    }),
+                });
         }
         debug!("Completed IWANT handling for peer: {:?}", peer_id);
     }
@@ -518,15 +531,16 @@ impl Gossipsub {
                 "GRAFT: Not subscribed to topics -  Sending PRUNE to peer: {:?}",
                 peer_id
             );
-            self.events.push_back(NetworkBehaviourAction::NotifyHandler {
-                peer_id: peer_id.clone(),
-                handler: NotifyHandler::Any,
-                event: Arc::new(GossipsubRpc {
-                    subscriptions: Vec::new(),
-                    messages: Vec::new(),
-                    control_msgs: prune_messages,
-                }),
-            });
+            self.events
+                .push_back(NetworkBehaviourAction::NotifyHandler {
+                    peer_id: peer_id.clone(),
+                    handler: NotifyHandler::Any,
+                    event: Arc::new(GossipsubRpc {
+                        subscriptions: Vec::new(),
+                        messages: Vec::new(),
+                        control_msgs: prune_messages,
+                    }),
+                });
         }
         debug!("Completed GRAFT handling for peer: {:?}", peer_id);
     }
@@ -555,13 +569,10 @@ impl Gossipsub {
             "Handling message: {:?} from peer: {:?}",
             msg_id, propagation_source
         );
-        if self.received.put(msg_id.clone(), ()).is_some() {
+        if self.mcache.put(msg.clone()).is_some() {
             debug!("Message already received, ignoring. Message: {:?}", msg_id);
             return;
         }
-
-        // add to the memcache
-        self.mcache.put(msg.clone());
 
         // dispatch the message to the user
         if self.mesh.keys().any(|t| msg.topics.iter().any(|u| t == u)) {
@@ -689,8 +700,8 @@ impl Gossipsub {
             // too little peers - add some
             if peers.len() < self.config.mesh_n_low {
                 debug!(
-                    "HEARTBEAT: Mesh low. Topic: {:?} Contains: {:?} needs: {:?}",
-                    topic_hash.clone().into_string(),
+                    "HEARTBEAT: Mesh low. Topic: {} Contains: {} needs: {}",
+                    topic_hash,
                     peers.len(),
                     self.config.mesh_n_low
                 );
@@ -712,7 +723,7 @@ impl Gossipsub {
             // too many peers - remove some
             if peers.len() > self.config.mesh_n_high {
                 debug!(
-                    "HEARTBEAT: Mesh high. Topic: {:?} Contains: {:?} needs: {:?}",
+                    "HEARTBEAT: Mesh high. Topic: {} Contains: {} needs: {}",
                     topic_hash,
                     peers.len(),
                     self.config.mesh_n_high
@@ -862,15 +873,16 @@ impl Gossipsub {
             grafts.append(&mut prunes);
 
             // send the control messages
-            self.events.push_back(NetworkBehaviourAction::NotifyHandler {
-                peer_id: peer.clone(),
-                handler: NotifyHandler::Any,
-                event: Arc::new(GossipsubRpc {
-                    subscriptions: Vec::new(),
-                    messages: Vec::new(),
-                    control_msgs: grafts,
-                }),
-            });
+            self.events
+                .push_back(NetworkBehaviourAction::NotifyHandler {
+                    peer_id: peer.clone(),
+                    handler: NotifyHandler::Any,
+                    event: Arc::new(GossipsubRpc {
+                        subscriptions: Vec::new(),
+                        messages: Vec::new(),
+                        control_msgs: grafts,
+                    }),
+                });
         }
 
         // handle the remaining prunes
@@ -881,20 +893,22 @@ impl Gossipsub {
                     topic_hash: topic_hash.clone(),
                 })
                 .collect();
-            self.events.push_back(NetworkBehaviourAction::NotifyHandler {
-                peer_id: peer.clone(),
-                handler: NotifyHandler::Any,
-                event: Arc::new(GossipsubRpc {
-                    subscriptions: Vec::new(),
-                    messages: Vec::new(),
-                    control_msgs: remaining_prunes,
-                }),
-            });
+            self.events
+                .push_back(NetworkBehaviourAction::NotifyHandler {
+                    peer_id: peer.clone(),
+                    handler: NotifyHandler::Any,
+                    event: Arc::new(GossipsubRpc {
+                        subscriptions: Vec::new(),
+                        messages: Vec::new(),
+                        control_msgs: remaining_prunes,
+                    }),
+                });
         }
     }
 
     /// Helper function which forwards a message to mesh\[topic\] peers.
-    fn forward_msg(&mut self, message: GossipsubMessage, source: &PeerId) {
+    /// Returns true if at least one peer was messaged.
+    fn forward_msg(&mut self, message: GossipsubMessage, source: &PeerId) -> bool {
         let msg_id = (self.config.message_id_fn)(&message);
         debug!("Forwarding message: {:?}", msg_id);
         let mut recipient_peers = HashSet::new();
@@ -921,14 +935,61 @@ impl Gossipsub {
 
             for peer in recipient_peers.iter() {
                 debug!("Sending message: {:?} to peer {:?}", msg_id, peer);
-                self.events.push_back(NetworkBehaviourAction::NotifyHandler {
-                    peer_id: peer.clone(),
-                    event: event.clone(),
-                    handler: NotifyHandler::Any,
-                });
+                self.events
+                    .push_back(NetworkBehaviourAction::NotifyHandler {
+                        peer_id: peer.clone(),
+                        event: event.clone(),
+                        handler: NotifyHandler::Any,
+                    });
             }
+            debug!("Completed forwarding message");
+            true
+        } else {
+            false
         }
-        debug!("Completed forwarding message");
+    }
+
+    /// Constructs a `GossipsubMessage` performing message signing if required.
+    pub(crate) fn build_message(
+        &self,
+        topics: Vec<TopicHash>,
+        data: Vec<u8>,
+    ) -> Result<GossipsubMessage, SigningError> {
+        let sequence_number: u64 = rand::random();
+
+        // If a signature is required, generate it
+        let signature = if let Signing::Enabled(ref keypair) = self.config.signing {
+            let message = rpc_proto::Message {
+                from: Some(self.message_author.clone().into_bytes()),
+                data: Some(data.clone()),
+                seqno: Some(sequence_number.to_be_bytes().to_vec()),
+                topic_ids: topics.clone().into_iter().map(|t| t.into()).collect(),
+                signature: None,
+                key: None,
+            };
+
+            let mut buf = Vec::with_capacity(message.encoded_len());
+            message
+                .encode(&mut buf)
+                .expect("Buffer has sufficient capacity");
+            // the signature is over the bytes "libp2p-pubsub:<protobuf-message>"
+            let mut signature_bytes = SIGNING_PREFIX.to_vec();
+            signature_bytes.extend_from_slice(&buf);
+            Some(keypair.sign(&signature_bytes)?)
+        } else {
+            None
+        };
+
+        Ok(GossipsubMessage {
+            source: self.message_author.clone(),
+            data,
+            // To be interoperable with the go-implementation this is treated as a 64-bit
+            // big-endian uint.
+            sequence_number,
+            topics,
+            signature,
+            key: self.key.clone(),
+        })
     }
 
     /// Helper function to get a set of `n` random gossipsub peers for a `topic_hash`
@@ -984,15 +1045,16 @@ impl Gossipsub {
     /// Takes each control action mapping and turns it into a message
     fn flush_control_pool(&mut self) {
         for (peer, controls) in self.control_pool.drain() {
-            self.events.push_back(NetworkBehaviourAction::NotifyHandler {
-                peer_id: peer,
-                handler: NotifyHandler::Any,
-                event: Arc::new(GossipsubRpc {
-                    subscriptions: Vec::new(),
-                    messages: Vec::new(),
-                    control_msgs: controls,
-                }),
-            });
+            self.events
+                .push_back(NetworkBehaviourAction::NotifyHandler {
+                    peer_id: peer,
+                    handler: NotifyHandler::Any,
+                    event: Arc::new(GossipsubRpc {
+                        subscriptions: Vec::new(),
+                        messages: Vec::new(),
+                        control_msgs: controls,
+                    }),
+                });
         }
     }
 }
@@ -1002,9 +1064,17 @@ impl NetworkBehaviour for Gossipsub {
     type OutEvent = GossipsubEvent;
 
     fn new_handler(&mut self) -> Self::ProtocolsHandler {
+        // let the handler know if we should verify signatures. If message signing is enabled, we
+        // verify signatures of messages.
+        let verify_signatures = match self.config.signing {
+            Signing::Enabled(_) => true,
+            Signing::Disabled(_) => false,
+        };
+
         GossipsubHandler::new(
             self.config.protocol_id.clone(),
             self.config.max_transmit_size,
+            verify_signatures,
         )
     }
 
@@ -1025,15 +1095,16 @@ impl NetworkBehaviour for Gossipsub {
 
         if !subscriptions.is_empty() {
             // send our subscriptions to the peer
-            self.events.push_back(NetworkBehaviourAction::NotifyHandler {
-                peer_id: id.clone(),
-                handler: NotifyHandler::Any,
-                event: Arc::new(GossipsubRpc {
-                    messages: Vec::new(),
-                    subscriptions,
-                    control_msgs: Vec::new(),
-                }),
-            });
+            self.events
+                .push_back(NetworkBehaviourAction::NotifyHandler {
+                    peer_id: id.clone(),
+                    handler: NotifyHandler::Any,
+                    event: Arc::new(GossipsubRpc {
+                        messages: Vec::new(),
+                        subscriptions,
+                        control_msgs: Vec::new(),
+                    }),
+                });
         }
 
         // For the time being assume all gossipsub peers
@@ -1145,16 +1216,22 @@ impl NetworkBehaviour for Gossipsub {
             // clone send event reference if others references are present
             match event {
                 NetworkBehaviourAction::NotifyHandler {
-                    peer_id, handler, event: send_event,
+                    peer_id,
+                    handler,
+                    event: send_event,
                 } => match Arc::try_unwrap(send_event) {
                     Ok(event) => {
                         return Poll::Ready(NetworkBehaviourAction::NotifyHandler {
-                            peer_id, event, handler
+                            peer_id,
+                            event,
+                            handler,
                         });
                     }
                     Err(event) => {
                         return Poll::Ready(NetworkBehaviourAction::NotifyHandler {
-                            peer_id, event: (*event).clone(), handler
+                            peer_id,
+                            event: (*event).clone(),
+                            handler,
                         });
                     }
                 },

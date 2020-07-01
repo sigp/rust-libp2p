@@ -33,10 +33,11 @@ mod tests {
         topics: Vec<String>,
         to_subscribe: bool,
     ) -> (Gossipsub, Vec<PeerId>, Vec<TopicHash>) {
-        // generate a default GossipsubConfig
-        let gs_config = GossipsubConfig::default();
+        let keypair = libp2p_core::identity::Keypair::generate_secp256k1();
+        // generate a default GossipsubConfig with signing
+        let gs_config = GossipsubConfig::new(Signing::Enabled(keypair));
         // create a gossipsub struct
-        let mut gs: Gossipsub = Gossipsub::new(PeerId::random(), gs_config);
+        let mut gs: Gossipsub = Gossipsub::new(gs_config);
 
         let mut topic_hashes = vec![];
 
@@ -53,10 +54,7 @@ mod tests {
         for _ in 0..peer_no {
             let peer = PeerId::random();
             peers.push(peer.clone());
-            <Gossipsub as NetworkBehaviour>::inject_connected(
-                &mut gs,
-                &peer,
-            );
+            <Gossipsub as NetworkBehaviour>::inject_connected(&mut gs, &peer);
             if to_subscribe {
                 gs.handle_received_subscriptions(
                     &topic_hashes
@@ -315,9 +313,16 @@ mod tests {
             "Subscribe should add a new entry to the mesh[topic] hashmap"
         );
 
+        // peers should be subscribed to the topic
+        assert!(
+            gs.topic_peers.get(&topic_hashes[0]).map(|p| p.is_empty()) == Some(false),
+            "Peers should be subscribed to the topic"
+        );
+
         // publish on topic
         let publish_data = vec![0; 42];
-        gs.publish(&Topic::new(publish_topic), publish_data);
+        gs.publish(&Topic::new(publish_topic), publish_data)
+            .unwrap();
 
         // Collect all publish messages
         let publishes = gs
@@ -345,10 +350,6 @@ mod tests {
             gs.mcache.get(&msg_id).is_some(),
             "Message cache should contain published message"
         );
-        assert!(
-            gs.received.get(&msg_id).is_some(),
-            "Received cache should contain published message"
-        );
     }
 
     /// Test local node publish to unsubscribed topic
@@ -374,7 +375,8 @@ mod tests {
 
         // Publish on unsubscribed topic
         let publish_data = vec![0; 42];
-        gs.publish(&Topic::new(fanout_topic.clone()), publish_data);
+        gs.publish(&Topic::new(fanout_topic.clone()), publish_data)
+            .unwrap();
 
         assert_eq!(
             gs.fanout
@@ -411,10 +413,6 @@ mod tests {
         assert!(
             gs.mcache.get(&msg_id).is_some(),
             "Message cache should contain published message"
-        );
-        assert!(
-            gs.received.get(&msg_id).is_some(),
-            "Received cache should contain published message"
         );
     }
 
@@ -557,9 +555,10 @@ mod tests {
     /// Test Gossipsub.get_random_peers() function
     fn test_get_random_peers() {
         // generate a default GossipsubConfig
-        let gs_config = GossipsubConfig::default();
+        let key = libp2p_core::identity::Keypair::generate_secp256k1();
+        let gs_config = GossipsubConfig::new(Signing::Enabled(key));
         // create a gossipsub struct
-        let mut gs: Gossipsub = Gossipsub::new(PeerId::random(), gs_config);
+        let mut gs: Gossipsub = Gossipsub::new(gs_config);
 
         // create a topic and fill it with some peers
         let topic_hash = Topic::new("Test".into()).no_hash().clone();
@@ -570,28 +569,22 @@ mod tests {
 
         gs.topic_peers.insert(topic_hash.clone(), peers.clone());
 
-        let random_peers =
-            Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 5, |_| true);
+        let random_peers = Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 5, |_| true);
         assert!(random_peers.len() == 5, "Expected 5 peers to be returned");
-        let random_peers =
-            Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 30, |_| true);
+        let random_peers = Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 30, |_| true);
         assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
         assert!(random_peers == peers, "Expected no shuffling");
-        let random_peers =
-            Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 20, |_| true);
+        let random_peers = Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 20, |_| true);
         assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
         assert!(random_peers == peers, "Expected no shuffling");
-        let random_peers =
-            Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 0, |_| true);
+        let random_peers = Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 0, |_| true);
         assert!(random_peers.len() == 0, "Expected 0 peers to be returned");
         // test the filter
-        let random_peers =
-            Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 5, |_| false);
+        let random_peers = Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 5, |_| false);
         assert!(random_peers.len() == 0, "Expected 0 peers to be returned");
-        let random_peers =
-            Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 10, {
-                |peer| peers.contains(peer)
-            });
+        let random_peers = Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 10, {
+            |peer| peers.contains(peer)
+        });
         assert!(random_peers.len() == 10, "Expected 10 peers to be returned");
     }
 
@@ -607,6 +600,8 @@ mod tests {
             data: vec![1, 2, 3, 4],
             sequence_number: 1u64,
             topics: Vec::new(),
+            signature: None,
+            key: None,
         };
         let msg_id = id(&message);
         gs.mcache.put(message.clone());
@@ -646,6 +641,8 @@ mod tests {
                 data: vec![1, 2, 3, 4],
                 sequence_number: shift,
                 topics: Vec::new(),
+                signature: None,
+                key: None,
             };
             let msg_id = id(&message);
             gs.mcache.put(message.clone());
@@ -731,7 +728,6 @@ mod tests {
             build_and_inject_nodes(20, vec![String::from("topic1")], true);
 
         let msg_id = MessageId(String::from("known id"));
-        gs.received.put(msg_id.clone(), ());
 
         let events_before = gs.events.len();
         gs.handle_ihave(&peers[7], vec![(topic_hashes[0].clone(), vec![msg_id])]);
