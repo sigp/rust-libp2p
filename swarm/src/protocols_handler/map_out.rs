@@ -18,6 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
+use crate::upgrade::{InboundUpgradeSend, OutboundUpgradeSend};
 use crate::protocols_handler::{
     KeepAlive,
     SubstreamProtocol,
@@ -25,8 +26,8 @@ use crate::protocols_handler::{
     ProtocolsHandlerEvent,
     ProtocolsHandlerUpgrErr
 };
-use futures::prelude::*;
-use libp2p_core::upgrade::{InboundUpgrade, OutboundUpgrade};
+
+use std::task::{Context, Poll};
 
 /// Wrapper around a protocol handler that turns the output event into something else.
 pub struct MapOutEvent<TProtoHandler, TMap> {
@@ -49,11 +50,12 @@ impl<TProtoHandler, TMap, TNewOut> ProtocolsHandler for MapOutEvent<TProtoHandle
 where
     TProtoHandler: ProtocolsHandler,
     TMap: FnMut(TProtoHandler::OutEvent) -> TNewOut,
+    TNewOut: Send + 'static,
+    TMap: Send + 'static,
 {
     type InEvent = TProtoHandler::InEvent;
     type OutEvent = TNewOut;
     type Error = TProtoHandler::Error;
-    type Substream = TProtoHandler::Substream;
     type InboundProtocol = TProtoHandler::InboundProtocol;
     type OutboundProtocol = TProtoHandler::OutboundProtocol;
     type OutboundOpenInfo = TProtoHandler::OutboundOpenInfo;
@@ -66,7 +68,7 @@ where
     #[inline]
     fn inject_fully_negotiated_inbound(
         &mut self,
-        protocol: <Self::InboundProtocol as InboundUpgrade<Self::Substream>>::Output
+        protocol: <Self::InboundProtocol as InboundUpgradeSend>::Output
     ) {
         self.inner.inject_fully_negotiated_inbound(protocol)
     }
@@ -74,7 +76,7 @@ where
     #[inline]
     fn inject_fully_negotiated_outbound(
         &mut self,
-        protocol: <Self::OutboundProtocol as OutboundUpgrade<Self::Substream>>::Output,
+        protocol: <Self::OutboundProtocol as OutboundUpgradeSend>::Output,
         info: Self::OutboundOpenInfo
     ) {
         self.inner.inject_fully_negotiated_outbound(protocol, info)
@@ -86,7 +88,7 @@ where
     }
 
     #[inline]
-    fn inject_dial_upgrade_error(&mut self, info: Self::OutboundOpenInfo, error: ProtocolsHandlerUpgrErr<<Self::OutboundProtocol as OutboundUpgrade<Self::Substream>>::Error>) {
+    fn inject_dial_upgrade_error(&mut self, info: Self::OutboundOpenInfo, error: ProtocolsHandlerUpgrErr<<Self::OutboundProtocol as OutboundUpgradeSend>::Error>) {
         self.inner.inject_dial_upgrade_error(info, error)
     }
 
@@ -98,17 +100,18 @@ where
     #[inline]
     fn poll(
         &mut self,
+        cx: &mut Context,
     ) -> Poll<
-        ProtocolsHandlerEvent<Self::OutboundProtocol, Self::OutboundOpenInfo, Self::OutEvent>,
-        Self::Error,
+        ProtocolsHandlerEvent<Self::OutboundProtocol, Self::OutboundOpenInfo, Self::OutEvent, Self::Error>,
     > {
-        Ok(self.inner.poll()?.map(|ev| {
+        self.inner.poll(cx).map(|ev| {
             match ev {
                 ProtocolsHandlerEvent::Custom(ev) => ProtocolsHandlerEvent::Custom((self.map)(ev)),
+                ProtocolsHandlerEvent::Close(err) => ProtocolsHandlerEvent::Close(err),
                 ProtocolsHandlerEvent::OutboundSubstreamRequest { protocol, info } => {
                     ProtocolsHandlerEvent::OutboundSubstreamRequest { protocol, info }
                 }
             }
-        }))
+        })
     }
 }

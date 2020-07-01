@@ -1,3 +1,212 @@
+- [`libp2p-core` CHANGELOG](core/CHANGELOG.md)
+- [`libp2p-deflate` CHANGELOG](protocols/deflate/CHANGELOG.md)
+- [`libp2p-floodsub` CHANGELOG](protocols/floodsub/CHANGELOG.md)
+- [`libp2p-gossipsub` CHANGELOG](protocols/gossipsub/CHANGELOG.md)
+- [`libp2p-identify` CHANGELOG](protocols/identify/CHANGELOG.md)
+- [`libp2p-kad` CHANGELOG](protocols/kad/CHANGELOG.md)
+- [`libp2p-mdns` CHANGELOG](protocols/mdns/CHANGELOG.md)
+- [`libp2p-mplex` CHANGELOG](muxers/mplex/CHANGELOG.md)
+- [`libp2p-noise` CHANGELOG](protocols/noise/CHANGELOG.md)
+- [`libp2p-ping` CHANGELOG](protocols/ping/CHANGELOG.md)
+- [`libp2p-plaintext` CHANGELOG](protocols/plaintext/CHANGELOG.md)
+- [`libp2p-pnet` CHANGELOG](protocols/pnet/CHANGELOG.md)
+- [`libp2p-request-response` CHANGELOG](protocols/request-response/CHANGELOG.md)
+- [`libp2p-secio` CHANGELOG](protocols/secio/CHANGELOG.md)
+- [`libp2p-swarm` CHANGELOG](swarm/CHANGELOG.md)
+- [`libp2p-tcp` CHANGELOG](transports/tcp/CHANGELOG.md)
+- [`libp2p-uds` CHANGELOG](transports/uds/CHANGELOG.md)
+- [`libp2p-websocket` CHANGELOG](transports/websocket/CHANGELOG.md)
+- [`libp2p-yamux` CHANGELOG](muxers/yamux/CHANGELOG.md)
+- [`multistream-select` CHANGELOG](misc/multistream-select/CHANGELOG.md)
+- [`parity-multiaddr` CHANGELOG](misc/multiaddr/CHANGELOG.md)
+
+# Version 0.19.1 (2020-05-25)
+
+- Temporarily pin all `async-std` dependencies to `< 1.6`.
+  [PR 1589](https://github.com/libp2p/rust-libp2p/pull/1589)
+
+- `libp2p-core-derive`: Fully qualified std::result::Result in macro
+  [PR 1587](https://github.com/libp2p/rust-libp2p/pull/1587)
+
+# Version 0.19.0 (2020-05-18)
+
+- `libp2p-core`, `libp2p-swarm`: Added support for multiple dialing
+  attempts per peer, with a configurable limit.
+  [PR 1506](https://github.com/libp2p/rust-libp2p/pull/1506)
+
+- `libp2p-core`: `PeerId`s that use the identity hashing will now be properly
+  displayed using the string representation of an identity multihash, rather
+  than the canonical SHA 256 representation.
+  [PR 1576](https://github.com/libp2p/rust-libp2p/pull/1576)
+
+- `libp2p-core`: Updated to multihash 0.11.0.
+  [PR 1566](https://github.com/libp2p/rust-libp2p/pull/1566)
+
+- `libp2p-core`: Make the number of events buffered to/from tasks configurable.
+  [PR 1574](https://github.com/libp2p/rust-libp2p/pull/1574)
+
+- `libp2p-dns`, `parity-multiaddr`: Added support for the `/dns` multiaddr
+  protocol. Additionally, the `multiaddr::from_url` function will now use
+  `/dns` instead of `/dns4`.
+  [PR 1575](https://github.com/libp2p/rust-libp2p/pull/1575)
+
+- `libp2p-noise`: Added the `X25519Spec` protocol suite which uses
+  libp2p-noise-spec compliant signatures on static keys as well as the
+  `/noise` protocol upgrade, hence providing a libp2p-noise-spec compliant
+  `XX` handshake. `IK` and `IX` are still supported with `X25519Spec`
+  though not guaranteed to be interoperable with other libp2p
+  implementations as these handshake patterns are not currently
+  included in the libp2p-noise-spec. The `X25519Spec` implementation
+  will eventually replace the current `X25519` implementation, with
+  the former being removed. To upgrade without interruptions, you may
+  temporarily include `NoiseConfig`s for both implementations as
+  alternatives in your transport upgrade pipeline.
+
+- `libp2p-kad`: Consider fixed (K_VALUE) amount of peers at closest query
+  initialization. Unless `KademliaConfig::set_replication_factor` is used change
+  has no effect.
+  [PR 1536](https://github.com/libp2p/rust-libp2p/pull/1536)
+
+- `libp2p-kad`: Provide more insight into, and control of, the execution of
+  queries. All query results are now wrapped in `KademliaEvent::QueryResult`.
+  As a side-effect of these changes and for as long as the record storage
+  API is not asynchronous, local storage errors on `put_record` are reported
+  synchronously in a `Result`, instead of being reported asynchronously by
+  an event.
+  [PR 1567](https://github.com/libp2p/rust-libp2p/pull/1567)
+
+- `libp2p-tcp`, `libp2p`: Made the `libp2p-tcp/async-std` feature flag
+  disabled by default, and split the `libp2p/tcp` feature in two:
+  `tcp-async-std` and `tcp-tokio`. `tcp-async-std` is still enabled by default.
+  [PR 1471](https://github.com/libp2p/rust-libp2p/pull/1471)
+
+- `libp2p-tcp`: On listeners started with an IPv6 multi-address the socket
+  option `IPV6_V6ONLY` is set to true. Instead of relying on IPv4-mapped IPv6
+  address support, two listeners can be started if IPv4 and IPv6 should both
+  be supported. IPv4 listener addresses are not affected by this change.
+  [PR 1555](https://github.com/libp2p/rust-libp2p/pull/1555)
+
+# Version 0.18.1 (2020-04-17)
+
+- `libp2p-swarm`: Make sure inject_dial_failure is called in all situations.
+  [PR 1549](https://github.com/libp2p/rust-libp2p/pull/1549)
+
+# Version 0.18.0 (2020-04-09)
+
+- `libp2p-core`: Treat connection limit errors as pending connection errors.
+  [PR 1546](https://github.com/libp2p/rust-libp2p/pull/1546)
+
+- `libp2p-core-derive`: Disambiguate calls to `NetworkBehaviour::inject_event`.
+  [PR 1543](https://github.com/libp2p/rust-libp2p/pull/1543)
+
+- `libp2p-floodsub`: Allow sent messages seen as subscribed.
+  [PR 1520](https://github.com/libp2p/rust-libp2p/pull/1520)
+
+- `libp2p-kad`: Return peers independent of record existence.
+  [PR 1544](https://github.com/libp2p/rust-libp2p/pull/1544)
+
+- `libp2p-wasm-ext`: Fix "parsed is null" errors being thrown.
+  [PR 1535](https://github.com/libp2p/rust-libp2p/pull/1535)
+
+# Version 0.17.0 (2020-04-02)
+
+- `libp2p-core`: Finished "identity hashing" for peer IDs migration.
+  [PR 1460](https://github.com/libp2p/rust-libp2p/pull/1460)
+- `libp2p-core`: Remove `poll_broadcast`.
+  [PR 1527](https://github.com/libp2p/rust-libp2p/pull/1527)
+- `libp2p-core`, `libp2p-swarm`: Report addresses of closed listeners.
+  [PR 1485](https://github.com/libp2p/rust-libp2p/pull/1485)
+- `libp2p-core`: Support for multiple connections per peer and configurable connection limits.
+  See [PR #1440](https://github.com/libp2p/rust-libp2p/pull/1440),
+  [PR #1519](https://github.com/libp2p/rust-libp2p/pull/1519) and
+  [issue #912](https://github.com/libp2p/rust-libp2p/issues/912) for details.
+
+- `libp2p-swarm`: Pass the cause of closing a listener to `inject_listener_closed`.
+  [PR 1517](https://github.com/libp2p/rust-libp2p/pull/1517)
+- `libp2p-swarm`: Support for multiple connections per peer and configurable connection limits.
+  See [PR #1440](https://github.com/libp2p/rust-libp2p/pull/1440),
+  [PR #1519](https://github.com/libp2p/rust-libp2p/pull/1519) and
+  [issue #912](https://github.com/libp2p/rust-libp2p/issues/912) for details.
+- `libp2p-swarm`: The `SwarmEvent` now returns more events.
+  [PR 1515](https://github.com/libp2p/rust-libp2p/pull/1515)
+- `libp2p-swarm`: New `protocols_handler::multi` module.
+  [PR 1497](https://github.com/libp2p/rust-libp2p/pull/1497)
+- `libp2p-swarm`: Allow configuration of outbound substreams.
+  [PR 1521](https://github.com/libp2p/rust-libp2p/pull/1521)
+
+- `libp2p-kad`: Providers returned from a lookup are now deduplicated.
+  [PR 1528](https://github.com/libp2p/rust-libp2p/pull/1528)
+- `libp2p-kad`: Allow customising the maximum packet size.
+  [PR 1502](https://github.com/libp2p/rust-libp2p/pull/1502)
+- `libp2p-kad`: Allow customising the (libp2p) connection keep-alive timeout.
+  [PR 1477](https://github.com/libp2p/rust-libp2p/pull/1477)
+- `libp2p-kad`: Avoid storing records that are expired upon receipt (optimisation).
+  [PR 1496](https://github.com/libp2p/rust-libp2p/pull/1496)
+- `libp2p-kad`: Fixed potential panic on computing record expiry.
+  [PR 1492](https://github.com/libp2p/rust-libp2p/pull/1492)
+
+- `libp2p-mplex`: Guard against use of underlying `Sink` upon
+  error or connection close.
+  [PR 1529](https://github.com/libp2p/rust-libp2p/pull/1529)
+
+- `multistream-select`: Upgrade to stable futures.
+  [PR 1484](https://github.com/libp2p/rust-libp2p/pull/1484)
+
+- `multihash`: Removed the crate in favour of the upstream crate.
+  [PR 1472](https://github.com/libp2p/rust-libp2p/pull/1472)
+
+# Version 0.16.2 (2020-02-28)
+
+- Fixed yamux connections not properly closing and being stuck in the `CLOSE_WAIT` state.
+- Added a `websocket_transport()` function in `libp2p-wasm-ext`, behind a Cargo feature.
+- Fixed ambiguity in `IntoProtocolsHandler::select` vs `ProtocolsHandler::select` in the `NetworkBehaviour` custom derive.
+
+# Version 0.16.1 (2020-02-18)
+
+- Fixed wrong representation of `PeerId`s being used in `Kademlia::get_closest_peers`.
+- Implemented `FusedStream` for `Swarm`.
+
+# Version 0.16.0 (2020-02-13)
+
+- Removed the `Substream` associated type from the `ProtocolsHandler` trait. The type of the substream is now always `libp2p::swarm::NegotiatedSubstream`.
+- As a consequence of the previous change, most of the implementations of the `NetworkBehaviour` trait provided by libp2p (`Ping`, `Identify`, `Kademlia`, `Floodsub`, `Gossipsub`) have lost a generic parameter.
+- Removed the first generic parameter (the transport) from `Swarm` and `ExpandedSwarm`. The transport is now abstracted away in the internals of the swarm.
+- The `Send` and `'static` bounds are now enforced directly on the `ProtocolsHandler` trait and its associated `InboundUpgrade` and `OutboundUpgrade` implementations.
+- Modified `PeerId`s to compare equal across the identity and SHA256 hashes. As a consequence, the `Borrow` implementation of `PeerId` now always returns the bytes representation of a multihash with a SHA256 hash.
+- Modified libp2p-floodsub to no longer hash the topic. The new behaviour is now compatible with go-libp2p and js-libp2p, but is a breaking change with regards to rust-libp2p.
+- Added libp2p-pnet. It makes it possible to protect networks with a pre-shared key (PSK).
+- Modified the `poll_method` parameter of the `NetworkBehaviour` custom derive. The expected method now takes an additional parameter of type `impl PollParameters` to be consistent with the `NetworkBehaviour::poll` method.
+- libp2p-noise now compiles for WASM targets.
+- Changed libp2p-noise to grow its memory buffers dynamically. This should reduce the overall memory usage of connections that use the noise encryption.
+- Fixed libp2p-gossipsub to no longer close the connection if the inbound substream is closed by the remote.
+- All crates prefixed with `libp2p-` now use the same version number.
+- Added a new variant `ListenerEvent::Error` for listeners to report non-fatal errors. `libp2p-tcp` uses this variant to report errors that happen on remote sockets before they have been accepted and errors when trying to determine the local machine's IP address.
+
+# Version 0.15.0 (2020-01-24)
+
+- Added `libp2p-gossipsub`.
+- Added `SwarmBuilder::executor` to allow configuring which tasks executor to use.
+- Added `TokioTcpConfig` in `libp2p-tcp` and `TokioUdsConfig` in `libp2p-uds` behind `tokio` features. These structs use `tokio` and require a `tokio` runtime executor to be configured via `SwarmBuilder::executor`.
+- Changed the `OutboundUpgrade` and `InboundUpgrade` traits to no longer be passed a `Negotiated<C>` but just a `C`. The `Negotiated` is now in the trait bounds requirements of `ProtocolsHandler`.
+- Fixed `libp2p-wasm-ext` returning `Err(WouldBlock)` rather than `Pending`.
+- Fixed `libp2p-dns` not segregating DNS4 and DNS6.
+- Removed some unnecessary `Unpin` requirements on futures.
+- Changed `Mdns::new` to no longer be `async`.
+- Fixed `libp2p-kad` keeping connections alive when it shouldn't.
+- Fixed `InboundUpgrade` not always properly implemented on `NoiseConfig`.
+
+# Version 0.14.0-alpha.1 (2020-01-07)
+
+- Upgraded the crate to stable futures.
+- Use varints instead of fixed sized (4 byte) integers to delimit plaintext 2.0 messages to align implementation with the specification.
+- Refactored the `core::upgrade` module to provide async functions.
+- Changed the `Stream` trait implementation of `Swarm` to no longer return a `Result`.
+- Added the `Swarm::next` and `Swarm::next_event` functions and the `SwarmEvent` enum.
+- Changed `ProtocolsHandler::poll` to no longer return an error. Instead, `ProtocolsHandlerEvent` has a new `Close` variant which corresponds to what an error represented before.
+- Changed all the traits that have a `poll` function (i.e. `NetworkBehaviour`, `ProtocolsHandler`, `NodeHandler`) to have an additional `&mut Context` parameter, to reflect the changes in the `Future` trait.
+- Revamped the API of `libp2p_websockets::framed`.
+- Added protocol string to `Error::UnknownProtocolString`.
+
 # Version 0.13.2 (2020-01-02)
 
 - Fixed the `libp2p-noise` handshake not flushing the underlying stream before waiting for a response.

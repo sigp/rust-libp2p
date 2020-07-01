@@ -32,12 +32,24 @@ pub mod record;
 mod addresses;
 mod behaviour;
 mod jobs;
-mod dht_proto;
 mod query;
 
+mod dht_proto {
+    include!(concat!(env!("OUT_DIR"), "/dht.pb.rs"));
+}
+
 pub use addresses::Addresses;
-pub use behaviour::{Kademlia, KademliaConfig, KademliaEvent, Quorum};
+pub use behaviour::{Kademlia, KademliaBucketInserts, KademliaConfig, KademliaEvent, Quorum};
 pub use behaviour::{
+    QueryRef,
+    QueryMut,
+
+    QueryResult,
+    QueryInfo,
+    QueryStats,
+
+    PeerRecord,
+
     BootstrapResult,
     BootstrapOk,
     BootstrapError,
@@ -46,6 +58,8 @@ pub use behaviour::{
     GetRecordOk,
     GetRecordError,
 
+    PutRecordPhase,
+    PutRecordContext,
     PutRecordResult,
     PutRecordOk,
     PutRecordError,
@@ -54,6 +68,8 @@ pub use behaviour::{
     GetClosestPeersOk,
     GetClosestPeersError,
 
+    AddProviderPhase,
+    AddProviderContext,
     AddProviderResult,
     AddProviderOk,
     AddProviderError,
@@ -62,6 +78,7 @@ pub use behaviour::{
     GetProvidersOk,
     GetProvidersError,
 };
+pub use query::QueryId;
 pub use protocol::KadConnectionType;
 pub use record::{store, Record, ProviderRecord};
 
@@ -92,4 +109,3 @@ pub const K_VALUE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(20) };
 ///
 /// The current value is `3`.
 pub const ALPHA_VALUE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(3) };
-

@@ -2,7 +2,42 @@
 #![allow(dead_code)]
 
 use futures::prelude::*;
-use libp2p_core::muxing::StreamMuxer;
+use libp2p_core::{
+    Multiaddr,
+    connection::{
+        ConnectionHandler,
+        ConnectionHandlerEvent,
+        Substream,
+        SubstreamEndpoint,
+    },
+    muxing::{StreamMuxer, StreamMuxerBox},
+};
+use std::{io, pin::Pin, task::Context, task::Poll};
+
+pub struct TestHandler();
+
+impl ConnectionHandler for TestHandler {
+    type InEvent = ();
+    type OutEvent = ();
+    type Error = io::Error;
+    type Substream = Substream<StreamMuxerBox>;
+    type OutboundOpenInfo = ();
+
+    fn inject_substream(&mut self, _: Self::Substream, _: SubstreamEndpoint<Self::OutboundOpenInfo>)
+    {}
+
+    fn inject_event(&mut self, _: Self::InEvent)
+    {}
+
+    fn inject_address_change(&mut self, _: &Multiaddr)
+    {}
+
+    fn poll(&mut self, _: &mut Context)
+        -> Poll<Result<ConnectionHandlerEvent<Self::OutboundOpenInfo, Self::OutEvent>, Self::Error>>
+    {
+        Poll::Ready(Ok(ConnectionHandlerEvent::Custom(())))
+    }
+}
 
 pub struct CloseMuxer<M> {
     state: CloseMuxerState<M>,
@@ -26,18 +61,17 @@ where
     M: StreamMuxer,
     M::Error: From<std::io::Error>
 {
-    type Item = M;
-    type Error = M::Error;
+    type Output = Result<M, M::Error>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
             match std::mem::replace(&mut self.state, CloseMuxerState::Done) {
                 CloseMuxerState::Close(muxer) => {
-                    if muxer.close()?.is_not_ready() {
+                    if !muxer.close(cx)?.is_ready() {
                         self.state = CloseMuxerState::Close(muxer);
-                        return Ok(Async::NotReady)
+                        return Poll::Pending
                     }
-                    return Ok(Async::Ready(muxer))
+                    return Poll::Ready(Ok(muxer))
                 }
                 CloseMuxerState::Done => panic!()
             }
@@ -45,3 +79,5 @@ where
     }
 }
 
+impl<M> Unpin for CloseMuxer<M> {
+}

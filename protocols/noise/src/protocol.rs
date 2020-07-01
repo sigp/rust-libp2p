@@ -21,13 +21,12 @@
 //! Components of a Noise protocol.
 
 pub mod x25519;
+pub mod x25519_spec;
 
 use crate::NoiseError;
 use libp2p_core::identity;
 use rand::SeedableRng;
 use zeroize::Zeroize;
-
-const NOISE_STATIC_KEY_SIGNATURE_PREFIX: &str = "noise-libp2p-static-key:";
 
 /// The parameters of a Noise protocol, consisting of a choice
 /// for a handshake pattern as well as DH, cipher and hash functions.
@@ -73,6 +72,7 @@ pub trait Protocol<C> {
     ///
     /// The trivial case is when the keys are byte for byte identical.
     #[allow(unused_variables)]
+    #[deprecated]
     fn linked(id_pk: &identity::PublicKey, dh_pk: &PublicKey<C>) -> bool {
         false
     }
@@ -89,17 +89,21 @@ pub trait Protocol<C> {
     /// without a signature, otherwise a signature over the static DH public key
     /// must be given and is verified with the public identity key, establishing
     /// the authenticity of the static DH public key w.r.t. the public identity key.
+    #[allow(deprecated)]
     fn verify(id_pk: &identity::PublicKey, dh_pk: &PublicKey<C>, sig: &Option<Vec<u8>>) -> bool
     where
         C: AsRef<[u8]>
     {
         Self::linked(id_pk, dh_pk)
-            || sig.as_ref().map_or(false, |s| {
-                id_pk.verify(
-                    &[NOISE_STATIC_KEY_SIGNATURE_PREFIX.as_bytes(), dh_pk.as_ref()].concat(),
-                    s,
-                )
-            })
+            ||
+        sig.as_ref().map_or(false, |s| id_pk.verify(dh_pk.as_ref(), s))
+    }
+
+    fn sign(id_keys: &identity::Keypair, dh_pk: &PublicKey<C>) -> Result<Vec<u8>, NoiseError>
+    where
+        C: AsRef<[u8]>
+    {
+        Ok(id_keys.sign(dh_pk.as_ref())?)
     }
 }
 
@@ -157,15 +161,10 @@ impl<T: Zeroize> Keypair<T> {
     /// is authentic w.r.t. the given identity keypair, by signing the DH public key.
     pub fn into_authentic(self, id_keys: &identity::Keypair) -> Result<AuthenticKeypair<T>, NoiseError>
     where
-        T: AsRef<[u8]>
+        T: AsRef<[u8]>,
+        T: Protocol<T>
     {
-        let msg = [
-            NOISE_STATIC_KEY_SIGNATURE_PREFIX.as_bytes(),
-            self.public.as_ref(),
-        ]
-        .concat();
-
-        let sig = id_keys.sign(&msg)?;
+        let sig = T::sign(id_keys, &self.public)?;
 
         let identity = KeypairIdentity {
             public: id_keys.public(),
@@ -210,12 +209,10 @@ impl<T: AsRef<[u8]>> AsRef<[u8]> for PublicKey<T> {
     }
 }
 
-/// Custom `snow::CryptoResolver` which delegates to the `RingResolver`
+/// Custom `snow::CryptoResolver` which delegates to either the
+/// `RingResolver` on native or the `DefaultResolver` on wasm
 /// for hash functions and symmetric ciphers, while using x25519-dalek
-/// for Curve25519 DH. We do not use the default resolver for any of
-/// the choices, because it comes with unwanted additional dependencies,
-/// notably rust-crypto, and to avoid being affected by changes to
-/// the defaults.
+/// for Curve25519 DH.
 struct Resolver;
 
 impl snow::resolvers::CryptoResolver for Resolver {
@@ -232,11 +229,25 @@ impl snow::resolvers::CryptoResolver for Resolver {
     }
 
     fn resolve_hash(&self, choice: &snow::params::HashChoice) -> Option<Box<dyn snow::types::Hash>> {
-        snow::resolvers::RingResolver.resolve_hash(choice)
+        #[cfg(target_arch = "wasm32")]
+        {
+            snow::resolvers::DefaultResolver.resolve_hash(choice)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            snow::resolvers::RingResolver.resolve_hash(choice)
+        }
     }
 
     fn resolve_cipher(&self, choice: &snow::params::CipherChoice) -> Option<Box<dyn snow::types::Cipher>> {
-        snow::resolvers::RingResolver.resolve_cipher(choice)
+        #[cfg(target_arch = "wasm32")]
+        {
+            snow::resolvers::DefaultResolver.resolve_cipher(choice)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            snow::resolvers::RingResolver.resolve_cipher(choice)
+        }
     }
 }
 

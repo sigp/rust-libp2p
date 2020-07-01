@@ -18,6 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
+use crate::upgrade::{SendWrapper, InboundUpgradeSend, OutboundUpgradeSend};
 use crate::protocols_handler::{
     KeepAlive,
     SubstreamProtocol,
@@ -26,15 +27,14 @@ use crate::protocols_handler::{
     ProtocolsHandlerEvent,
     ProtocolsHandlerUpgrErr,
 };
-use futures::prelude::*;
+
 use libp2p_core::{
     ConnectedPoint,
     PeerId,
     either::{EitherError, EitherOutput},
-    upgrade::{InboundUpgrade, OutboundUpgrade, EitherUpgrade, SelectUpgrade, UpgradeError}
+    upgrade::{EitherUpgrade, SelectUpgrade, UpgradeError}
 };
-use std::cmp;
-use tokio_io::{AsyncRead, AsyncWrite};
+use std::{cmp, task::Context, task::Poll};
 
 /// Implementation of `IntoProtocolsHandler` that combines two protocols into one.
 #[derive(Debug, Clone)]
@@ -56,17 +56,10 @@ impl<TProto1, TProto2> IntoProtocolsHandlerSelect<TProto1, TProto2> {
     }
 }
 
-impl<TProto1, TProto2, TSubstream> IntoProtocolsHandler for IntoProtocolsHandlerSelect<TProto1, TProto2>
+impl<TProto1, TProto2> IntoProtocolsHandler for IntoProtocolsHandlerSelect<TProto1, TProto2>
 where
     TProto1: IntoProtocolsHandler,
     TProto2: IntoProtocolsHandler,
-    TProto1::Handler: ProtocolsHandler<Substream = TSubstream>,
-    TProto2::Handler: ProtocolsHandler<Substream = TSubstream>,
-    TSubstream: AsyncRead + AsyncWrite,
-    <TProto1::Handler as ProtocolsHandler>::InboundProtocol: InboundUpgrade<TSubstream>,
-    <TProto2::Handler as ProtocolsHandler>::InboundProtocol: InboundUpgrade<TSubstream>,
-    <TProto1::Handler as ProtocolsHandler>::OutboundProtocol: OutboundUpgrade<TSubstream>,
-    <TProto2::Handler as ProtocolsHandler>::OutboundProtocol: OutboundUpgrade<TSubstream>
 {
     type Handler = ProtocolsHandlerSelect<TProto1::Handler, TProto2::Handler>;
 
@@ -78,7 +71,7 @@ where
     }
 
     fn inbound_protocol(&self) -> <Self::Handler as ProtocolsHandler>::InboundProtocol {
-        SelectUpgrade::new(self.proto1.inbound_protocol(), self.proto2.inbound_protocol())
+        SelectUpgrade::new(SendWrapper(self.proto1.inbound_protocol()), SendWrapper(self.proto2.inbound_protocol()))
     }
 }
 
@@ -102,23 +95,16 @@ impl<TProto1, TProto2> ProtocolsHandlerSelect<TProto1, TProto2> {
     }
 }
 
-impl<TSubstream, TProto1, TProto2>
-    ProtocolsHandler for ProtocolsHandlerSelect<TProto1, TProto2>
+impl<TProto1, TProto2> ProtocolsHandler for ProtocolsHandlerSelect<TProto1, TProto2>
 where
-    TProto1: ProtocolsHandler<Substream = TSubstream>,
-    TProto2: ProtocolsHandler<Substream = TSubstream>,
-    TSubstream: AsyncRead + AsyncWrite,
-    TProto1::InboundProtocol: InboundUpgrade<TSubstream>,
-    TProto2::InboundProtocol: InboundUpgrade<TSubstream>,
-    TProto1::OutboundProtocol: OutboundUpgrade<TSubstream>,
-    TProto2::OutboundProtocol: OutboundUpgrade<TSubstream>
+    TProto1: ProtocolsHandler,
+    TProto2: ProtocolsHandler,
 {
     type InEvent = EitherOutput<TProto1::InEvent, TProto2::InEvent>;
     type OutEvent = EitherOutput<TProto1::OutEvent, TProto2::OutEvent>;
     type Error = EitherError<TProto1::Error, TProto2::Error>;
-    type Substream = TSubstream;
-    type InboundProtocol = SelectUpgrade<<TProto1 as ProtocolsHandler>::InboundProtocol, <TProto2 as ProtocolsHandler>::InboundProtocol>;
-    type OutboundProtocol = EitherUpgrade<TProto1::OutboundProtocol, TProto2::OutboundProtocol>;
+    type InboundProtocol = SelectUpgrade<SendWrapper<<TProto1 as ProtocolsHandler>::InboundProtocol>, SendWrapper<<TProto2 as ProtocolsHandler>::InboundProtocol>>;
+    type OutboundProtocol = EitherUpgrade<SendWrapper<TProto1::OutboundProtocol>, SendWrapper<TProto2::OutboundProtocol>>;
     type OutboundOpenInfo = EitherOutput<TProto1::OutboundOpenInfo, TProto2::OutboundOpenInfo>;
 
     #[inline]
@@ -126,11 +112,11 @@ where
         let proto1 = self.proto1.listen_protocol();
         let proto2 = self.proto2.listen_protocol();
         let timeout = std::cmp::max(proto1.timeout(), proto2.timeout()).clone();
-        let choice = SelectUpgrade::new(proto1.into_upgrade().1, proto2.into_upgrade().1);
+        let choice = SelectUpgrade::new(SendWrapper(proto1.into_upgrade().1), SendWrapper(proto2.into_upgrade().1));
         SubstreamProtocol::new(choice).with_timeout(timeout)
     }
 
-    fn inject_fully_negotiated_outbound(&mut self, protocol: <Self::OutboundProtocol as OutboundUpgrade<TSubstream>>::Output, endpoint: Self::OutboundOpenInfo) {
+    fn inject_fully_negotiated_outbound(&mut self, protocol: <Self::OutboundProtocol as OutboundUpgradeSend>::Output, endpoint: Self::OutboundOpenInfo) {
         match (protocol, endpoint) {
             (EitherOutput::First(protocol), EitherOutput::First(info)) =>
                 self.proto1.inject_fully_negotiated_outbound(protocol, info),
@@ -143,7 +129,7 @@ where
         }
     }
 
-    fn inject_fully_negotiated_inbound(&mut self, protocol: <Self::InboundProtocol as InboundUpgrade<TSubstream>>::Output) {
+    fn inject_fully_negotiated_inbound(&mut self, protocol: <Self::InboundProtocol as InboundUpgradeSend>::Output) {
         match protocol {
             EitherOutput::First(protocol) =>
                 self.proto1.inject_fully_negotiated_inbound(protocol),
@@ -161,7 +147,7 @@ where
     }
 
     #[inline]
-    fn inject_dial_upgrade_error(&mut self, info: Self::OutboundOpenInfo, error: ProtocolsHandlerUpgrErr<<Self::OutboundProtocol as OutboundUpgrade<Self::Substream>>::Error>) {
+    fn inject_dial_upgrade_error(&mut self, info: Self::OutboundOpenInfo, error: ProtocolsHandlerUpgrErr<<Self::OutboundProtocol as OutboundUpgradeSend>::Error>) {
         match (info, error) {
             (EitherOutput::First(info), ProtocolsHandlerUpgrErr::Timer) => {
                 self.proto1.inject_dial_upgrade_error(info, ProtocolsHandlerUpgrErr::Timer)
@@ -201,40 +187,46 @@ where
         cmp::max(self.proto1.connection_keep_alive(), self.proto2.connection_keep_alive())
     }
 
-    fn poll(&mut self) -> Poll<ProtocolsHandlerEvent<Self::OutboundProtocol, Self::OutboundOpenInfo, Self::OutEvent>, Self::Error> {
+    fn poll(&mut self, cx: &mut Context) -> Poll<ProtocolsHandlerEvent<Self::OutboundProtocol, Self::OutboundOpenInfo, Self::OutEvent, Self::Error>> {
 
-        match self.proto1.poll().map_err(EitherError::A)? {
-            Async::Ready(ProtocolsHandlerEvent::Custom(event)) => {
-                return Ok(Async::Ready(ProtocolsHandlerEvent::Custom(EitherOutput::First(event))));
+        match self.proto1.poll(cx) {
+            Poll::Ready(ProtocolsHandlerEvent::Custom(event)) => {
+                return Poll::Ready(ProtocolsHandlerEvent::Custom(EitherOutput::First(event)));
             },
-            Async::Ready(ProtocolsHandlerEvent::OutboundSubstreamRequest {
+            Poll::Ready(ProtocolsHandlerEvent::Close(event)) => {
+                return Poll::Ready(ProtocolsHandlerEvent::Close(EitherError::A(event)));
+            },
+            Poll::Ready(ProtocolsHandlerEvent::OutboundSubstreamRequest {
                 protocol,
                 info,
             }) => {
-                return Ok(Async::Ready(ProtocolsHandlerEvent::OutboundSubstreamRequest {
-                    protocol: protocol.map_upgrade(EitherUpgrade::A),
+                return Poll::Ready(ProtocolsHandlerEvent::OutboundSubstreamRequest {
+                    protocol: protocol.map_upgrade(|u| EitherUpgrade::A(SendWrapper(u))),
                     info: EitherOutput::First(info),
-                }));
+                });
             },
-            Async::NotReady => ()
+            Poll::Pending => ()
         };
 
-        match self.proto2.poll().map_err(EitherError::B)? {
-            Async::Ready(ProtocolsHandlerEvent::Custom(event)) => {
-                return Ok(Async::Ready(ProtocolsHandlerEvent::Custom(EitherOutput::Second(event))));
+        match self.proto2.poll(cx) {
+            Poll::Ready(ProtocolsHandlerEvent::Custom(event)) => {
+                return Poll::Ready(ProtocolsHandlerEvent::Custom(EitherOutput::Second(event)));
             },
-            Async::Ready(ProtocolsHandlerEvent::OutboundSubstreamRequest {
+            Poll::Ready(ProtocolsHandlerEvent::Close(event)) => {
+                return Poll::Ready(ProtocolsHandlerEvent::Close(EitherError::B(event)));
+            },
+            Poll::Ready(ProtocolsHandlerEvent::OutboundSubstreamRequest {
                 protocol,
                 info,
             }) => {
-                return Ok(Async::Ready(ProtocolsHandlerEvent::OutboundSubstreamRequest {
-                    protocol: protocol.map_upgrade(EitherUpgrade::B),
+                return Poll::Ready(ProtocolsHandlerEvent::OutboundSubstreamRequest {
+                    protocol: protocol.map_upgrade(|u| EitherUpgrade::B(SendWrapper(u))),
                     info: EitherOutput::Second(info),
-                }));
+                });
             },
-            Async::NotReady => ()
+            Poll::Pending => ()
         };
 
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }
