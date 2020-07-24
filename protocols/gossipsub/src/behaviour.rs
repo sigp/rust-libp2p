@@ -1183,41 +1183,34 @@ impl NetworkBehaviour for Gossipsub {
         >,
     > {
         if let Some(event) = self.events.pop_front() {
-            // clone send event reference if others references are present
-            match event {
-                NetworkBehaviourAction::NotifyHandler {
-                    peer_id,
-                    handler,
-                    event: send_event,
-                } => match Arc::try_unwrap(send_event) {
-                    Ok(event) => {
-                        return Poll::Ready(NetworkBehaviourAction::NotifyHandler {
+            return Poll::Ready(
+                match event {
+                    NetworkBehaviourAction::NotifyHandler {
+                        peer_id,
+                        handler,
+                        event: send_event,
+                    } => {
+                        // clone send event reference if others references are present
+                        let event = Arc::try_unwrap(send_event).unwrap_or_else(|e| (*e).clone());
+                        NetworkBehaviourAction::NotifyHandler {
                             peer_id,
                             event,
                             handler,
-                        });
+                        }
+                    },
+                    NetworkBehaviourAction::GenerateEvent(e) => {
+                        NetworkBehaviourAction::GenerateEvent(e)
                     }
-                    Err(event) => {
-                        return Poll::Ready(NetworkBehaviourAction::NotifyHandler {
-                            peer_id,
-                            event: (*event).clone(),
-                            handler,
-                        });
+                    NetworkBehaviourAction::DialAddress { address } => {
+                        NetworkBehaviourAction::DialAddress { address }
                     }
-                },
-                NetworkBehaviourAction::GenerateEvent(e) => {
-                    return Poll::Ready(NetworkBehaviourAction::GenerateEvent(e));
-                }
-                NetworkBehaviourAction::DialAddress { address } => {
-                    return Poll::Ready(NetworkBehaviourAction::DialAddress { address });
-                }
-                NetworkBehaviourAction::DialPeer { peer_id, condition } => {
-                    return Poll::Ready(NetworkBehaviourAction::DialPeer { peer_id, condition });
-                }
-                NetworkBehaviourAction::ReportObservedAddr { address } => {
-                    return Poll::Ready(NetworkBehaviourAction::ReportObservedAddr { address });
-                }
-            }
+                    NetworkBehaviourAction::DialPeer { peer_id, condition } => {
+                        NetworkBehaviourAction::DialPeer { peer_id, condition }
+                    }
+                    NetworkBehaviourAction::ReportObservedAddr { address } => {
+                        NetworkBehaviourAction::ReportObservedAddr { address }
+                    }
+                })
         }
 
         while let Poll::Ready(Some(())) = self.heartbeat.poll_next_unpin(cx) {
