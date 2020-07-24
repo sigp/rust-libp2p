@@ -410,7 +410,7 @@ impl Decoder for GossipsubCodec {
 }
 
 /// A type for gossipsub message ids.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MessageId(Vec<u8>);
 
 impl MessageId {

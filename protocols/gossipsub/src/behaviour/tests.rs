@@ -86,7 +86,7 @@ mod tests {
 
         assert!(
             gs.mesh.get(&topic_hashes[0]).is_some(),
-            "Subscribe should add a new entry to the mesh[topic] hashmap"
+            "Subscribe should add a new entry to the mesh[topic] map"
         );
 
         // collect all the subscriptions
@@ -300,7 +300,7 @@ mod tests {
 
         assert!(
             gs.mesh.get(&topic_hashes[0]).is_some(),
-            "Subscribe should add a new entry to the mesh[topic] hashmap"
+            "Subscribe should add a new entry to the mesh[topic] map"
         );
 
         // all peers should be subscribed to the topic
@@ -358,7 +358,7 @@ mod tests {
 
         assert!(
             gs.mesh.get(&topic_hashes[0]).is_some(),
-            "Subscribe should add a new entry to the mesh[topic] hashmap"
+            "Subscribe should add a new entry to the mesh[topic] map"
         );
         // Unsubscribe from topic
         assert!(

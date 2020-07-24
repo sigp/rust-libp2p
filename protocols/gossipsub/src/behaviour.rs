@@ -40,8 +40,7 @@ use prost::Message;
 use rand;
 use rand::{seq::SliceRandom, thread_rng};
 use std::{
-    collections::{BTreeSet, hash_map::HashMap, BTreeMap},
-    collections::HashSet,
+    collections::{BTreeSet, BTreeMap},
     collections::VecDeque,
     iter,
     sync::Arc,
@@ -272,7 +271,7 @@ impl Gossipsub {
         let message_source = &self.message_author.clone();
         let mesh_peers_sent = self.forward_msg(message.clone(), message_source);
 
-        let mut recipient_peers = HashSet::new();
+        let mut recipient_peers = BTreeSet::new();
         for topic_hash in &message.topics {
             // If not subscribed to the topic, use fanout peers.
             if self.mesh.get(&topic_hash).is_none() {
@@ -445,7 +444,7 @@ impl Gossipsub {
     fn handle_ihave(&mut self, peer_id: &PeerId, ihave_msgs: Vec<(TopicHash, Vec<MessageId>)>) {
         debug!("Handling IHAVE for peer: {:?}", peer_id);
         // use a hashset to avoid duplicates efficiently
-        let mut iwant_ids = HashSet::new();
+        let mut iwant_ids = BTreeSet::new();
 
         for (topic, ids) in ihave_msgs {
             // only process the message if we are subscribed
@@ -483,8 +482,8 @@ impl Gossipsub {
     /// forwarded to the requesting peer.
     fn handle_iwant(&mut self, peer_id: &PeerId, iwant_msgs: Vec<MessageId>) {
         debug!("Handling IWANT for peer: {:?}", peer_id);
-        // build a hashmap of available messages
-        let mut cached_messages = HashMap::new();
+        // build a map of available messages
+        let mut cached_messages = BTreeMap::new();
 
         for id in iwant_msgs {
             // if we have it, add it do the cached_messages mapping
@@ -511,7 +510,7 @@ impl Gossipsub {
     fn handle_graft(&mut self, peer_id: &PeerId, topics: Vec<TopicHash>) {
         debug!("Handling GRAFT message for peer: {:?}", peer_id);
 
-        let mut to_prune_topics = HashSet::new();
+        let mut to_prune_topics = BTreeSet::new();
         for topic_hash in topics {
             if let Some(peers) = self.mesh.get_mut(&topic_hash) {
                 // if we are subscribed, add peer to the mesh, if not already added
@@ -698,8 +697,8 @@ impl Gossipsub {
     fn heartbeat(&mut self) {
         debug!("Starting heartbeat");
 
-        let mut to_graft = HashMap::new();
-        let mut to_prune = HashMap::new();
+        let mut to_graft = BTreeMap::new();
+        let mut to_prune = BTreeMap::new();
 
         // maintain the mesh for each topic
         for (topic_hash, peers) in self.mesh.iter_mut() {
@@ -866,8 +865,8 @@ impl Gossipsub {
     /// messages.
     fn send_graft_prune(
         &mut self,
-        to_graft: HashMap<PeerId, Vec<TopicHash>>,
-        mut to_prune: HashMap<PeerId, Vec<TopicHash>>,
+        to_graft: BTreeMap<PeerId, Vec<TopicHash>>,
+        mut to_prune: BTreeMap<PeerId, Vec<TopicHash>>,
     ) {
         // handle the grafts and overlapping prunes
         for (peer, topics) in to_graft.iter() {
@@ -916,7 +915,7 @@ impl Gossipsub {
     fn forward_msg(&mut self, message: GossipsubMessage, source: &PeerId) -> bool {
         let msg_id = (self.config.message_id_fn)(&message);
         debug!("Forwarding message: {:?}", msg_id);
-        let mut recipient_peers = HashSet::new();
+        let mut recipient_peers = BTreeSet::new();
 
         // add mesh peers
         for topic in &message.topics {
