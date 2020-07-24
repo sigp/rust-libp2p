@@ -40,9 +40,9 @@ use prost::Message;
 use rand;
 use rand::{seq::SliceRandom, thread_rng};
 use std::{
+    collections::{BTreeSet, hash_map::HashMap, BTreeMap},
     collections::HashSet,
     collections::VecDeque,
-    collections::{hash_map::HashMap, BTreeSet},
     iter,
     sync::Arc,
     task::{Context, Poll},
@@ -77,7 +77,7 @@ pub struct Gossipsub {
     events: VecDeque<NetworkBehaviourAction<Arc<GossipsubRpc>, GossipsubEvent>>,
 
     /// Pools non-urgent control messages between heartbeats.
-    control_pool: HashMap<PeerId, Vec<GossipsubControlAction>>,
+    control_pool: BTreeMap<PeerId, Vec<GossipsubControlAction>>,
 
     /// The `PeerId` that will be the source of published messages. This can be set to an arbitrary
     /// PeerId when the config is initialised via the `Signing` enum.
@@ -87,19 +87,19 @@ pub struct Gossipsub {
     keypair: Option<libp2p_core::identity::Keypair>,
 
     /// A map of all connected peers - A map of topic hash to a list of gossipsub peer Ids.
-    topic_peers: HashMap<TopicHash, BTreeSet<PeerId>>,
+    topic_peers: BTreeMap<TopicHash, BTreeSet<PeerId>>,
 
     /// A map of all connected peers to their subscribed topics.
-    peer_topics: HashMap<PeerId, BTreeSet<TopicHash>>,
+    peer_topics: BTreeMap<PeerId, BTreeSet<TopicHash>>,
 
     /// Overlay network of connected peers - Maps topics to connected gossipsub peers.
-    mesh: HashMap<TopicHash, BTreeSet<PeerId>>,
+    mesh: BTreeMap<TopicHash, BTreeSet<PeerId>>,
 
     /// Map of topics to list of peers that we publish to, but don't subscribe to.
-    fanout: HashMap<TopicHash, BTreeSet<PeerId>>,
+    fanout: BTreeMap<TopicHash, BTreeSet<PeerId>>,
 
     /// The last publish time for fanout topics.
-    fanout_last_pub: HashMap<TopicHash, Instant>,
+    fanout_last_pub: BTreeMap<TopicHash, Instant>,
 
     /// Message cache for the last few heartbeats.
     mcache: MessageCache,
@@ -142,14 +142,14 @@ impl Gossipsub {
 
         Gossipsub {
             events: VecDeque::new(),
-            control_pool: HashMap::new(),
+            control_pool: Default::default(),
             message_author,
             keypair,
-            topic_peers: HashMap::new(),
-            peer_topics: HashMap::new(),
-            mesh: HashMap::new(),
-            fanout: HashMap::new(),
-            fanout_last_pub: HashMap::new(),
+            topic_peers: Default::default(),
+            peer_topics: Default::default(),
+            mesh: Default::default(),
+            fanout: Default::default(),
+            fanout_last_pub: Default::default(),
             mcache: MessageCache::new(
                 config.history_gossip,
                 config.history_length,
@@ -362,7 +362,7 @@ impl Gossipsub {
 
         // check if we have mesh_n peers in fanout[topic] and add them to the mesh if we do,
         // removing the fanout entry.
-        if let Some((_, peers)) = self.fanout.remove_entry(topic_hash) {
+        if let Some(peers) = self.fanout.remove(topic_hash) {
             debug!(
                 "JOIN: Removing peers from the fanout for topic: {:?}",
                 topic_hash
@@ -424,7 +424,7 @@ impl Gossipsub {
         debug!("Running LEAVE for topic {:?}", topic_hash);
 
         // if our mesh contains the topic, send prune to peers and delete it from the mesh
-        if let Some((_, peers)) = self.mesh.remove_entry(topic_hash) {
+        if let Some(peers) = self.mesh.remove(topic_hash) {
             for peer in peers {
                 // Send a PRUNE control message
                 info!("LEAVE: Sending PRUNE to peer: {:?}", peer);
@@ -752,19 +752,25 @@ impl Gossipsub {
 
         // remove expired fanout topics
         {
-            let fanout = &mut self.fanout; // help the borrow checker
             let fanout_ttl = self.config.fanout_ttl;
-            self.fanout_last_pub.retain(|topic_hash, last_pub_time| {
-                if *last_pub_time + fanout_ttl < Instant::now() {
-                    debug!(
-                        "HEARTBEAT: Fanout topic removed due to timeout. Topic: {:?}",
-                        topic_hash
-                    );
-                    fanout.remove(&topic_hash);
-                    return false;
+            let now = Instant::now();
+            let expired_topics = self.fanout_last_pub.iter().filter_map(
+                |(topic_hash, last_pub_time)| {
+                    if *last_pub_time + fanout_ttl < now {
+                        Some(topic_hash.clone())
+                    } else {
+                        None
+                    }
                 }
-                true
-            });
+            ).collect::<Vec<_>>();
+            for topic_hash in expired_topics {
+                debug!(
+                    "HEARTBEAT: Fanout topic removed due to timeout. Topic: {:?}",
+                    topic_hash
+                );
+                self.fanout.remove(&topic_hash);
+                self.fanout_last_pub.remove(&topic_hash);
+            }
         }
 
         // maintain fanout
@@ -989,7 +995,7 @@ impl Gossipsub {
     /// Helper function to get a set of `n` random gossipsub peers for a `topic_hash`
     /// filtered by the function `f`.
     fn get_random_peers(
-        topic_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
+        topic_peers: &BTreeMap<TopicHash, BTreeSet<PeerId>>,
         topic_hash: &TopicHash,
         n: usize,
         mut f: impl FnMut(&PeerId) -> bool,
@@ -1017,7 +1023,7 @@ impl Gossipsub {
 
     // adds a control action to control_pool
     fn control_pool_add(
-        control_pool: &mut HashMap<PeerId, Vec<GossipsubControlAction>>,
+        control_pool: &mut BTreeMap<PeerId, Vec<GossipsubControlAction>>,
         peer: PeerId,
         control: GossipsubControlAction,
     ) {
@@ -1038,7 +1044,9 @@ impl Gossipsub {
 
     /// Takes each control action mapping and turns it into a message
     fn flush_control_pool(&mut self) {
-        for (peer, controls) in self.control_pool.drain().collect::<Vec<_>>() {
+        let mut old = BTreeMap::new();
+        std::mem::swap(&mut self.control_pool, &mut old);
+        for (peer, controls) in old.into_iter() {
             self.send_message(peer, GossipsubRpc {
                 subscriptions: Vec::new(),
                 messages: Vec::new(),
