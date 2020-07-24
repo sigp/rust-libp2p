@@ -443,7 +443,7 @@ impl Gossipsub {
     /// requests it with an IWANT control message.
     fn handle_ihave(&mut self, peer_id: &PeerId, ihave_msgs: Vec<(TopicHash, Vec<MessageId>)>) {
         debug!("Handling IHAVE for peer: {:?}", peer_id);
-        // use a hashset to avoid duplicates efficiently
+        // use a set to avoid duplicates efficiently
         let mut iwant_ids = BTreeSet::new();
 
         for (topic, ids) in ihave_msgs {
