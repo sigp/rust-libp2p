@@ -46,6 +46,7 @@ use std::{
     iter,
     sync::Arc,
     task::{Context, Poll},
+    fmt,
 };
 use wasm_timer::{Instant, Interval};
 
@@ -1268,7 +1269,7 @@ impl NetworkBehaviour for Gossipsub {
 }
 
 /// An RPC received/sent.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct GossipsubRpc {
     /// List of messages that were part of this RPC query.
     pub messages: Vec<GossipsubMessage>,
@@ -1276,6 +1277,23 @@ pub struct GossipsubRpc {
     pub subscriptions: Vec<GossipsubSubscription>,
     /// List of Gossipsub control messages.
     pub control_msgs: Vec<GossipsubControlAction>,
+}
+
+impl fmt::Debug for GossipsubRpc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut b = f.debug_struct("GossipsubRpc");
+        if !self.messages.is_empty() {
+            b.field("messages", &self.messages);
+        }
+        if !self.subscriptions.is_empty() {
+            b.field("subscriptions", &self.subscriptions);
+        }
+        if !self.control_msgs.is_empty() {
+            b.field("control_msgs", &self.control_msgs);
+        }
+        b.finish()
+    }
+
 }
 
 /// Event that can happen on the gossipsub behaviour.
