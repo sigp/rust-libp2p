@@ -30,15 +30,12 @@ use std::{
 };
 
 use libp2p_core::{
-    Multiaddr,
-    Transport,
-    identity,
-    multiaddr::Protocol,
-    muxing::StreamMuxerBox,
-    transport::MemoryTransport,
-    upgrade,
+    identity, multiaddr::Protocol, muxing::StreamMuxerBox, transport::MemoryTransport, upgrade,
+    Multiaddr, Transport,
 };
-use libp2p_gossipsub::{Gossipsub, GossipsubConfig, GossipsubEvent, Topic};
+use libp2p_gossipsub::{
+    Gossipsub, GossipsubConfigBuilder, GossipsubEvent, MessageAuthenticity, Topic, ValidationMode,
+};
 use libp2p_plaintext::PlainText2Config;
 use libp2p_swarm::Swarm;
 use libp2p_yamux as yamux;
@@ -150,7 +147,18 @@ fn build_node() -> (Multiaddr, Swarm<Gossipsub>) {
         .boxed();
 
     let peer_id = public_key.clone().into_peer_id();
-    let behaviour = Gossipsub::new(peer_id.clone(), GossipsubConfig::default());
+
+    // NOTE: The graph of created nodes can be disconnected from the mesh point of view as nodes
+    // can reach their d_lo value and not add other nodes to their mesh. To speed up this test, we
+    // reduce the default values of the heartbeat, so that all nodes will receive gossip in a
+    // timely fashion.
+
+    let config = GossipsubConfigBuilder::new()
+        .heartbeat_initial_delay(Duration::from_millis(50))
+        .heartbeat_interval(Duration::from_millis(100))
+        .validation_mode(ValidationMode::Permissive)
+        .build();
+    let behaviour = Gossipsub::new(MessageAuthenticity::Author(peer_id.clone()), config);
     let mut swarm = Swarm::new(transport, behaviour, peer_id);
 
     let port = 1 + random::<u64>();
@@ -198,7 +206,7 @@ fn multi_hop_propagation() {
         });
 
         // Publish a single message.
-        graph.nodes[0].1.publish(&topic, vec![1, 2, 3]);
+        graph.nodes[0].1.publish(&topic, vec![1, 2, 3]).unwrap();
 
         // Wait for all nodes to receive the published message.
         let mut received_msgs = 0;
@@ -217,6 +225,6 @@ fn multi_hop_propagation() {
     }
 
     QuickCheck::new()
-        .max_tests(10)
+        .max_tests(1)
         .quickcheck(prop as fn(usize, u64) -> TestResult)
 }

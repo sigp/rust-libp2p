@@ -19,6 +19,7 @@
 // DEALINGS IN THE SOFTWARE.
 
 use crate::behaviour::GossipsubRpc;
+use crate::config::ValidationMode;
 use crate::protocol::{GossipsubCodec, ProtocolConfig};
 use futures::prelude::*;
 use futures_codec::Framed;
@@ -80,24 +81,17 @@ enum OutboundSubstreamState {
 
 impl GossipsubHandler {
     /// Builds a new `GossipsubHandler`.
-    pub fn new(protocol_id: impl Into<Cow<'static, [u8]>>, max_transmit_size: usize) -> Self {
+    pub fn new(
+        protocol_id: impl Into<Cow<'static, [u8]>>,
+        max_transmit_size: usize,
+        validation_mode: ValidationMode,
+    ) -> Self {
         GossipsubHandler {
             listen_protocol: SubstreamProtocol::new(ProtocolConfig::new(
                 protocol_id,
                 max_transmit_size,
+                validation_mode,
             )),
-            inbound_substream: None,
-            outbound_substream: None,
-            send_queue: SmallVec::new(),
-            keep_alive: KeepAlive::Yes,
-        }
-    }
-}
-
-impl Default for GossipsubHandler {
-    fn default() -> Self {
-        GossipsubHandler {
-            listen_protocol: SubstreamProtocol::new(ProtocolConfig::default()),
             inbound_substream: None,
             outbound_substream: None,
             send_queue: SmallVec::new(),
@@ -198,9 +192,21 @@ impl ProtocolsHandler for GossipsubHandler {
                             return Poll::Ready(ProtocolsHandlerEvent::Custom(message));
                         }
                         Poll::Ready(Some(Err(e))) => {
-                            debug!("Inbound substream error while awaiting input: {:?}", e);
-                            self.inbound_substream =
-                                Some(InboundSubstreamState::Closing(substream));
+                            match e.kind() {
+                                std::io::ErrorKind::InvalidData => {
+                                    // Invalid message, ignore it and reset to waiting
+                                    warn!("Invalid message received. Error: {}", e);
+                                    self.inbound_substream =
+                                        Some(InboundSubstreamState::WaitingInput(substream));
+                                }
+                                _ => {
+                                    // More serious errors, close this side of the stream. If the
+                                    // peer is still around, they will re-establish their
+                                    // connection
+                                    self.inbound_substream =
+                                        Some(InboundSubstreamState::Closing(substream));
+                                }
+                            }
                         }
                         // peer closed the stream
                         Poll::Ready(None) => {
@@ -242,7 +248,7 @@ impl ProtocolsHandler for GossipsubHandler {
                     break;
                 }
                 Some(InboundSubstreamState::Poisoned) => {
-                    panic!("Error occurred during inbound stream processing")
+                    unreachable!("Error occurred during inbound stream processing")
                 }
             }
         }
@@ -338,7 +344,7 @@ impl ProtocolsHandler for GossipsubHandler {
                     break;
                 }
                 Some(OutboundSubstreamState::Poisoned) => {
-                    panic!("Error occurred during outbound stream processing")
+                    unreachable!("Error occurred during outbound stream processing")
                 }
             }
         }
