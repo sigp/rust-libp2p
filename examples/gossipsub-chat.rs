@@ -50,7 +50,7 @@ use async_std::{io, task};
 use env_logger::{Builder, Env};
 use futures::prelude::*;
 use libp2p::gossipsub::protocol::MessageId;
-use libp2p::gossipsub::{GossipsubEvent, GossipsubMessage, Signing, Topic};
+use libp2p::gossipsub::{GossipsubEvent, GossipsubMessage, MessageAuthenticity, Topic};
 use libp2p::{gossipsub, identity, PeerId};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -83,7 +83,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let message_id_fn = |message: &GossipsubMessage| {
             let mut s = DefaultHasher::new();
             message.data.hash(&mut s);
-            MessageId(s.finish().to_string())
+            MessageId::from(s.finish().to_string())
         };
 
         // set custom gossipsub
@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .build();
         // build a gossipsub network behaviour
         let mut gossipsub =
-            gossipsub::Gossipsub::new(Signing::Enabled(local_key), gossipsub_config);
+            gossipsub::Gossipsub::new(MessageAuthenticity::Signed(local_key), gossipsub_config);
         gossipsub.subscribe(topic.clone());
         libp2p::Swarm::new(transport, gossipsub, local_peer_id)
     };
@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Kick it off
     let mut listening = false;
-    task::block_on(future::poll_fn(move |cx: &mut Context| {
+    task::block_on(future::poll_fn(move |cx: &mut Context<'_>| {
         loop {
             if let Err(e) = match stdin.try_poll_next_unpin(cx)? {
                 Poll::Ready(Some(line)) => swarm.publish(&topic, line.as_bytes()),

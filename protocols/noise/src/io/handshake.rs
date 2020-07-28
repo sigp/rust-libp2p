@@ -24,16 +24,15 @@ mod payload_proto {
     include!(concat!(env!("OUT_DIR"), "/payload.proto.rs"));
 }
 
-use super::NoiseOutput;
 use crate::error::NoiseError;
-use crate::io::SnowState;
+use crate::io::{framed::NoiseFramed, NoiseOutput};
 use crate::protocol::{KeypairIdentity, Protocol, PublicKey};
-use futures::io::AsyncReadExt;
+use bytes::Bytes;
 use futures::prelude::*;
 use futures::task;
 use libp2p_core::identity;
 use prost::Message;
-use std::{pin::Pin, task::Context};
+use std::{io, pin::Pin, task::Context};
 
 /// The identity of the remote established during a handshake.
 pub enum RemoteIdentity<C> {
@@ -252,7 +251,7 @@ where
 /// Handshake state.
 struct State<T> {
     /// The underlying I/O resource.
-    io: NoiseOutput<T>,
+    io: NoiseFramed<T, snow::HandshakeState>,
     /// The associated public identity of the local node's static DH keypair,
     /// which can be sent to the remote as part of an authenticated handshake.
     identity: KeypairIdentity,
@@ -284,7 +283,7 @@ impl<T> State<T> {
         };
         session.map(|s| State {
             identity,
-            io: NoiseOutput::new(io, SnowState::Handshake(s)),
+            io: NoiseFramed::new(io, s),
             dh_remote_pubkey_sig: None,
             id_remote_pubkey,
             send_identity,
@@ -299,48 +298,48 @@ impl<T> State<T> {
     where
         C: Protocol<C> + AsRef<[u8]>,
     {
-        let dh_remote_pubkey = match self.io.session.get_remote_static() {
-            None => None,
-            Some(k) => match C::public_from_bytes(k) {
-                Err(e) => return Err(e),
-                Ok(dh_pk) => Some(dh_pk),
-            },
-        };
-        match self.io.session.into_transport_mode() {
-            Err(e) => Err(e.into()),
-            Ok(s) => {
-                let remote = match (self.id_remote_pubkey, dh_remote_pubkey) {
-                    (_, None) => RemoteIdentity::Unknown,
-                    (None, Some(dh_pk)) => RemoteIdentity::StaticDhKey(dh_pk),
-                    (Some(id_pk), Some(dh_pk)) => {
-                        if C::verify(&id_pk, &dh_pk, &self.dh_remote_pubkey_sig) {
-                            RemoteIdentity::IdentityKey(id_pk)
-                        } else {
-                            return Err(NoiseError::InvalidKey);
-                        }
-                    }
-                };
-                Ok((
-                    remote,
-                    NoiseOutput {
-                        session: SnowState::Transport(s),
-                        ..self.io
-                    },
-                ))
+        let (pubkey, io) = self.io.into_transport()?;
+        let remote = match (self.id_remote_pubkey, pubkey) {
+            (_, None) => RemoteIdentity::Unknown,
+            (None, Some(dh_pk)) => RemoteIdentity::StaticDhKey(dh_pk),
+            (Some(id_pk), Some(dh_pk)) => {
+                if C::verify(&id_pk, &dh_pk, &self.dh_remote_pubkey_sig) {
+                    RemoteIdentity::IdentityKey(id_pk)
+                } else {
+                    return Err(NoiseError::InvalidKey);
+                }
             }
-        }
+        };
+        Ok((remote, io))
     }
 }
 
 //////////////////////////////////////////////////////////////////////////////
 // Handshake Message Futures
 
+/// A future for receiving a Noise handshake message.
+async fn recv<T>(state: &mut State<T>) -> Result<Bytes, NoiseError>
+where
+    T: AsyncRead + Unpin,
+{
+    match state.io.next().await {
+        None => Err(io::Error::new(io::ErrorKind::UnexpectedEof, "eof").into()),
+        Some(Err(e)) => Err(e.into()),
+        Some(Ok(m)) => Ok(m),
+    }
+}
+
 /// A future for receiving a Noise handshake message with an empty payload.
 async fn recv_empty<T>(state: &mut State<T>) -> Result<(), NoiseError>
 where
     T: AsyncRead + Unpin,
 {
-    state.io.read(&mut []).await?;
+    let msg = recv(state).await?;
+    if !msg.is_empty() {
+        return Err(
+            io::Error::new(io::ErrorKind::InvalidData, "Unexpected handshake payload.").into(),
+        );
+    }
     Ok(())
 }
 
@@ -349,8 +348,7 @@ async fn send_empty<T>(state: &mut State<T>) -> Result<(), NoiseError>
 where
     T: AsyncWrite + Unpin,
 {
-    state.io.write(&[]).await?;
-    state.io.flush().await?;
+    state.io.send(&Vec::new()).await?;
     Ok(())
 }
 
@@ -360,11 +358,41 @@ async fn recv_identity<T>(state: &mut State<T>) -> Result<(), NoiseError>
 where
     T: AsyncRead + Unpin,
 {
-    log::debug!("Reading identity");
-    let mut payload_buf = [0u8; 128];
-    let bytes_read = state.io.read(&mut payload_buf).await?;
-    log::debug!("Total bytes read: {}", bytes_read);
-    let pb = payload_proto::NoiseHandshakePayload::decode(&payload_buf[..bytes_read])?;
+    let msg = recv(state).await?;
+
+    // NOTE: We first try to decode the entire frame as a protobuf message,
+    // as required by the libp2p-noise spec. As long as the frame length
+    // is less than 256 bytes, which is the case for all protobuf payloads
+    // not containing RSA keys, there is no room for misinterpretation,
+    // since if a two-bytes length prefix is present the first byte will
+    // be 0, which is always an unexpected protobuf tag value because the
+    // fields in the .proto file start with 1 and decoding thus expects
+    // a non-zero first byte. We will therefore always correctly fall back to
+    // the legacy protobuf parsing in these cases (again, not considering
+    // RSA keys, for which there may be a probabilistically very small chance
+    // of misinterpretation).
+    //
+    // This is only temporary! Once a release is made that supports
+    // decoding without a length prefix, a follow-up release will
+    // change `send_identity` such that no length prefix is sent.
+    // In yet another release the fallback protobuf parsing can then
+    // be removed.
+    let pb = payload_proto::NoiseHandshakePayload::decode(&msg[..]).or_else(|e| {
+        if msg.len() > 2 {
+            let mut buf = [0, 0];
+            buf.copy_from_slice(&msg[..2]);
+            // If there is a second length it must be 2 bytes shorter than the
+            // frame length, because each length is encoded as a `u16`.
+            if usize::from(u16::from_be_bytes(buf)) + 2 == msg.len() {
+                log::debug!("Attempting fallback legacy protobuf decoding.");
+                payload_proto::NoiseHandshakePayload::decode(&msg[2..])
+            } else {
+                Err(e)
+            }
+        } else {
+            Err(e)
+        }
+    })?;
 
     if !pb.identity_key.is_empty() {
         let pk = identity::PublicKey::from_protobuf_encoding(&pb.identity_key)
@@ -376,6 +404,7 @@ where
         }
         state.id_remote_pubkey = Some(pk);
     }
+
     if !pb.identity_sig.is_empty() {
         state.dh_remote_pubkey_sig = Some(pb.identity_sig);
     }
@@ -395,10 +424,11 @@ where
     if let Some(ref sig) = state.identity.signature {
         pb.identity_sig = sig.clone()
     }
-    let mut buf = Vec::with_capacity(pb.encoded_len());
-    pb.encode(&mut buf)
+    // NOTE: We temporarily need to continue sending the (legacy) length prefix
+    // for a short while to permit migration.
+    let mut msg = Vec::with_capacity(pb.encoded_len());
+    pb.encode(&mut msg)
         .expect("Vec<u8> provides capacity as needed");
-    state.io.write_all(&buf).await?;
-    state.io.flush().await?;
+    state.io.send(&msg).await?;
     Ok(())
 }
