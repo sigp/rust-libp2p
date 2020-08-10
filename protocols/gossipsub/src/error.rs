@@ -50,9 +50,19 @@ pub enum GossipsubHandlerError {
     /// The message exceeds the maximum transmission size.
     MaxTransmissionSize,
     /// The message is invalid.
-    InvalidMessage(&'static str),
+    InvalidMessage(ValidationError),
     /// IO error.
     Io(std::io::Error),
+}
+
+#[derive(Debug)]
+pub enum ValidationError {
+    /// The sequence number was empty, expected a value.
+    EmptySequenceNumber,
+    /// The sequence number was the incorrect size
+    InvalidSequenceNumber,
+    /// The PeerId was invalid
+    InvalidPeerId,
 }
 
 impl From<std::io::Error> for GossipsubHandlerError {

@@ -38,6 +38,29 @@ use std::{
     task::{Context, Poll},
 };
 
+/// The event emitted by the Handler. This informs the behaviour of various events created
+/// by the handler.
+#[derive(Debug)]
+pub enum HandlerEvent {
+    /// A GossipsubRPC message has been received.
+    Message(GossipsubRpc),
+    /// An inbound or outbound substream has been established with the peer and this informs over
+    /// which protocol. This message only occurs once per connection.
+    PeerKind(PeerKind),
+    /// A message was received but didn't pass validation.
+    InvalidSignature,
+}
+
+#[derive(Debug, Clone)]
+pub enum PeerKind {
+    /// A gossipsub 1.1 peer.
+    Gossipsubv1_1,
+    /// A gossipsub 1.0 peer.
+    Gossipsub,
+    /// A floodsub peer.
+    Floodsub,
+}
+
 // The maximum number of substreams we accept or create before disconnecting from the peer.
 //
 // Gossipsub is supposed to have a single long-lived inbound and outbound substream. On failure we
@@ -68,6 +91,13 @@ pub struct GossipsubHandler {
 
     /// The number of inbound substreams that have been created by the peer.
     inbound_substreams_created: usize,
+
+    /// The type of peer this handler is associated to.
+    peer_kind: Option<PeerKind>,
+
+    /// Keeps track on whether we have sent the peer kind to the behaviour.
+    // NOTE: Use this flag rather than checking the substream account each poll.
+    peer_kind_sent: bool,
 
     /// Flag determining whether to maintain the connection to the peer.
     keep_alive: KeepAlive,
@@ -103,12 +133,14 @@ impl GossipsubHandler {
         protocol_id_prefix: std::borrow::Cow<'static, str>,
         max_transmit_size: usize,
         validation_mode: ValidationMode,
+        support_floodsub: bool,
     ) -> Self {
         GossipsubHandler {
             listen_protocol: SubstreamProtocol::new(ProtocolConfig::new(
                 protocol_id_prefix,
                 max_transmit_size,
                 validation_mode,
+                support_floodsub,
             )),
             inbound_substream: None,
             outbound_substream: None,
@@ -116,6 +148,8 @@ impl GossipsubHandler {
             outbound_substreams_created: 0,
             inbound_substreams_created: 0,
             send_queue: SmallVec::new(),
+            peer_kind: None,
+            peer_kind_sent: false,
             keep_alive: KeepAlive::Yes,
         }
     }
@@ -123,7 +157,7 @@ impl GossipsubHandler {
 
 impl ProtocolsHandler for GossipsubHandler {
     type InEvent = GossipsubRpc;
-    type OutEvent = GossipsubRpc;
+    type OutEvent = HandlerEvent;
     type Error = GossipsubHandlerError;
     type InboundProtocol = ProtocolConfig;
     type OutboundProtocol = ProtocolConfig;
@@ -135,9 +169,14 @@ impl ProtocolsHandler for GossipsubHandler {
 
     fn inject_fully_negotiated_inbound(
         &mut self,
-        substream: <Self::InboundProtocol as InboundUpgrade<NegotiatedSubstream>>::Output,
+        (substream, peer_kind): <Self::InboundProtocol as InboundUpgrade<NegotiatedSubstream>>::Output,
     ) {
         self.inbound_substreams_created += 1;
+
+        // update the known kind of peer
+        if self.peer_kind.is_none() {
+            self.peer_kind = Some(peer_kind);
+        }
 
         // new inbound substream. Replace the current one, if it exists.
         trace!("New inbound substream request");
@@ -146,11 +185,16 @@ impl ProtocolsHandler for GossipsubHandler {
 
     fn inject_fully_negotiated_outbound(
         &mut self,
-        substream: <Self::OutboundProtocol as OutboundUpgrade<NegotiatedSubstream>>::Output,
+        (substream, peer_kind): <Self::OutboundProtocol as OutboundUpgrade<NegotiatedSubstream>>::Output,
         message: Self::OutboundOpenInfo,
     ) {
         self.outbound_substream_establishing = false;
         self.outbound_substreams_created += 1;
+
+        // update the known kind of peer
+        if self.peer_kind.is_none() {
+            self.peer_kind = Some(peer_kind);
+        }
 
         // Should never establish a new outbound substream if one already exists.
         // If this happens, an outbound message is not sent.
@@ -196,6 +240,15 @@ impl ProtocolsHandler for GossipsubHandler {
             Self::Error,
         >,
     > {
+        if !self.peer_kind_sent {
+            if let Some(peer_kind) = self.peer_kind.as_ref() {
+                self.peer_kind_sent = true;
+                return Poll::Ready(ProtocolsHandlerEvent::Custom(HandlerEvent::PeerKind(
+                    peer_kind.clone(),
+                )));
+            }
+        }
+
         if self.inbound_substreams_created > MAX_SUBSTREAM_CREATION {
             // Too many inbound substreams have been created, end the connection.
             return Poll::Ready(ProtocolsHandlerEvent::Close(
@@ -239,7 +292,7 @@ impl ProtocolsHandler for GossipsubHandler {
                             match error {
                                 GossipsubHandlerError::InvalidMessage(reason) => {
                                     // Invalid message, ignore it and reset to waiting
-                                    warn!("Invalid message received. Error: {}", reason);
+                                    warn!("Invalid message received. Error: {:?}", reason);
                                     self.inbound_substream =
                                         Some(InboundSubstreamState::WaitingInput(substream));
                                 }

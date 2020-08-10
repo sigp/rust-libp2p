@@ -2534,11 +2534,11 @@ mod tests {
         gs.inject_event(
             p1.clone(),
             ConnectionId::new(0),
-            GossipsubRpc {
+            HandlerEvent::Message(GossipsubRpc {
                 messages: vec![message1],
                 subscriptions: vec![subscription.clone()],
                 control_msgs: vec![control_action],
-            },
+            }),
         );
 
         //no events got processed
@@ -2553,11 +2553,11 @@ mod tests {
         gs.inject_event(
             p2.clone(),
             ConnectionId::new(0),
-            GossipsubRpc {
+            HandlerEvent::Message(GossipsubRpc {
                 messages: vec![message3],
                 subscriptions: vec![subscription.clone()],
                 control_msgs: vec![control_action],
-            },
+            }),
         );
 
         //events got processed

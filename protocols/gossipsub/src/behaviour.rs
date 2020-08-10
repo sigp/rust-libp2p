@@ -52,7 +52,7 @@ use libp2p_swarm::{
 use crate::config::{GossipsubConfig, ValidationMode};
 use crate::error::PublishError;
 use crate::gossip_promises::GossipPromises;
-use crate::handler::GossipsubHandler;
+use crate::handler::{GossipsubHandler, HandlerEvent, PeerKind};
 use crate::mcache::MessageCache;
 use crate::peer_score::{PeerScore, PeerScoreParams, PeerScoreThresholds, RejectMsg};
 use crate::protocol::{
@@ -2190,6 +2190,7 @@ impl NetworkBehaviour for Gossipsub {
             self.config.protocol_id_prefix().clone(),
             self.config.max_transmit_size(),
             self.config.validation_mode().clone(),
+            self.config.support_floodsub(),
         )
     }
 
@@ -2341,57 +2342,80 @@ impl NetworkBehaviour for Gossipsub {
         }
     }
 
-    fn inject_event(&mut self, propagation_source: PeerId, _: ConnectionId, event: GossipsubRpc) {
-        //check if peer is graylisted in which case we ignore the event
-        if let (true, _) =
-            self.score_below_threshold(&propagation_source, |ts| ts.graylist_threshold)
-        {
-            return;
-        }
-
-        // Handle subscriptions
-        // Update connected peers topics
-        if !event.subscriptions.is_empty() {
-            self.handle_received_subscriptions(&event.subscriptions, &propagation_source);
-        }
-
-        // Handle messages
-        for message in event.messages {
-            self.handle_received_message(message, &propagation_source);
-        }
-
-        // Handle control messages
-        // group some control messages, this minimises SendEvents (code is simplified to handle each event at a time however)
-        let mut ihave_msgs = vec![];
-        let mut graft_msgs = vec![];
-        let mut prune_msgs = vec![];
-        for control_msg in event.control_msgs {
-            match control_msg {
-                GossipsubControlAction::IHave {
-                    topic_hash,
-                    message_ids,
-                } => {
-                    ihave_msgs.push((topic_hash, message_ids));
-                }
-                GossipsubControlAction::IWant { message_ids } => {
-                    self.handle_iwant(&propagation_source, message_ids)
-                }
-                GossipsubControlAction::Graft { topic_hash } => graft_msgs.push(topic_hash),
-                GossipsubControlAction::Prune {
-                    topic_hash,
-                    peers,
-                    backoff,
-                } => prune_msgs.push((topic_hash, peers, backoff)),
+    fn inject_event(
+        &mut self,
+        propagation_source: PeerId,
+        _: ConnectionId,
+        handler_event: HandlerEvent,
+    ) {
+        match handler_event {
+            HandlerEvent::PeerKind(PeerKind::Gossipsubv1_1) => {
+                // This is a gossipsub 1.1 peer
             }
-        }
-        if !ihave_msgs.is_empty() {
-            self.handle_ihave(&propagation_source, ihave_msgs);
-        }
-        if !graft_msgs.is_empty() {
-            self.handle_graft(&propagation_source, graft_msgs);
-        }
-        if !prune_msgs.is_empty() {
-            self.handle_prune(&propagation_source, prune_msgs);
+            HandlerEvent::PeerKind(PeerKind::Gossipsub) => {
+                // This is a gossipsub peer
+            }
+            HandlerEvent::PeerKind(PeerKind::Floodsub) => {
+                // This is a floodsub peer
+            }
+            HandlerEvent::InvalidSignature => {
+                // This peer sent us an invalid signature
+            }
+            HandlerEvent::Message(event) => {
+                // We received a gossipsub RPC message
+
+                //check if peer is graylisted in which case we ignore the event
+                if let (true, _) =
+                    self.score_below_threshold(&propagation_source, |ts| ts.graylist_threshold)
+                {
+                    return;
+                }
+
+                // Handle subscriptions
+                // Update connected peers topics
+                if !event.subscriptions.is_empty() {
+                    self.handle_received_subscriptions(&event.subscriptions, &propagation_source);
+                }
+
+                // Handle messages
+                for message in event.messages {
+                    self.handle_received_message(message, &propagation_source);
+                }
+
+                // Handle control messages
+                // group some control messages, this minimises SendEvents (code is simplified to handle each event at a time however)
+                let mut ihave_msgs = vec![];
+                let mut graft_msgs = vec![];
+                let mut prune_msgs = vec![];
+                for control_msg in event.control_msgs {
+                    match control_msg {
+                        GossipsubControlAction::IHave {
+                            topic_hash,
+                            message_ids,
+                        } => {
+                            ihave_msgs.push((topic_hash, message_ids));
+                        }
+                        GossipsubControlAction::IWant { message_ids } => {
+                            self.handle_iwant(&propagation_source, message_ids)
+                        }
+                        GossipsubControlAction::Graft { topic_hash } => graft_msgs.push(topic_hash),
+                        GossipsubControlAction::Prune {
+                            topic_hash,
+                            peers,
+                            backoff,
+                        } => prune_msgs.push((topic_hash, peers, backoff)),
+                    }
+                }
+                if !ihave_msgs.is_empty() {
+                    self.handle_ihave(&propagation_source, ihave_msgs);
+                }
+                if !graft_msgs.is_empty() {
+                    self.handle_graft(&propagation_source, graft_msgs);
+                }
+                if !prune_msgs.is_empty() {
+                    self.handle_prune(&propagation_source, prune_msgs);
+                }
+            }
         }
     }
 

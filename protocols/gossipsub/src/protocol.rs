@@ -20,7 +20,8 @@
 
 use crate::behaviour::GossipsubRpc;
 use crate::config::ValidationMode;
-use crate::error::GossipsubHandlerError;
+use crate::error::{GossipsubHandlerError, ValidationError};
+use crate::handler::{HandlerEvent, PeerKind};
 use crate::rpc_proto;
 use crate::topic::TopicHash;
 use byteorder::{BigEndian, ByteOrder};
@@ -29,19 +30,21 @@ use bytes::BytesMut;
 use futures::future;
 use futures::prelude::*;
 use futures_codec::{Decoder, Encoder, Framed};
-use libp2p_core::{identity::PublicKey, InboundUpgrade, OutboundUpgrade, PeerId, UpgradeInfo};
+use libp2p_core::{
+    identity::PublicKey, InboundUpgrade, OutboundUpgrade, PeerId, ProtocolName, UpgradeInfo,
+};
 use log::{debug, warn};
 use prost::Message as ProtobufMessage;
-use std::{borrow::Cow, fmt, io, pin::Pin};
+use std::{borrow::Cow, fmt, pin::Pin};
 use unsigned_varint::codec;
 
-pub const SIGNING_PREFIX: &'static [u8] = b"libp2p-pubsub:";
+pub(crate) const SIGNING_PREFIX: &'static [u8] = b"libp2p-pubsub:";
 
 /// Implementation of the `ConnectionUpgrade` for the Gossipsub protocol.
 #[derive(Clone)]
 pub struct ProtocolConfig {
     /// The gossipsub protocol id to listen on.
-    protocol_ids: Vec<Cow<'static, [u8]>>,
+    protocol_ids: Vec<ProtocolId>,
     /// The maximum transmit size for a packet.
     max_transmit_size: usize,
     /// Determines the level of validation to be done on incoming messages.
@@ -52,24 +55,60 @@ impl ProtocolConfig {
     /// Builds a new `ProtocolConfig`.
     /// Sets the maximum gossip transmission size.
     pub fn new(
-        protocol_id_prefix: Cow<'static, str>,
+        id_prefix: Cow<'static, str>,
         max_transmit_size: usize,
         validation_mode: ValidationMode,
+        support_floodsub: bool,
     ) -> ProtocolConfig {
-        let generate_id =
-            |version: &str| Cow::Owned(format!("/{}/{}", protocol_id_prefix, version).into_bytes());
+        // support version 1.1.0 and 1.0.0 with user-customized prefix
+        let mut protocol_ids = vec![
+            ProtocolId::new(id_prefix.clone(), PeerKind::Gossipsubv1_1),
+            ProtocolId::new(id_prefix, PeerKind::Gossipsub),
+        ];
+
+        // add floodsub support if enabled.
+        if support_floodsub {
+            protocol_ids.push(ProtocolId::new(Cow::from(""), PeerKind::Floodsub));
+        }
 
         ProtocolConfig {
-            // support version 1.1.0 and 1.0.0 with user-customized prefix
-            protocol_ids: vec![generate_id("1.1.0"), generate_id("1.0.0")],
+            protocol_ids,
             max_transmit_size,
             validation_mode,
         }
     }
 }
 
+/// The protocol ID
+#[derive(Clone, Debug)]
+pub struct ProtocolId {
+    /// The RPC message type/name.
+    pub protocol_id: Vec<u8>,
+    /// The type of protocol we support
+    pub kind: PeerKind,
+}
+
+/// An RPC protocol ID.
+impl ProtocolId {
+    pub fn new(prefix: Cow<'static, str>, kind: PeerKind) -> Self {
+        let protocol_id = match kind {
+            PeerKind::Gossipsubv1_1 => format!("/{}/{}", prefix, "1.1.0"),
+            PeerKind::Gossipsub => format!("/{}/{}", prefix, "1.0.0"),
+            PeerKind::Floodsub => format!("/{}/{}", "floodsub", "1.0.0"),
+        }
+        .into_bytes();
+        ProtocolId { protocol_id, kind }
+    }
+}
+
+impl ProtocolName for ProtocolId {
+    fn protocol_name(&self) -> &[u8] {
+        &self.protocol_id
+    }
+}
+
 impl UpgradeInfo for ProtocolConfig {
-    type Info = Cow<'static, [u8]>;
+    type Info = ProtocolId;
     type InfoIter = Vec<Self::Info>;
 
     fn protocol_info(&self) -> Self::InfoIter {
@@ -81,16 +120,19 @@ impl<TSocket> InboundUpgrade<TSocket> for ProtocolConfig
 where
     TSocket: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    type Output = Framed<TSocket, GossipsubCodec>;
+    type Output = (Framed<TSocket, GossipsubCodec>, PeerKind);
     type Error = GossipsubHandlerError;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Output, Self::Error>> + Send>>;
 
-    fn upgrade_inbound(self, socket: TSocket, _: Self::Info) -> Self::Future {
+    fn upgrade_inbound(self, socket: TSocket, protocol_id: Self::Info) -> Self::Future {
         let mut length_codec = codec::UviBytes::default();
         length_codec.set_max_len(self.max_transmit_size);
-        Box::pin(future::ok(Framed::new(
-            socket,
-            GossipsubCodec::new(length_codec, self.validation_mode),
+        Box::pin(future::ok((
+            Framed::new(
+                socket,
+                GossipsubCodec::new(length_codec, self.validation_mode),
+            ),
+            protocol_id.kind,
         )))
     }
 }
@@ -99,16 +141,19 @@ impl<TSocket> OutboundUpgrade<TSocket> for ProtocolConfig
 where
     TSocket: AsyncWrite + AsyncRead + Unpin + Send + 'static,
 {
-    type Output = Framed<TSocket, GossipsubCodec>;
+    type Output = (Framed<TSocket, GossipsubCodec>, PeerKind);
     type Error = GossipsubHandlerError;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Output, Self::Error>> + Send>>;
 
-    fn upgrade_outbound(self, socket: TSocket, _: Self::Info) -> Self::Future {
+    fn upgrade_outbound(self, socket: TSocket, protocol_id: Self::Info) -> Self::Future {
         let mut length_codec = codec::UviBytes::default();
         length_codec.set_max_len(self.max_transmit_size);
-        Box::pin(future::ok(Framed::new(
-            socket,
-            GossipsubCodec::new(length_codec, self.validation_mode),
+        Box::pin(future::ok((
+            Framed::new(
+                socket,
+                GossipsubCodec::new(length_codec, self.validation_mode),
+            ),
+            protocol_id.kind,
         )))
     }
 }
@@ -309,7 +354,7 @@ impl Encoder for GossipsubCodec {
 }
 
 impl Decoder for GossipsubCodec {
-    type Item = GossipsubRpc;
+    type Item = HandlerEvent;
     type Error = GossipsubHandlerError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
@@ -376,19 +421,19 @@ impl Decoder for GossipsubCodec {
                 // error to avoid extra logic to deal with these errors in the handler.
                 if !GossipsubCodec::verify_signature(&message) {
                     warn!("Message dropped. Invalid signature");
-                    // Drop the message
-                    return Ok(None);
+                    // Report to the behaviour.
+                    return Ok(Some(HandlerEvent::InvalidSignature));
                 }
             }
 
             // ensure the sequence number is a u64
             let sequence_number = if verify_sequence_no {
                 let seq_no = message.seqno.ok_or_else(|| {
-                    GossipsubHandlerError::InvalidMessage("Empty sequence number")
+                    GossipsubHandlerError::InvalidMessage(ValidationError::EmptySequenceNumber)
                 })?;
                 if seq_no.len() != 8 {
                     return Err(GossipsubHandlerError::InvalidMessage(
-                        "Invalid sequence number",
+                        ValidationError::InvalidSequenceNumber,
                     ));
                 }
                 Some(BigEndian::read_u64(&seq_no))
@@ -398,8 +443,9 @@ impl Decoder for GossipsubCodec {
 
             let source = if verify_source {
                 Some(
-                    PeerId::from_bytes(message.from.unwrap_or_default())
-                        .map_err(|_| GossipsubHandlerError::InvalidMessage("Invalid Peer Id"))?,
+                    PeerId::from_bytes(message.from.unwrap_or_default()).map_err(|_| {
+                        GossipsubHandlerError::InvalidMessage(ValidationError::InvalidPeerId)
+                    })?,
                 )
             } else {
                 None
@@ -474,9 +520,8 @@ impl Decoder for GossipsubCodec {
                                             .map(|id| PeerId::from_bytes(id))
                                             .transpose()
                                             .map_err(|_| {
-                                                io::Error::new(
-                                                    io::ErrorKind::InvalidData,
-                                                    "Invalid Peer Id",
+                                                GossipsubHandlerError::InvalidMessage(
+                                                    ValidationError::InvalidPeerId,
                                                 )
                                             })?,
                                         //TODO signedPeerRecord, see https://github.com/libp2p/specs/pull/217
@@ -495,7 +540,7 @@ impl Decoder for GossipsubCodec {
             control_msgs.extend(prune_msgs);
         }
 
-        Ok(Some(GossipsubRpc {
+        Ok(Some(HandlerEvent::Message(GossipsubRpc {
             messages,
             subscriptions: rpc
                 .subscriptions
@@ -510,7 +555,7 @@ impl Decoder for GossipsubCodec {
                 })
                 .collect(),
             control_msgs,
-        }))
+        })))
     }
 }
 
@@ -723,11 +768,16 @@ mod tests {
             let mut codec = GossipsubCodec::new(codec::UviBytes::default(), ValidationMode::Strict);
             let mut buf = BytesMut::new();
             codec.encode(rpc.clone(), &mut buf).unwrap();
-            let mut decoded_rpc = codec.decode(&mut buf).unwrap().unwrap();
+            let decoded_rpc = codec.decode(&mut buf).unwrap().unwrap();
             // mark as validated as its a published message
-            decoded_rpc.messages[0].validated = true;
+            match decoded_rpc {
+                HandlerEvent::Message(mut msg) => {
+                    msg.messages[0].validated = true;
 
-            assert_eq!(rpc, decoded_rpc);
+                    assert_eq!(rpc, msg);
+                }
+                _ => panic!("Must decode a message"),
+            }
         }
 
         QuickCheck::new().quickcheck(prop as fn(_) -> _)
