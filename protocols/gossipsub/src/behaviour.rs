@@ -347,6 +347,9 @@ pub struct Gossipsub {
     /// duplicates from being propagated to the application and on the network.
     duplication_cache: DuplicateCache<MessageId>,
 
+    /// maps peer ids to its protocol kind
+    peer_protocols: HashMap<PeerId, PeerKind>,
+
     /// A map of all connected peers - A map of topic hash to a list of gossipsub peer Ids.
     topic_peers: HashMap<TopicHash, BTreeSet<PeerId>>,
 
@@ -442,6 +445,7 @@ impl Gossipsub {
             peer_score: None,
             count_peer_have: HashMap::new(),
             count_iasked: HashMap::new(),
+            peer_protocols: HashMap::new(),
         }
     }
 
@@ -582,7 +586,16 @@ impl Gossipsub {
                     }
                 }
 
-                //TODO floodsub peers?
+                //floodsub peers
+                for (peer, kind) in &self.peer_protocols {
+                    if kind == &PeerKind::Floodsub
+                        && !self
+                            .score_below_threshold(peer, |ts| ts.publish_threshold)
+                            .0
+                    {
+                        recipient_peers.insert(peer.clone());
+                    }
+                }
 
                 //gossipsub peers
                 if self.mesh.get(&topic_hash).is_none() {
@@ -596,15 +609,20 @@ impl Gossipsub {
                     } else {
                         // we have no fanout peers, select mesh_n of them and add them to the fanout
                         let mesh_n = self.config.mesh_n();
-                        let new_peers =
-                            Self::get_random_peers(&self.topic_peers, &topic_hash, mesh_n, {
+                        let new_peers = Self::get_random_peers(
+                            &self.topic_peers,
+                            &self.peer_protocols,
+                            &topic_hash,
+                            mesh_n,
+                            {
                                 |p| {
                                     !self.explicit_peers.contains(p)
                                         && !self
                                             .score_below_threshold(p, |ts| ts.publish_threshold)
                                             .0
                                 }
-                            });
+                            },
+                        );
                         // add the new peers to the fanout and recipient peers
                         self.fanout.insert(topic_hash.clone(), new_peers.clone());
                         for peer in new_peers {
@@ -793,6 +811,7 @@ impl Gossipsub {
             // get the peers
             let new_peers = Self::get_random_peers(
                 &self.topic_peers,
+                &self.peer_protocols,
                 topic_hash,
                 self.config.mesh_n() - added_peers.len(),
                 |peer| {
@@ -837,12 +856,28 @@ impl Gossipsub {
         peer: &PeerId,
         do_px: bool,
     ) -> GossipsubControlAction {
-        //TODO check the receving peers version and if not 1.1 do not send any exchange peers
+        if let Some((peer_score, ..)) = &mut self.peer_score {
+            peer_score.prune(peer, topic_hash.clone());
+        }
+
+        if let Some(PeerKind::Gossipsub) = self.peer_protocols.get(peer) {
+            // GossipSub v1.0 -- no peer exchange, the peer won't be able to parse it anyway
+            return GossipsubControlAction::Prune {
+                topic_hash: topic_hash.clone(),
+                peers: Vec::new(),
+                backoff: None,
+            };
+        }
+
         //select peers for peer exchange
         let peers = if do_px {
-            Self::get_random_peers(&self.topic_peers, &topic_hash, self.config.prune_peers(), {
-                |p| p != peer && !self.score_below_threshold(p, |_| 0.0).0
-            })
+            Self::get_random_peers(
+                &self.topic_peers,
+                &self.peer_protocols,
+                &topic_hash,
+                self.config.prune_peers(),
+                { |p| p != peer && !self.score_below_threshold(p, |_| 0.0).0 },
+            )
             .into_iter()
             .map(|p| PeerInfo { peer: Some(p) })
             .collect()
@@ -854,9 +889,6 @@ impl Gossipsub {
         self.backoffs
             .update_backoff(topic_hash, peer, self.config.prune_backoff());
 
-        if let Some((peer_score, ..)) = &mut self.peer_score {
-            peer_score.prune(peer, topic_hash.clone());
-        }
         GossipsubControlAction::Prune {
             topic_hash: topic_hash.clone(),
             peers,
@@ -1384,7 +1416,13 @@ impl Gossipsub {
                     subscribed_topics.insert(subscription.topic_hash.clone());
 
                     // if the mesh needs peers add the peer to the mesh
-                    if !self.explicit_peers.contains(propagation_source) {
+                    if !self.explicit_peers.contains(propagation_source)
+                        && match self.peer_protocols.get(propagation_source) {
+                            Some(PeerKind::Gossipsubv1_1) => true,
+                            Some(PeerKind::Gossipsub) => true,
+                            _ => false,
+                        }
+                    {
                         if let Some(peers) = self.mesh.get_mut(&subscription.topic_hash) {
                             if peers.len() < self.config.mesh_n_low() {
                                 if peers.insert(propagation_source.clone()) {
@@ -1562,13 +1600,18 @@ impl Gossipsub {
                 );
                 // not enough peers - get mesh_n - current_length more
                 let desired_peers = self.config.mesh_n() - peers.len();
-                let peer_list =
-                    Self::get_random_peers(topic_peers, topic_hash, desired_peers, |peer| {
+                let peer_list = Self::get_random_peers(
+                    topic_peers,
+                    &self.peer_protocols,
+                    topic_hash,
+                    desired_peers,
+                    |peer| {
                         !peers.contains(peer)
                             && !explicit_peers.contains(peer)
                             && !backoffs.is_backoff_with_slack(topic_hash, peer)
                             && score(peer) >= 0.0
-                    });
+                    },
+                );
                 for peer in &peer_list {
                     let current_topic = to_graft.entry(peer.clone()).or_insert_with(Vec::new);
                     current_topic.push(topic_hash.clone());
@@ -1639,14 +1682,19 @@ impl Gossipsub {
                 //if we have not enough outbound peers, graft to some new outbound peers
                 if outbound < self.config.mesh_outbound_min() {
                     let needed = self.config.mesh_outbound_min() - outbound;
-                    let peer_list =
-                        Self::get_random_peers(topic_peers, topic_hash, needed, |peer| {
+                    let peer_list = Self::get_random_peers(
+                        topic_peers,
+                        &self.peer_protocols,
+                        topic_hash,
+                        needed,
+                        |peer| {
                             !peers.contains(peer)
                                 && !explicit_peers.contains(peer)
                                 && !backoffs.is_backoff_with_slack(topic_hash, peer)
                                 && score(peer) >= 0.0
                                 && outbound_peers.contains(peer)
-                        });
+                        },
+                    );
                     for peer in &peer_list {
                         let current_topic = to_graft.entry(peer.clone()).or_insert_with(Vec::new);
                         current_topic.push(topic_hash.clone());
@@ -1693,6 +1741,7 @@ impl Gossipsub {
                     if median < thresholds.opportunistic_graft_threshold {
                         let peer_list = Self::get_random_peers(
                             topic_peers,
+                            &self.peer_protocols,
                             topic_hash,
                             self.config.opportunistic_graft_peers(),
                             |peer| {
@@ -1774,12 +1823,17 @@ impl Gossipsub {
                 );
                 let needed_peers = self.config.mesh_n() - peers.len();
                 let explicit_peers = &self.explicit_peers;
-                let new_peers =
-                    Self::get_random_peers(&self.topic_peers, topic_hash, needed_peers, |peer| {
+                let new_peers = Self::get_random_peers(
+                    &self.topic_peers,
+                    &self.peer_protocols,
+                    topic_hash,
+                    needed_peers,
+                    |peer| {
                         !peers.contains(peer)
                             && !explicit_peers.contains(peer)
                             && score(peer) < publish_threshold
-                    });
+                    },
+                );
                 peers.extend(new_peers);
             }
         }
@@ -1830,12 +1884,17 @@ impl Gossipsub {
                 )
             };
             // get gossip_lazy random peers
-            let to_msg_peers =
-                Self::get_random_peers_dynamic(&self.topic_peers, &topic_hash, n_map, |peer| {
+            let to_msg_peers = Self::get_random_peers_dynamic(
+                &self.topic_peers,
+                &self.peer_protocols,
+                &topic_hash,
+                n_map,
+                |peer| {
                     !peers.contains(peer)
                         && !self.explicit_peers.contains(peer)
                         && !self.score_below_threshold(peer, |ts| ts.gossip_threshold).0
-                });
+                },
+            );
 
             debug!("Gossiping IHAVE to {} peers.", to_msg_peers.len());
 
@@ -2090,6 +2149,7 @@ impl Gossipsub {
     /// that gets as input the number of filtered peers.
     fn get_random_peers_dynamic(
         topic_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
+        peer_protocols: &HashMap<PeerId, PeerKind>,
         topic_hash: &TopicHash,
         // maps the number of total peers to the number of selected peers
         n_map: impl Fn(usize) -> usize,
@@ -2097,7 +2157,17 @@ impl Gossipsub {
     ) -> BTreeSet<PeerId> {
         let mut gossip_peers = match topic_peers.get(topic_hash) {
             // if they exist, filter the peers by `f`
-            Some(peer_list) => peer_list.iter().cloned().filter(|p| f(p)).collect(),
+            Some(peer_list) => peer_list
+                .iter()
+                .cloned()
+                .filter(|p| {
+                    f(p) && match peer_protocols.get(p) {
+                        Some(PeerKind::Gossipsub) => true,
+                        Some(PeerKind::Gossipsubv1_1) => true,
+                        _ => false,
+                    }
+                })
+                .collect(),
             None => Vec::new(),
         };
 
@@ -2121,11 +2191,12 @@ impl Gossipsub {
     /// filtered by the function `f`.
     fn get_random_peers(
         topic_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
+        peer_protocols: &HashMap<PeerId, PeerKind>,
         topic_hash: &TopicHash,
         n: usize,
         f: impl FnMut(&PeerId) -> bool,
     ) -> BTreeSet<PeerId> {
-        Self::get_random_peers_dynamic(topic_peers, topic_hash, |_| n, f)
+        Self::get_random_peers_dynamic(topic_peers, peer_protocols, topic_hash, |_| n, f)
     }
 
     // adds a control action to control_pool
@@ -2224,6 +2295,11 @@ impl NetworkBehaviour for Gossipsub {
         // For the time being assume all gossipsub peers
         self.peer_topics.insert(id.clone(), Default::default());
 
+        // By default we assume a peer is only a floodsub peer
+        self.peer_protocols
+            .entry(id.clone())
+            .or_insert(PeerKind::Floodsub);
+
         if let Some((peer_score, ..)) = &mut self.peer_score {
             peer_score.add_peer(id.clone());
         }
@@ -2271,8 +2347,10 @@ impl NetworkBehaviour for Gossipsub {
             self.outbound_peers.remove(id);
         }
 
-        // remove peer from peer_topics
+        // remove peer from peer_topics and peer_protocols
         let was_in = self.peer_topics.remove(id);
+        debug_assert!(was_in.is_some());
+        let was_in = self.peer_protocols.remove(id);
         debug_assert!(was_in.is_some());
 
         if let Some((peer_score, ..)) = &mut self.peer_score {
@@ -2349,14 +2427,8 @@ impl NetworkBehaviour for Gossipsub {
         handler_event: HandlerEvent,
     ) {
         match handler_event {
-            HandlerEvent::PeerKind(PeerKind::Gossipsubv1_1) => {
-                // This is a gossipsub 1.1 peer
-            }
-            HandlerEvent::PeerKind(PeerKind::Gossipsub) => {
-                // This is a gossipsub peer
-            }
-            HandlerEvent::PeerKind(PeerKind::Floodsub) => {
-                // This is a floodsub peer
+            HandlerEvent::PeerKind(kind) => {
+                self.peer_protocols.insert(propagation_source.clone(), kind);
             }
             HandlerEvent::InvalidMessage(validation_error) => {
                 match validation_error {

@@ -155,6 +155,24 @@ mod tests {
         explicit: bool,
         address: Multiaddr,
     ) -> PeerId {
+        add_peer_with_addr_and_kind(
+            gs,
+            topic_hashes,
+            outbound,
+            explicit,
+            address,
+            Some(PeerKind::Gossipsubv1_1),
+        )
+    }
+
+    fn add_peer_with_addr_and_kind(
+        gs: &mut Gossipsub,
+        topic_hashes: &Vec<TopicHash>,
+        outbound: bool,
+        explicit: bool,
+        address: Multiaddr,
+        kind: Option<PeerKind>,
+    ) -> PeerId {
         let peer = PeerId::random();
         //peers.push(peer.clone());
         gs.inject_connection_established(
@@ -170,6 +188,13 @@ mod tests {
             },
         );
         <Gossipsub as NetworkBehaviour>::inject_connected(gs, &peer);
+        if let Some(kind) = kind {
+            gs.inject_event(
+                peer.clone(),
+                ConnectionId::new(1),
+                HandlerEvent::PeerKind(kind),
+            );
+        }
         if explicit {
             gs.add_explicit_peer(&peer);
         }
@@ -695,28 +720,64 @@ mod tests {
         gs.topic_peers
             .insert(topic_hash.clone(), peers.iter().cloned().collect());
 
-        let random_peers = Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 5, |_| true);
+        gs.peer_protocols = peers
+            .iter()
+            .map(|p| (p.clone(), PeerKind::Gossipsubv1_1))
+            .collect();
+
+        let random_peers = Gossipsub::get_random_peers(
+            &gs.topic_peers,
+            &gs.peer_protocols,
+            &topic_hash,
+            5,
+            |_| true,
+        );
         assert_eq!(random_peers.len(), 5, "Expected 5 peers to be returned");
-        let random_peers = Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 30, |_| true);
+        let random_peers = Gossipsub::get_random_peers(
+            &gs.topic_peers,
+            &gs.peer_protocols,
+            &topic_hash,
+            30,
+            |_| true,
+        );
         assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
         assert!(
             random_peers == peers.iter().cloned().collect(),
             "Expected no shuffling"
         );
-        let random_peers = Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 20, |_| true);
+        let random_peers = Gossipsub::get_random_peers(
+            &gs.topic_peers,
+            &gs.peer_protocols,
+            &topic_hash,
+            20,
+            |_| true,
+        );
         assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
         assert!(
             random_peers == peers.iter().cloned().collect(),
             "Expected no shuffling"
         );
-        let random_peers = Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 0, |_| true);
+        let random_peers = Gossipsub::get_random_peers(
+            &gs.topic_peers,
+            &gs.peer_protocols,
+            &topic_hash,
+            0,
+            |_| true,
+        );
         assert!(random_peers.len() == 0, "Expected 0 peers to be returned");
         // test the filter
-        let random_peers = Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 5, |_| false);
+        let random_peers = Gossipsub::get_random_peers(
+            &gs.topic_peers,
+            &gs.peer_protocols,
+            &topic_hash,
+            5,
+            |_| false,
+        );
         assert!(random_peers.len() == 0, "Expected 0 peers to be returned");
-        let random_peers = Gossipsub::get_random_peers(&gs.topic_peers, &topic_hash, 10, {
-            |peer| peers.contains(peer)
-        });
+        let random_peers =
+            Gossipsub::get_random_peers(&gs.topic_peers, &gs.peer_protocols, &topic_hash, 10, {
+                |peer| peers.contains(peer)
+            });
         assert!(random_peers.len() == 10, "Expected 10 peers to be returned");
     }
 
@@ -4118,7 +4179,7 @@ mod tests {
     #[test]
     fn test_iwant_penalties() {
         let config = GossipsubConfigBuilder::new()
-            .iwant_followup_time(Duration::from_secs(1))
+            .iwant_followup_time(Duration::from_secs(4))
             .build()
             .unwrap();
         let mut peer_score_params = PeerScoreParams::default();
@@ -4183,7 +4244,7 @@ mod tests {
         }
 
         //sleep for one second
-        sleep(Duration::from_secs(1));
+        sleep(Duration::from_secs(4));
 
         //now we do a heartbeat to apply penalization
         gs.heartbeat();
@@ -4221,5 +4282,236 @@ mod tests {
         assert!(not_penalized > 10);
         assert!(single_penalized > 0);
         assert!(double_penalized > 0);
+    }
+
+    #[test]
+    fn test_publish_to_floodsub_peers_without_flood_publish() {
+        let config = GossipsubConfigBuilder::new()
+            .flood_publish(false)
+            .build()
+            .unwrap();
+        let (mut gs, _, topics) = build_and_inject_nodes_with_config(
+            config.mesh_n_low() - 1,
+            vec!["test".into()],
+            false,
+            config,
+        );
+
+        //add two floodsub peer, one explicit, one implicit
+        let p1 = add_peer_with_addr_and_kind(
+            &mut gs,
+            &topics,
+            false,
+            false,
+            Multiaddr::empty(),
+            Some(PeerKind::Floodsub),
+        );
+        let p2 =
+            add_peer_with_addr_and_kind(&mut gs, &topics, false, false, Multiaddr::empty(), None);
+
+        //p1 and p2 are not in the mesh
+        assert!(!gs.mesh[&topics[0]].contains(&p1) && !gs.mesh[&topics[0]].contains(&p2));
+
+        //publish a message
+        let publish_data = vec![0; 42];
+        gs.publish(Topic::new("test"), publish_data).unwrap();
+
+        // Collect publish messages to floodsub peers
+        let publishes = gs
+            .events
+            .iter()
+            .fold(vec![], |mut collected_publish, e| match e {
+                NetworkBehaviourAction::NotifyHandler { peer_id, event, .. } => {
+                    if peer_id == &p1 || peer_id == &p2 {
+                        for s in &event.messages {
+                            collected_publish.push(s.clone());
+                        }
+                    }
+                    collected_publish
+                }
+                _ => collected_publish,
+            });
+
+        assert_eq!(
+            publishes.len(),
+            2,
+            "Should send a publish message to all floodsub peers"
+        );
+    }
+
+    #[test]
+    fn test_do_not_use_floodsub_in_fanout() {
+        let config = GossipsubConfigBuilder::new()
+            .flood_publish(false)
+            .build()
+            .unwrap();
+        let (mut gs, _, _) =
+            build_and_inject_nodes_with_config(config.mesh_n_low() - 1, Vec::new(), false, config);
+
+        let topic = Topic::new("test");
+        let topics = vec![topic.hash()];
+
+        //add two floodsub peer, one explicit, one implicit
+        let p1 = add_peer_with_addr_and_kind(
+            &mut gs,
+            &topics,
+            false,
+            false,
+            Multiaddr::empty(),
+            Some(PeerKind::Floodsub),
+        );
+        let p2 =
+            add_peer_with_addr_and_kind(&mut gs, &topics, false, false, Multiaddr::empty(), None);
+
+        //publish a message
+        let publish_data = vec![0; 42];
+        gs.publish(Topic::new("test"), publish_data).unwrap();
+
+        // Collect publish messages to floodsub peers
+        let publishes = gs
+            .events
+            .iter()
+            .fold(vec![], |mut collected_publish, e| match e {
+                NetworkBehaviourAction::NotifyHandler { peer_id, event, .. } => {
+                    if peer_id == &p1 || peer_id == &p2 {
+                        for s in &event.messages {
+                            collected_publish.push(s.clone());
+                        }
+                    }
+                    collected_publish
+                }
+                _ => collected_publish,
+            });
+
+        assert_eq!(
+            publishes.len(),
+            2,
+            "Should send a publish message to all floodsub peers"
+        );
+
+        assert!(
+            !gs.fanout[&topics[0]].contains(&p1) && !gs.fanout[&topics[0]].contains(&p2),
+            "Floodsub peers are not allowed in fanout"
+        );
+    }
+
+    #[test]
+    fn test_dont_add_floodsub_peers_to_mesh_on_join() {
+        let (mut gs, _, _) = build_and_inject_nodes(0, Vec::new(), false);
+
+        let topic = Topic::new("test");
+        let topics = vec![topic.hash()];
+
+        //add two floodsub peer, one explicit, one implicit
+        let p1 = add_peer_with_addr_and_kind(
+            &mut gs,
+            &topics,
+            false,
+            false,
+            Multiaddr::empty(),
+            Some(PeerKind::Floodsub),
+        );
+        let p2 =
+            add_peer_with_addr_and_kind(&mut gs, &topics, false, false, Multiaddr::empty(), None);
+
+        gs.join(&topics[0]);
+
+        assert!(
+            gs.mesh[&topics[0]].is_empty(),
+            "Floodsub peers should not get added to mesh"
+        );
+    }
+
+    #[test]
+    fn test_dont_send_px_to_old_gossipsub_peers() {
+        let (mut gs, _, topics) = build_and_inject_nodes(0, vec!["test".into()], false);
+
+        //add an old gossipsub peer
+        let p1 = add_peer_with_addr_and_kind(
+            &mut gs,
+            &topics,
+            false,
+            false,
+            Multiaddr::empty(),
+            Some(PeerKind::Gossipsub),
+        );
+
+        //prune the peer
+        gs.send_graft_prune(
+            HashMap::new(),
+            vec![(p1.clone(), topics.clone())].into_iter().collect(),
+            HashSet::new(),
+        );
+
+        //check that prune does not contain px
+        assert_eq!(
+            count_control_msgs(&gs, |_, m| match m {
+                GossipsubControlAction::Prune { peers: px, .. } => !px.is_empty(),
+                _ => false,
+            }),
+            0,
+            "Should not send px to floodsub peers"
+        );
+    }
+
+    #[test]
+    fn test_dont_send_floodsub_peers_in_px() {
+        //build mesh with one peer
+        let (mut gs, peers, topics) = build_and_inject_nodes(1, vec!["test".into()], true);
+
+        //add two floodsub peers
+        let p1 = add_peer_with_addr_and_kind(
+            &mut gs,
+            &topics,
+            false,
+            false,
+            Multiaddr::empty(),
+            Some(PeerKind::Floodsub),
+        );
+        let p2 =
+            add_peer_with_addr_and_kind(&mut gs, &topics, false, false, Multiaddr::empty(), None);
+
+        //prune only mesh node
+        gs.send_graft_prune(
+            HashMap::new(),
+            vec![(peers[0].clone(), topics.clone())]
+                .into_iter()
+                .collect(),
+            HashSet::new(),
+        );
+
+        //check that px in prune message is empty
+        assert_eq!(
+            count_control_msgs(&gs, |_, m| match m {
+                GossipsubControlAction::Prune { peers: px, .. } => !px.is_empty(),
+                _ => false,
+            }),
+            0,
+            "Should not include floodsub peers in px"
+        );
+    }
+
+    #[test]
+    fn test_dont_add_floodsub_peers_to_mesh_in_heartbeat() {
+        let (mut gs, _, topics) = build_and_inject_nodes(0, vec!["test".into()], false);
+
+        //add two floodsub peer, one explicit, one implicit
+        let p1 = add_peer_with_addr_and_kind(
+            &mut gs,
+            &topics,
+            true,
+            false,
+            Multiaddr::empty(),
+            Some(PeerKind::Floodsub),
+        );
+        let p2 =
+            add_peer_with_addr_and_kind(&mut gs, &topics, true, false, Multiaddr::empty(), None);
+
+        gs.heartbeat();
+
+        assert!(
+            gs.mesh[&topics[0]].is_empty(),
+            "Floodsub peers should not get added to mesh"
+        );
     }
 }

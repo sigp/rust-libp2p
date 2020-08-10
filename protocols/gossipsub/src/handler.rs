@@ -51,7 +51,7 @@ pub enum HandlerEvent {
     InvalidMessage(ValidationError),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PeerKind {
     /// A gossipsub 1.1 peer.
     Gossipsubv1_1,
