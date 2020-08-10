@@ -422,7 +422,9 @@ impl Decoder for GossipsubCodec {
                 if !GossipsubCodec::verify_signature(&message) {
                     warn!("Message dropped. Invalid signature");
                     // Report to the behaviour.
-                    return Ok(Some(HandlerEvent::InvalidSignature));
+                    return Err(GossipsubHandlerError::InvalidMessage(
+                        ValidationError::InvalidSignature,
+                    ));
                 }
             }
 

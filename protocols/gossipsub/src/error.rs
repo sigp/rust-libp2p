@@ -57,6 +57,8 @@ pub enum GossipsubHandlerError {
 
 #[derive(Debug)]
 pub enum ValidationError {
+    /// The message has an invalid signature,
+    InvalidSignature,
     /// The sequence number was empty, expected a value.
     EmptySequenceNumber,
     /// The sequence number was the incorrect size

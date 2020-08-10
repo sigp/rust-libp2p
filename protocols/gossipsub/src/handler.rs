@@ -20,7 +20,7 @@
 
 use crate::behaviour::GossipsubRpc;
 use crate::config::ValidationMode;
-use crate::error::GossipsubHandlerError;
+use crate::error::{GossipsubHandlerError, ValidationError};
 use crate::protocol::{GossipsubCodec, ProtocolConfig};
 use futures::prelude::*;
 use futures::StreamExt;
@@ -48,7 +48,7 @@ pub enum HandlerEvent {
     /// which protocol. This message only occurs once per connection.
     PeerKind(PeerKind),
     /// A message was received but didn't pass validation.
-    InvalidSignature,
+    InvalidMessage(ValidationError),
 }
 
 #[derive(Debug, Clone)]
@@ -96,7 +96,7 @@ pub struct GossipsubHandler {
     peer_kind: Option<PeerKind>,
 
     /// Keeps track on whether we have sent the peer kind to the behaviour.
-    // NOTE: Use this flag rather than checking the substream account each poll.
+    // NOTE: Use this flag rather than checking the substream count each poll.
     peer_kind_sent: bool,
 
     /// Flag determining whether to maintain the connection to the peer.
@@ -290,11 +290,17 @@ impl ProtocolsHandler for GossipsubHandler {
                         }
                         Poll::Ready(Some(Err(error))) => {
                             match error {
-                                GossipsubHandlerError::InvalidMessage(reason) => {
+                                GossipsubHandlerError::InvalidMessage(validation_error) => {
                                     // Invalid message, ignore it and reset to waiting
-                                    warn!("Invalid message received. Error: {:?}", reason);
+                                    warn!(
+                                        "Invalid message received. Error: {:?}",
+                                        validation_error
+                                    );
                                     self.inbound_substream =
                                         Some(InboundSubstreamState::WaitingInput(substream));
+                                    return Poll::Ready(ProtocolsHandlerEvent::Custom(
+                                        HandlerEvent::InvalidMessage(validation_error),
+                                    ));
                                 }
                                 GossipsubHandlerError::MaxTransmissionSize => {
                                     warn!("Message exceeded the maximum transmission size");

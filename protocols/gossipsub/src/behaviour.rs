@@ -50,7 +50,7 @@ use libp2p_swarm::{
 };
 
 use crate::config::{GossipsubConfig, ValidationMode};
-use crate::error::PublishError;
+use crate::error::{PublishError, ValidationError};
 use crate::gossip_promises::GossipPromises;
 use crate::handler::{GossipsubHandler, HandlerEvent, PeerKind};
 use crate::mcache::MessageCache;
@@ -2358,8 +2358,22 @@ impl NetworkBehaviour for Gossipsub {
             HandlerEvent::PeerKind(PeerKind::Floodsub) => {
                 // This is a floodsub peer
             }
-            HandlerEvent::InvalidSignature => {
-                // This peer sent us an invalid signature
+            HandlerEvent::InvalidMessage(validation_error) => {
+                match validation_error {
+                    ValidationError::InvalidSignature => {
+                        // This peer sent us an invalid signature
+                    }
+                    ValidationError::EmptySequenceNumber => {
+                        // The peer sent a message with an empty sequence number, when we were
+                        // expecting one
+                    }
+                    ValidationError::InvalidSequenceNumber => {
+                        // The peer sent an invalid sequence number, i.e not a u64
+                    }
+                    ValidationError::InvalidPeerId => {
+                        // The PeerId that is the source of the message was invalid
+                    }
+                }
             }
             HandlerEvent::Message(event) => {
                 // We received a gossipsub RPC message
