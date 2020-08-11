@@ -53,7 +53,7 @@ pub enum GossipsubHandlerError {
     Io(std::io::Error),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ValidationError {
     /// The message has an invalid signature,
     InvalidSignature,

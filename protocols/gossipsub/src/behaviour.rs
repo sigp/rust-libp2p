@@ -50,11 +50,11 @@ use libp2p_swarm::{
 };
 
 use crate::config::{GossipsubConfig, ValidationMode};
-use crate::error::{PublishError, ValidationError};
+use crate::error::PublishError;
 use crate::gossip_promises::GossipPromises;
 use crate::handler::{GossipsubHandler, HandlerEvent};
 use crate::mcache::MessageCache;
-use crate::peer_score::{PeerScore, PeerScoreParams, PeerScoreThresholds, RejectMsg};
+use crate::peer_score::{PeerScore, PeerScoreParams, PeerScoreThresholds, RejectReason};
 use crate::protocol::SIGNING_PREFIX;
 use crate::rpc_proto;
 use crate::topic::{Hasher, Topic, TopicHash};
@@ -315,9 +315,6 @@ impl BackoffStorage {
 
     /// Applies a heartbeat. That should be called regularly in intervals of length
     /// `heartbeat_interval`.
-    ///
-    /// TODO: Should we use an own instance of `wasm_timer::Interval` with our own interval length
-    ///  to not rely on regular heartbeat calls?
     pub fn heartbeat(&mut self) {
         //clean up backoffs_by_heartbeat
         if let Some(s) = self.backoffs_by_heartbeat.get_mut(self.heartbeat_index) {
@@ -728,8 +725,8 @@ impl Gossipsub {
                 self.forward_msg(message, Some(propagation_source));
                 return true;
             }
-            MessageAcceptance::Reject => RejectMsg::ValidationFailed,
-            MessageAcceptance::Ignore => RejectMsg::ValidationIgnored,
+            MessageAcceptance::Reject => RejectReason::ValidationFailed,
+            MessageAcceptance::Ignore => RejectReason::ValidationIgnored,
         };
 
         if let Some(message) = self.mcache.remove(message_id) {
@@ -1324,7 +1321,7 @@ impl Gossipsub {
         from: &PeerId,
         msg: &GossipsubMessage,
         id: &MessageId,
-        reason: RejectMsg,
+        reason: RejectReason,
     ) {
         if let Some((peer_score, _, _, gossip_promises)) = peer_score {
             peer_score.reject_message(from, &msg, reason);
@@ -1361,7 +1358,7 @@ impl Gossipsub {
                     propagation_source,
                     &msg,
                     &msg_id,
-                    RejectMsg::SelfOrigin,
+                    RejectReason::SelfOrigin,
                 );
                 return;
             }
@@ -1598,8 +1595,8 @@ impl Gossipsub {
             let outbound_peers = &self.outbound_peers;
 
             // drop all peers with negative score, without PX
-            // TODO can we make this more efficient? Unfortunately there is no retain method for
-            //  BTreeSet (yet).
+            // if there is at some point a stable retain method for BTreeSet the following can be
+            // written more efficiently with retain.
             let to_remove: Vec<_> = peers
                 .iter()
                 .filter(|&p| {
@@ -2402,12 +2399,10 @@ impl NetworkBehaviour for Gossipsub {
     ) {
         //check if the peer is an outbound peer
         if let ConnectedPoint::Dialer { .. } = endpoint {
-            //TODO: Should we check protocols/streams somehow like in the go implementation?
-
             //Diverging from the go implementation we only want to consider a peer as outbound peer
             //if its first connection is outbound. To check if this connection is the first we
             //check if the peer isn't connected yet. This only works because the
-            //`inject_connection_established` event for the first connection gets called immediatly
+            //`inject_connection_established` event for the first connection gets called immediately
             //before `inject_connected` gets called.
             if !self.peer_topics.contains_key(peer) && !self.px_peers.contains(peer) {
                 //the first connection is outbound and it is not a peer from peer exchange => mark
@@ -2464,34 +2459,23 @@ impl NetworkBehaviour for Gossipsub {
     ) {
         match handler_event {
             HandlerEvent::PeerKind(kind) => {
-                self.peer_protocols.insert(propagation_source.clone(), kind);
+                if let Some(old_kind) = self.peer_protocols.get_mut(&propagation_source) {
+                    // Only change the value if the old value is Floodsub (the default set in
+                    // inject_connected). All other PeerKind changes are ignored.
+                    if let PeerKind::Floodsub = *old_kind {
+                        *old_kind = kind;
+                    }
+                }
             }
             HandlerEvent::Message {
                 rpc,
                 invalid_messages,
             } => {
                 // Handle any invalid messages from this peer
-                for (_message, validation_error) in invalid_messages {
-                    match validation_error {
-                        ValidationError::InvalidSignature => {
-                            // This peer sent us an invalid signature
-                        }
-                        ValidationError::EmptySequenceNumber => {
-                            // The peer sent a message with an empty sequence number, when we were
-                            // expecting one
-                        }
-                        ValidationError::InvalidSequenceNumber => {
-                            // The peer sent an invalid sequence number, i.e not a u64
-                        }
-                        ValidationError::InvalidPeerId => {
-                            // The PeerId that is the source of the message was invalid
-                        }
-                        ValidationError::SignaturePresent
-                        | ValidationError::SequenceNumberPresent
-                        | ValidationError::MessageSourcePresent => {
-                            // There is a validation mode that requires all these fields to be
-                            // empty. This message had non-empty fields here.
-                        }
+                if let Some((peer_score, ..)) = &mut self.peer_score {
+                    for (_message, validation_error) in invalid_messages {
+                        let reason = RejectReason::ProtocolValidationError(validation_error);
+                        peer_score.reject_message(&propagation_source, &_message, reason);
                     }
                 }
 

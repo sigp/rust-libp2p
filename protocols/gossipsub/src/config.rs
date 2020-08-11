@@ -209,7 +209,7 @@ pub struct GossipsubConfig {
     support_floodsub: bool,
 }
 
-//TODO should we use a macro for getters + the builder?
+//TODO use a macro for getters + the builder
 impl GossipsubConfig {
     //all the getters
 

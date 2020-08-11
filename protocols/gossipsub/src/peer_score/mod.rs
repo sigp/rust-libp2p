@@ -9,6 +9,7 @@ use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 mod params;
+use crate::error::ValidationError;
 pub use params::{
     score_parameter_decay, score_parameter_decay_with_base, PeerScoreParams, PeerScoreThresholds,
     TopicScoreParams,
@@ -162,8 +163,6 @@ enum DeliveryStatus {
     Invalid,
     /// Instructed by the validator to ignore the message.
     Ignored,
-    /// Can't tell if the message is valid because validation was throttled.
-    Throttled,
 }
 
 impl Default for DeliveryRecord {
@@ -533,23 +532,15 @@ impl PeerScore {
         }
     }
 
-    pub fn reject_message(&mut self, from: &PeerId, msg: &GossipsubMessage, reason: RejectMsg) {
+    pub fn reject_message(&mut self, from: &PeerId, msg: &GossipsubMessage, reason: RejectReason) {
         match reason {
             // these messages are not tracked, but the peer is penalized as they are invalid
-            RejectMsg::MissingSignature => {}
-            RejectMsg::InvalidSignature => {}
-            RejectMsg::SelfOrigin => {
+            RejectReason::ProtocolValidationError(_) | RejectReason::SelfOrigin => {
                 self.mark_invalid_message_delivery(from, msg);
                 return;
             }
-            RejectMsg::BlacklistedPeer => {}
-            RejectMsg::BlackListenSource => {
-                return;
-            }
-            RejectMsg::ValidationQueueFull => {
-                // the message was rejected before it entered the validation pipeline;
-                // we don't know if this message has a valid signature, and thus we also don't know if
-                // it has a valid message ID; all we can do is ignore it.
+            // we ignore those messages, so do nothing.
+            RejectReason::BlacklistedPeer | RejectReason::BlackListenSource => {
                 return;
             }
             _ => {} // the rest are handled after record creation
@@ -566,25 +557,13 @@ impl PeerScore {
             return;
         }
 
-        match reason {
-            RejectMsg::ValidationThrottled => {
-                // if we reject with "validation throttled" we don't penalize the peer(s) that forward it
-                // because we don't know if it was valid.
-                record.status = DeliveryStatus::Throttled;
-                // release the delivery time tracking map to free some memory early
-                record.peers.clear();
-                self.deliveries.insert((self.msg_id)(msg), record);
-                return;
-            }
-            RejectMsg::ValidationIgnored => {
-                // we were explicitly instructed by the validator to ignore the message but not penalize
-                // the peer
-                record.status = DeliveryStatus::Ignored;
-                record.peers.clear();
-                self.deliveries.insert((self.msg_id)(msg), record);
-                return;
-            }
-            _ => {}
+        if let RejectReason::ValidationIgnored = reason {
+            // we were explicitly instructed by the validator to ignore the message but not penalize
+            // the peer
+            record.status = DeliveryStatus::Ignored;
+            record.peers.clear();
+            self.deliveries.insert((self.msg_id)(msg), record);
+            return;
         }
 
         // mark the message as invalid and penalize peers that have already forwarded it.
@@ -627,8 +606,8 @@ impl PeerScore {
                 // we no longer track delivery time
                 self.mark_invalid_message_delivery(from, msg);
             }
-            DeliveryStatus::Throttled | DeliveryStatus::Ignored => {
-                // the message was throttled or ignored; do nothing (we don't know if it was valid)
+            DeliveryStatus::Ignored => {
+                // the message was ignored; do nothing (we don't know if it was valid)
             }
         }
     }
@@ -754,16 +733,13 @@ impl PeerScore {
     }
 }
 
-//TODO do we need all variants? If yes some of them are never used yet (missing something).
+//TODO implement blacklisting
 #[derive(Clone, Copy)]
-pub(crate) enum RejectMsg {
-    MissingSignature,
-    InvalidSignature,
+pub(crate) enum RejectReason {
+    ProtocolValidationError(ValidationError),
     SelfOrigin,
     BlacklistedPeer,
     BlackListenSource,
-    ValidationQueueFull,
-    ValidationThrottled,
     ValidationIgnored,
     ValidationFailed,
 }

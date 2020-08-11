@@ -31,6 +31,7 @@ mod tests {
     use crate::{GossipsubConfigBuilder, IdentTopic as Topic, TopicScoreParams};
 
     use super::super::*;
+    use crate::error::ValidationError;
 
     // helper functions for testing
 
@@ -3190,7 +3191,67 @@ mod tests {
         assert_eq!(gs.peer_score.as_ref().unwrap().0.score(&peers[0]), 0.0);
     }
 
-    //TODO test p4 with invalid/missing signature messages
+    #[test]
+    fn test_scoring_p4_invalid_signature() {
+        let config = GossipsubConfigBuilder::new()
+            .validate_messages()
+            .build()
+            .unwrap();
+        let mut peer_score_params = PeerScoreParams::default();
+        let topic = Topic::new("test");
+        let topic_hash = topic.hash();
+        let mut topic_params = TopicScoreParams::default();
+        topic_params.time_in_mesh_weight = 0.0; //deactivate time in mesh
+        topic_params.first_message_deliveries_weight = 0.0; //deactivate first time deliveries
+        topic_params.mesh_message_deliveries_weight = 0.0; //deactivate message deliveries
+        topic_params.mesh_failure_penalty_weight = 0.0; //deactivate mesh failure penalties
+        topic_params.invalid_message_deliveries_weight = -2.0;
+        topic_params.invalid_message_deliveries_decay = 0.9;
+        topic_params.topic_weight = 0.7;
+        peer_score_params
+            .topics
+            .insert(topic_hash.clone(), topic_params.clone());
+        peer_score_params.app_specific_weight = 1.0;
+        let peer_score_thresholds = PeerScoreThresholds::default();
+
+        //build mesh with one peer
+        let (mut gs, peers, topics) =
+            build_and_inject_nodes_with_config_and_explicit_and_outbound_and_scoring(
+                1,
+                vec!["test".into()],
+                true,
+                config.clone(),
+                0,
+                0,
+                Some((peer_score_params, peer_score_thresholds)),
+            );
+
+        let mut seq = 0;
+        let deliver_message = |gs: &mut Gossipsub, index: usize, msg: GossipsubMessage| {
+            gs.handle_received_message(msg, &peers[index]);
+        };
+
+        //peer 0 delivers message with invalid signature
+        let mut m = random_message(&mut seq, &topics);
+
+        gs.inject_event(
+            peers[0].clone(),
+            ConnectionId::new(0),
+            HandlerEvent::Message {
+                rpc: GossipsubRpc {
+                    messages: vec![],
+                    subscriptions: vec![],
+                    control_msgs: vec![],
+                },
+                invalid_messages: vec![(m, ValidationError::InvalidSignature)],
+            },
+        );
+
+        assert_eq!(
+            gs.peer_score.as_ref().unwrap().0.score(&peers[0]),
+            -2.0 * 0.7
+        );
+    }
 
     #[test]
     fn test_scoring_p4_message_from_self() {
