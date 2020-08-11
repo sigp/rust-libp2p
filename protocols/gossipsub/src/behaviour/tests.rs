@@ -3227,12 +3227,9 @@ mod tests {
             );
 
         let mut seq = 0;
-        let deliver_message = |gs: &mut Gossipsub, index: usize, msg: GossipsubMessage| {
-            gs.handle_received_message(msg, &peers[index]);
-        };
 
         //peer 0 delivers message with invalid signature
-        let mut m = random_message(&mut seq, &topics);
+        let m = random_message(&mut seq, &topics);
 
         gs.inject_event(
             peers[0].clone(),
