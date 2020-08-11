@@ -598,22 +598,27 @@ impl Decoder for GossipsubCodec {
             let mut prune_msgs = Vec::new();
 
             for prune in rpc_control.prune {
-
                 // filter out invalid peers
-                let peers = prune.peers.into_iter().filter_map(|info| 
-                                info.peer_id.and_then(|id| PeerId::from_bytes(id).ok()).map(|peer_id| 
+                let peers = prune
+                    .peers
+                    .into_iter()
+                    .filter_map(|info| {
+                        info.peer_id
+                            .and_then(|id| PeerId::from_bytes(id).ok())
+                            .map(|peer_id|
                                     //TODO signedPeerRecord, see https://github.com/libp2p/specs/pull/217
                                     PeerInfo {
                                         peer_id: Some(peer_id),
-                                    })).collect::<Vec<PeerInfo>>();
+                                    })
+                    })
+                    .collect::<Vec<PeerInfo>>();
 
                 let topic_hash = TopicHash::from_raw(prune.topic_id.unwrap_or_default());
-                prune_msgs.push(
-                    GossipsubControlAction::Prune {
-                        topic_hash,
-                        peers,
-                        backoff: prune.backoff,
-                    });
+                prune_msgs.push(GossipsubControlAction::Prune {
+                    topic_hash,
+                    peers,
+                    backoff: prune.backoff,
+                });
             }
 
             control_msgs.extend(ihave_msgs);
