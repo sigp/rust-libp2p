@@ -1,9 +1,9 @@
 //! Manages and stores the Scoring logic of a particular peer on the gossipsub behaviour.
 
+use crate::time_cache::TimeCache;
 use crate::{GossipsubMessage, MessageId, TopicHash};
 use libp2p_core::PeerId;
 use log::warn;
-use lru_time_cache::LruCache;
 use std::collections::{hash_map, HashMap, HashSet};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
@@ -28,7 +28,7 @@ pub(crate) struct PeerScore {
     /// Tracking peers per IP.
     peer_ips: HashMap<IpAddr, HashSet<PeerId>>,
     /// Message delivery tracking. This is a time-cache of `DeliveryRecord`s.
-    deliveries: LruCache<MessageId, DeliveryRecord>,
+    deliveries: TimeCache<MessageId, DeliveryRecord>,
     /// The message id function.
     msg_id: fn(&GossipsubMessage) -> MessageId,
 }
@@ -183,7 +183,7 @@ impl PeerScore {
             params,
             peer_stats: HashMap::new(),
             peer_ips: HashMap::new(),
-            deliveries: LruCache::with_expiry_duration(Duration::from_secs(TIME_CACHE_DURATION)),
+            deliveries: TimeCache::new(Duration::from_secs(TIME_CACHE_DURATION)),
             msg_id,
         }
     }
@@ -546,37 +546,36 @@ impl PeerScore {
             _ => {} // the rest are handled after record creation
         }
 
-        let mut record = self
-            .deliveries
-            .remove(&(self.msg_id)(msg))
-            .unwrap_or_else(|| DeliveryRecord::default());
-        // this should be the first delivery trace
-        if record.status != DeliveryStatus::Unknown {
-            warn!("Unexpected delivery trace: Message from {} was first seen {}s ago and has a delivery status {:?}", from, record.first_seen.elapsed().as_secs(), record.status);
-            self.deliveries.insert((self.msg_id)(msg), record);
-            return;
-        }
+        let peers: Vec<_> = {
+            let mut record = self
+                .deliveries
+                .entry((self.msg_id)(msg))
+                .or_insert_with(|| DeliveryRecord::default());
 
-        if let RejectReason::ValidationIgnored = reason {
-            // we were explicitly instructed by the validator to ignore the message but not penalize
-            // the peer
-            record.status = DeliveryStatus::Ignored;
-            record.peers.clear();
-            self.deliveries.insert((self.msg_id)(msg), record);
-            return;
-        }
+            // this should be the first delivery trace
+            if record.status != DeliveryStatus::Unknown {
+                warn!("Unexpected delivery trace: Message from {} was first seen {}s ago and has a delivery status {:?}", from, record.first_seen.elapsed().as_secs(), record.status);
+                return;
+            }
 
-        // mark the message as invalid and penalize peers that have already forwarded it.
-        record.status = DeliveryStatus::Invalid;
+            if let RejectReason::ValidationIgnored = reason {
+                // we were explicitly instructed by the validator to ignore the message but not penalize
+                // the peer
+                record.status = DeliveryStatus::Ignored;
+                record.peers.clear();
+                return;
+            }
+
+            // mark the message as invalid and penalize peers that have already forwarded it.
+            record.status = DeliveryStatus::Invalid;
+            // release the delivery time tracking map to free some memory early
+            record.peers.drain().collect()
+        };
 
         self.mark_invalid_message_delivery(from, msg);
-        for peer_id in record.peers.iter() {
+        for peer_id in peers.iter() {
             self.mark_invalid_message_delivery(peer_id, msg)
         }
-
-        // release the delivery time tracking map to free some memory early
-        record.peers.clear();
-        self.deliveries.insert((self.msg_id)(msg), record);
     }
 
     pub fn duplicated_message(&mut self, from: &PeerId, msg: &GossipsubMessage) {

@@ -32,7 +32,6 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::duplicate::DuplicateCache;
 use futures::StreamExt;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
@@ -57,6 +56,7 @@ use crate::mcache::MessageCache;
 use crate::peer_score::{PeerScore, PeerScoreParams, PeerScoreThresholds, RejectReason};
 use crate::protocol::SIGNING_PREFIX;
 use crate::rpc_proto;
+use crate::time_cache::DuplicateCache;
 use crate::topic::{Hasher, Topic, TopicHash};
 use crate::types::{
     GossipsubControlAction, GossipsubMessage, GossipsubSubscription, GossipsubSubscriptionAction,

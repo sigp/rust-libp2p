@@ -140,11 +140,11 @@ pub mod protocol;
 
 mod behaviour;
 mod config;
-mod duplicate;
 mod gossip_promises;
 mod handler;
 mod mcache;
 mod peer_score;
+pub mod time_cache;
 mod topic;
 mod types;
 
