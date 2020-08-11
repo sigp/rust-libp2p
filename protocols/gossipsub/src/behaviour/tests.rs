@@ -1521,7 +1521,7 @@ mod tests {
         //propose more px peers than config.prune_peers()
         for _ in 0..config.prune_peers() + 5 {
             px.push(PeerInfo {
-                peer: Some(PeerId::random()),
+                peer_id: Some(PeerId::random()),
             });
         }
 
@@ -1557,7 +1557,7 @@ mod tests {
 
         //all dial peers must be in px
         assert!(dials_set.is_subset(&HashSet::from_iter(
-            px.iter().map(|i| i.peer.as_ref().unwrap().clone())
+            px.iter().map(|i| i.peer_id.as_ref().unwrap().clone())
         )));
     }
 
@@ -2090,7 +2090,7 @@ mod tests {
 
         //handle prune from single peer with px peers
         let px = vec![PeerInfo {
-            peer: Some(PeerId::random()),
+            peer_id: Some(PeerId::random()),
         }];
 
         gs.handle_prune(
@@ -2154,7 +2154,7 @@ mod tests {
                     } =>
                         topic_hash == &topics[0]
                             && px.len() == 1
-                            && px[0].peer.as_ref().unwrap() == &peers[2],
+                            && px[0].peer_id.as_ref().unwrap() == &peers[2],
                     _ => false,
                 }),
             1
@@ -2595,11 +2595,14 @@ mod tests {
         gs.inject_event(
             p1.clone(),
             ConnectionId::new(0),
-            HandlerEvent::Message(GossipsubRpc {
-                messages: vec![message1],
-                subscriptions: vec![subscription.clone()],
-                control_msgs: vec![control_action],
-            }),
+            HandlerEvent::Message {
+                rpc: GossipsubRpc {
+                    messages: vec![message1],
+                    subscriptions: vec![subscription.clone()],
+                    control_msgs: vec![control_action],
+                },
+                invalid_messages: Vec::new(),
+            },
         );
 
         //no events got processed
@@ -2614,11 +2617,14 @@ mod tests {
         gs.inject_event(
             p2.clone(),
             ConnectionId::new(0),
-            HandlerEvent::Message(GossipsubRpc {
-                messages: vec![message3],
-                subscriptions: vec![subscription.clone()],
-                control_msgs: vec![control_action],
-            }),
+            HandlerEvent::Message {
+                rpc: GossipsubRpc {
+                    messages: vec![message3],
+                    subscriptions: vec![subscription.clone()],
+                    control_msgs: vec![control_action],
+                },
+                invalid_messages: Vec::new(),
+            },
         );
 
         //events got processed
@@ -2652,7 +2658,7 @@ mod tests {
 
         //handle prune from peer peers[0] with px peers
         let px = vec![PeerInfo {
-            peer: Some(PeerId::random()),
+            peer_id: Some(PeerId::random()),
         }];
         gs.handle_prune(
             &peers[0],
@@ -2677,7 +2683,7 @@ mod tests {
 
         //handle prune from peer peers[1] with px peers
         let px = vec![PeerInfo {
-            peer: Some(PeerId::random()),
+            peer_id: Some(PeerId::random()),
         }];
         gs.handle_prune(
             &peers[1],
@@ -4403,7 +4409,7 @@ mod tests {
         let topics = vec![topic.hash()];
 
         //add two floodsub peer, one explicit, one implicit
-        let p1 = add_peer_with_addr_and_kind(
+        let _p1 = add_peer_with_addr_and_kind(
             &mut gs,
             &topics,
             false,
@@ -4411,7 +4417,7 @@ mod tests {
             Multiaddr::empty(),
             Some(PeerKind::Floodsub),
         );
-        let p2 =
+        let _p2 =
             add_peer_with_addr_and_kind(&mut gs, &topics, false, false, Multiaddr::empty(), None);
 
         gs.join(&topics[0]);
@@ -4460,7 +4466,7 @@ mod tests {
         let (mut gs, peers, topics) = build_and_inject_nodes(1, vec!["test".into()], true);
 
         //add two floodsub peers
-        let p1 = add_peer_with_addr_and_kind(
+        let _p1 = add_peer_with_addr_and_kind(
             &mut gs,
             &topics,
             false,
@@ -4468,7 +4474,7 @@ mod tests {
             Multiaddr::empty(),
             Some(PeerKind::Floodsub),
         );
-        let p2 =
+        let _p2 =
             add_peer_with_addr_and_kind(&mut gs, &topics, false, false, Multiaddr::empty(), None);
 
         //prune only mesh node
@@ -4496,7 +4502,7 @@ mod tests {
         let (mut gs, _, topics) = build_and_inject_nodes(0, vec!["test".into()], false);
 
         //add two floodsub peer, one explicit, one implicit
-        let p1 = add_peer_with_addr_and_kind(
+        let _p1 = add_peer_with_addr_and_kind(
             &mut gs,
             &topics,
             true,
@@ -4504,7 +4510,7 @@ mod tests {
             Multiaddr::empty(),
             Some(PeerKind::Floodsub),
         );
-        let p2 =
+        let _p2 =
             add_peer_with_addr_and_kind(&mut gs, &topics, true, false, Multiaddr::empty(), None);
 
         gs.heartbeat();

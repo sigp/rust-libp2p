@@ -49,8 +49,6 @@ pub enum GossipsubHandlerError {
     MaxOutboundSubstreams,
     /// The message exceeds the maximum transmission size.
     MaxTransmissionSize,
-    /// The message is invalid.
-    InvalidMessage(ValidationError),
     /// IO error.
     Io(std::io::Error),
 }
@@ -65,6 +63,12 @@ pub enum ValidationError {
     InvalidSequenceNumber,
     /// The PeerId was invalid
     InvalidPeerId,
+    /// Signature existed when validation has been sent to `Anonymous`.
+    SignaturePresent,
+    /// Sequence number existed when validation has been sent to `Anonymous`.
+    SequenceNumberPresent,
+    /// Message source existed when validation has been sent to `Anonymous`.
+    MessageSourcePresent,
 }
 
 impl From<std::io::Error> for GossipsubHandlerError {

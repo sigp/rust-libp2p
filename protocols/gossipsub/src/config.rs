@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use libp2p_core::PeerId;
 
-use crate::protocol::{GossipsubMessage, MessageId};
+use crate::types::{GossipsubMessage, MessageId};
 
 /// The types of message validation that can be employed by gossipsub.
 #[derive(Debug, Clone)]

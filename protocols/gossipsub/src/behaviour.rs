@@ -52,18 +52,50 @@ use libp2p_swarm::{
 use crate::config::{GossipsubConfig, ValidationMode};
 use crate::error::{PublishError, ValidationError};
 use crate::gossip_promises::GossipPromises;
-use crate::handler::{GossipsubHandler, HandlerEvent, PeerKind};
+use crate::handler::{GossipsubHandler, HandlerEvent};
 use crate::mcache::MessageCache;
 use crate::peer_score::{PeerScore, PeerScoreParams, PeerScoreThresholds, RejectMsg};
-use crate::protocol::{
-    GossipsubControlAction, GossipsubMessage, GossipsubSubscription, GossipsubSubscriptionAction,
-    MessageId, PeerInfo, SIGNING_PREFIX,
-};
+use crate::protocol::SIGNING_PREFIX;
 use crate::rpc_proto;
 use crate::topic::{Hasher, Topic, TopicHash};
+use crate::types::{
+    GossipsubControlAction, GossipsubMessage, GossipsubSubscription, GossipsubSubscriptionAction,
+    MessageId, PeerInfo,
+};
+use crate::types::{GossipsubRpc, PeerKind};
 use std::cmp::Ordering::Equal;
 
 mod tests;
+
+/// Event that can happen on the gossipsub behaviour.
+#[derive(Debug)]
+pub enum GossipsubEvent {
+    /// A message has been received.    
+    Message {
+        /// The peer that forwarded us this message.
+        propagation_source: PeerId,
+        /// The `MessageId` of the message. This should be referenced by the application when
+        /// validating a message (if required).
+        message_id: MessageId,
+        /// The message itself.
+        message: GossipsubMessage,
+    },
+    /// A remote subscribed to a topic.
+    Subscribed {
+        /// Remote that has subscribed.
+        peer_id: PeerId,
+        /// The topic it has subscribed to.
+        topic: TopicHash,
+    },
+
+    /// A remote unsubscribed from a topic.
+    Unsubscribed {
+        /// Remote that has unsubscribed.
+        peer_id: PeerId,
+        /// The topic it has subscribed from.
+        topic: TopicHash,
+    },
+}
 
 /// Determines if published messages should be signed or not.
 ///
@@ -876,10 +908,10 @@ impl Gossipsub {
                 &self.peer_protocols,
                 &topic_hash,
                 self.config.prune_peers(),
-                { |p| p != peer && !self.score_below_threshold(p, |_| 0.0).0 },
+                |p| p != peer && !self.score_below_threshold(p, |_| 0.0).0,
             )
             .into_iter()
-            .map(|p| PeerInfo { peer: Some(p) })
+            .map(|p| PeerInfo { peer_id: Some(p) })
             .collect()
         } else {
             Vec::new()
@@ -1262,7 +1294,7 @@ impl Gossipsub {
         let n = self.config.prune_peers();
         //ignore peerInfo with no ID
         //TODO can we use peerInfo without any IDs if they have a signed peer record?
-        px = px.into_iter().filter(|p| p.peer.is_some()).collect();
+        px = px.into_iter().filter(|p| p.peer_id.is_some()).collect();
         if px.len() > n {
             //only use at most prune_peers many random peers
             let mut rng = thread_rng();
@@ -1273,7 +1305,7 @@ impl Gossipsub {
         for p in px {
             //TODO extract signed peer record if given and handle it, see
             // https://github.com/libp2p/specs/pull/217
-            if let Some(peer_id) = p.peer {
+            if let Some(peer_id) = p.peer_id {
                 //mark as px peer
                 self.px_peers.insert(peer_id.clone());
 
@@ -1355,7 +1387,11 @@ impl Gossipsub {
         if self.mesh.keys().any(|t| msg.topics.iter().any(|u| t == u)) {
             debug!("Sending received message to user");
             self.events.push_back(NetworkBehaviourAction::GenerateEvent(
-                GossipsubEvent::Message(propagation_source.clone(), msg_id, msg.clone()),
+                GossipsubEvent::Message {
+                    propagation_source: propagation_source.clone(),
+                    message_id: msg_id,
+                    message: msg.clone(),
+                },
             ));
         }
 
@@ -2430,27 +2466,38 @@ impl NetworkBehaviour for Gossipsub {
             HandlerEvent::PeerKind(kind) => {
                 self.peer_protocols.insert(propagation_source.clone(), kind);
             }
-            HandlerEvent::InvalidMessage(validation_error) => {
-                match validation_error {
-                    ValidationError::InvalidSignature => {
-                        // This peer sent us an invalid signature
-                    }
-                    ValidationError::EmptySequenceNumber => {
-                        // The peer sent a message with an empty sequence number, when we were
-                        // expecting one
-                    }
-                    ValidationError::InvalidSequenceNumber => {
-                        // The peer sent an invalid sequence number, i.e not a u64
-                    }
-                    ValidationError::InvalidPeerId => {
-                        // The PeerId that is the source of the message was invalid
+            HandlerEvent::Message {
+                rpc,
+                invalid_messages,
+            } => {
+                // Handle any invalid messages from this peer
+                for (_message, validation_error) in invalid_messages {
+                    match validation_error {
+                        ValidationError::InvalidSignature => {
+                            // This peer sent us an invalid signature
+                        }
+                        ValidationError::EmptySequenceNumber => {
+                            // The peer sent a message with an empty sequence number, when we were
+                            // expecting one
+                        }
+                        ValidationError::InvalidSequenceNumber => {
+                            // The peer sent an invalid sequence number, i.e not a u64
+                        }
+                        ValidationError::InvalidPeerId => {
+                            // The PeerId that is the source of the message was invalid
+                        }
+                        ValidationError::SignaturePresent
+                        | ValidationError::SequenceNumberPresent
+                        | ValidationError::MessageSourcePresent => {
+                            // There is a validation mode that requires all these fields to be
+                            // empty. This message had non-empty fields here.
+                        }
                     }
                 }
-            }
-            HandlerEvent::Message(event) => {
-                // We received a gossipsub RPC message
 
-                //check if peer is graylisted in which case we ignore the event
+                // Handle the gossipsub RPC
+
+                // Check if peer is graylisted in which case we ignore the event
                 if let (true, _) =
                     self.score_below_threshold(&propagation_source, |ts| ts.graylist_threshold)
                 {
@@ -2459,12 +2506,12 @@ impl NetworkBehaviour for Gossipsub {
 
                 // Handle subscriptions
                 // Update connected peers topics
-                if !event.subscriptions.is_empty() {
-                    self.handle_received_subscriptions(&event.subscriptions, &propagation_source);
+                if !rpc.subscriptions.is_empty() {
+                    self.handle_received_subscriptions(&rpc.subscriptions, &propagation_source);
                 }
 
                 // Handle messages
-                for message in event.messages {
+                for message in rpc.messages {
                     self.handle_received_message(message, &propagation_source);
                 }
 
@@ -2473,7 +2520,7 @@ impl NetworkBehaviour for Gossipsub {
                 let mut ihave_msgs = vec![];
                 let mut graft_msgs = vec![];
                 let mut prune_msgs = vec![];
-                for control_msg in event.control_msgs {
+                for control_msg in rpc.control_msgs {
                     match control_msg {
                         GossipsubControlAction::IHave {
                             topic_hash,
@@ -2558,58 +2605,6 @@ impl NetworkBehaviour for Gossipsub {
 
         Poll::Pending
     }
-}
-
-/// An RPC received/sent.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct GossipsubRpc {
-    /// List of messages that were part of this RPC query.
-    pub messages: Vec<GossipsubMessage>,
-    /// List of subscriptions.
-    pub subscriptions: Vec<GossipsubSubscription>,
-    /// List of Gossipsub control messages.
-    pub control_msgs: Vec<GossipsubControlAction>,
-}
-
-impl fmt::Debug for GossipsubRpc {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut b = f.debug_struct("GossipsubRpc");
-        if !self.messages.is_empty() {
-            b.field("messages", &self.messages);
-        }
-        if !self.subscriptions.is_empty() {
-            b.field("subscriptions", &self.subscriptions);
-        }
-        if !self.control_msgs.is_empty() {
-            b.field("control_msgs", &self.control_msgs);
-        }
-        b.finish()
-    }
-}
-
-/// Event that can happen on the gossipsub behaviour.
-#[derive(Debug)]
-pub enum GossipsubEvent {
-    /// A message has been received. This contains the PeerId that we received the message from,
-    /// the message id (used if the application layer needs to propagate the message) and the
-    /// message itself.
-    Message(PeerId, MessageId, GossipsubMessage),
-
-    /// A remote subscribed to a topic.
-    Subscribed {
-        /// Remote that has subscribed.
-        peer_id: PeerId,
-        /// The topic it has subscribed to.
-        topic: TopicHash,
-    },
-
-    /// A remote unsubscribed from a topic.
-    Unsubscribed {
-        /// Remote that has unsubscribed.
-        peer_id: PeerId,
-        /// The topic it has subscribed from.
-        topic: TopicHash,
-    },
 }
 
 /// Validates the combination of signing, privacy and message validation to ensure the

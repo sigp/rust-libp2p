@@ -18,10 +18,10 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-use crate::behaviour::GossipsubRpc;
 use crate::config::ValidationMode;
 use crate::error::{GossipsubHandlerError, ValidationError};
 use crate::protocol::{GossipsubCodec, ProtocolConfig};
+use crate::types::{GossipsubMessage, GossipsubRpc, PeerKind};
 use futures::prelude::*;
 use futures::StreamExt;
 use futures_codec::Framed;
@@ -42,23 +42,18 @@ use std::{
 /// by the handler.
 #[derive(Debug)]
 pub enum HandlerEvent {
-    /// A GossipsubRPC message has been received.
-    Message(GossipsubRpc),
+    /// A GossipsubRPC message has been received. This also contains a list of invalid messages (if
+    /// any) that were received.
+    Message {
+        /// The GossipsubRPC message excluding any invalid messages.
+        rpc: GossipsubRpc,
+        /// Any invalid messages that were received in the RPC, along with the associated
+        /// validation error.
+        invalid_messages: Vec<(GossipsubMessage, ValidationError)>,
+    },
     /// An inbound or outbound substream has been established with the peer and this informs over
     /// which protocol. This message only occurs once per connection.
     PeerKind(PeerKind),
-    /// A message was received but didn't pass validation.
-    InvalidMessage(ValidationError),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum PeerKind {
-    /// A gossipsub 1.1 peer.
-    Gossipsubv1_1,
-    /// A gossipsub 1.0 peer.
-    Gossipsub,
-    /// A floodsub peer.
-    Floodsub,
 }
 
 // The maximum number of substreams we accept or create before disconnecting from the peer.
@@ -290,18 +285,6 @@ impl ProtocolsHandler for GossipsubHandler {
                         }
                         Poll::Ready(Some(Err(error))) => {
                             match error {
-                                GossipsubHandlerError::InvalidMessage(validation_error) => {
-                                    // Invalid message, ignore it and reset to waiting
-                                    warn!(
-                                        "Invalid message received. Error: {:?}",
-                                        validation_error
-                                    );
-                                    self.inbound_substream =
-                                        Some(InboundSubstreamState::WaitingInput(substream));
-                                    return Poll::Ready(ProtocolsHandlerEvent::Custom(
-                                        HandlerEvent::InvalidMessage(validation_error),
-                                    ));
-                                }
                                 GossipsubHandlerError::MaxTransmissionSize => {
                                     warn!("Message exceeded the maximum transmission size");
                                     self.inbound_substream =

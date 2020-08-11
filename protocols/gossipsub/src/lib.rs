@@ -146,18 +146,19 @@ mod handler;
 mod mcache;
 mod peer_score;
 mod topic;
+mod types;
 
 mod rpc_proto {
     include!(concat!(env!("OUT_DIR"), "/gossipsub.pb.rs"));
 }
 
-pub use self::behaviour::{Gossipsub, GossipsubEvent, GossipsubRpc, MessageAuthenticity};
+pub use self::behaviour::{Gossipsub, GossipsubEvent, MessageAuthenticity};
 pub use self::config::{GossipsubConfig, GossipsubConfigBuilder, ValidationMode};
 pub use self::peer_score::{
     score_parameter_decay, score_parameter_decay_with_base, PeerScoreParams, PeerScoreThresholds,
     TopicScoreParams,
 };
-pub use self::protocol::{GossipsubMessage, MessageId};
 pub use self::topic::{Hasher, Topic, TopicHash};
+pub use self::types::{GossipsubMessage, GossipsubRpc, MessageId};
 pub type IdentTopic = Topic<self::topic::IdentityHash>;
 pub type Sha256Topic = Topic<self::topic::Sha256Hash>;
