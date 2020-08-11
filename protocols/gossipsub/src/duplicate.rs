@@ -40,11 +40,14 @@ where
         let result = self.map.insert(key.clone());
 
         let now = Instant::now();
-        // add the new key to the list
-        self.list.push_back(Element {
-            key,
-            inserted: now.clone(),
-        });
+
+        if result {
+            // add the new key to the list if it doesn't already exist
+            self.list.push_back(Element {
+                key,
+                inserted: now.clone(),
+            });
+        }
 
         // remove any expired results
         while let Some(element) = self.list.pop_front() {
@@ -54,6 +57,7 @@ where
             }
             self.map.remove(&element.key);
         }
+
         result
     }
 }
