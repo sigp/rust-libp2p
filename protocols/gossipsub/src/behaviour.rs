@@ -731,14 +731,10 @@ impl Gossipsub {
         };
 
         if let Some(message) = self.mcache.remove(message_id) {
-            //tell peer_score and gossip promises about reject
-            Self::reject_message(
-                &mut self.peer_score,
-                propagation_source,
-                &message,
-                message_id,
-                reject_reason,
-            );
+            //tell peer_score about reject
+            if let Some((peer_score, ..)) = &mut self.peer_score {
+                peer_score.reject_message(propagation_source, &message, reject_reason);
+            }
             true
         } else {
             warn!("Rejected message not in cache. Message Id: {}", message_id);
@@ -1313,20 +1309,6 @@ impl Gossipsub {
         }
     }
 
-    /// informs peer score and gossip_promises about a rejected message
-    fn reject_message(
-        peer_score: &mut Option<(PeerScore, PeerScoreThresholds, Interval, GossipPromises)>,
-        from: &PeerId,
-        msg: &GossipsubMessage,
-        id: &MessageId,
-        reason: RejectReason,
-    ) {
-        if let Some((peer_score, _, _, gossip_promises)) = peer_score {
-            peer_score.reject_message(from, &msg, reason);
-            gossip_promises.reject_message(id, &reason);
-        }
-    }
-
     /// Handles a newly received GossipsubMessage.
     /// Forwards the message to all peers in the mesh.
     fn handle_received_message(&mut self, mut msg: GossipsubMessage, propagation_source: &PeerId) {
@@ -1351,13 +1333,10 @@ impl Gossipsub {
                     "Dropping message claiming to be from self but forwarded from {:?}",
                     propagation_source
                 );
-                Self::reject_message(
-                    &mut self.peer_score,
-                    propagation_source,
-                    &msg,
-                    &msg_id,
-                    RejectReason::SelfOrigin,
-                );
+                if let Some((peer_score, _, _, gossip_promises)) = &mut self.peer_score {
+                    peer_score.reject_message(propagation_source, &msg, RejectReason::SelfOrigin);
+                    gossip_promises.reject_message(&msg_id, &RejectReason::SelfOrigin);
+                }
                 return;
             }
         }
@@ -1372,8 +1351,10 @@ impl Gossipsub {
         }
 
         //tells score that message arrived (but is maybe not fully validated yet)
-        if let Some((peer_score, ..)) = &mut self.peer_score {
+        //Consider message as delivered for gossip promises
+        if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
             peer_score.validate_message(propagation_source, &msg);
+            gossip_promises.deliver_message(&msg_id);
         }
 
         self.mcache.put(msg.clone());
@@ -2031,12 +2012,11 @@ impl Gossipsub {
     fn forward_msg(&mut self, message: GossipsubMessage, source: Option<&PeerId>) -> bool {
         let msg_id = (self.config.message_id_fn())(&message);
 
-        //message is fully validated, inform peer_score and gossip promises
+        //message is fully validated inform peer_score
         if let Some((peer_score, _, _, gossip_promises)) = &mut self.peer_score {
             if let Some(peer) = source {
                 peer_score.deliver_message(peer, &message);
             }
-            gossip_promises.deliver_message(&msg_id);
         }
 
         debug!("Forwarding message: {:?}", msg_id);
@@ -2474,10 +2454,12 @@ impl NetworkBehaviour for Gossipsub {
                 invalid_messages,
             } => {
                 // Handle any invalid messages from this peer
-                if let Some((peer_score, ..)) = &mut self.peer_score {
+                if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
+                    let mut id_fn = self.config.message_id_fn();
                     for (_message, validation_error) in invalid_messages {
                         let reason = RejectReason::ProtocolValidationError(validation_error);
                         peer_score.reject_message(&propagation_source, &_message, reason);
+                        gossip_promises.reject_message(&id_fn(&_message), &reason);
                     }
                 }
 
