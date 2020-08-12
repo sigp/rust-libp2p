@@ -21,6 +21,7 @@
 //! Error types that can result from gossipsub.
 
 use libp2p_core::identity::error::SigningError;
+use libp2p_core::upgrade::ProtocolError;
 use std::fmt;
 
 /// Error associated with publishing a gossipsub message.
@@ -49,6 +50,10 @@ pub enum GossipsubHandlerError {
     MaxOutboundSubstreams,
     /// The message exceeds the maximum transmission size.
     MaxTransmissionSize,
+    /// Protocol negotiation timeout.
+    NegotiationTimeout,
+    /// Protocol negotiation failed.
+    NegotiationProtocolError(ProtocolError),
     /// IO error.
     Io(std::io::Error),
 }

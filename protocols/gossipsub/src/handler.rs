@@ -25,7 +25,7 @@ use crate::types::{GossipsubMessage, GossipsubRpc, PeerKind};
 use futures::prelude::*;
 use futures::StreamExt;
 use futures_codec::Framed;
-use libp2p_core::upgrade::{InboundUpgrade, OutboundUpgrade};
+use libp2p_core::upgrade::{InboundUpgrade, NegotiationError, OutboundUpgrade, UpgradeError};
 use libp2p_swarm::protocols_handler::{
     KeepAlive, ProtocolsHandler, ProtocolsHandlerEvent, ProtocolsHandlerUpgrErr, SubstreamProtocol,
 };
@@ -33,6 +33,7 @@ use libp2p_swarm::NegotiatedSubstream;
 use log::{error, trace, warn};
 use smallvec::SmallVec;
 use std::{
+    collections::VecDeque,
     io,
     pin::Pin,
     task::{Context, Poll},
@@ -94,6 +95,15 @@ pub struct GossipsubHandler {
     // NOTE: Use this flag rather than checking the substream count each poll.
     peer_kind_sent: bool,
 
+    /// If the peer doesn't support the gossipsub protocol we do not immediately disconnect.
+    /// Rather, we disable the handler and prevent any ingoing or outgoing substreams from being
+    /// established.
+    /// This value is set to true to indicate the peer doesn't not support gossipsub.
+    protocol_unsupported: bool,
+
+    /// Collection of errors from attempting an upgrade.
+    upgrade_errors: VecDeque<ProtocolsHandlerUpgrErr<GossipsubHandlerError>>,
+
     /// Flag determining whether to maintain the connection to the peer.
     keep_alive: KeepAlive,
 }
@@ -145,6 +155,8 @@ impl GossipsubHandler {
             send_queue: SmallVec::new(),
             peer_kind: None,
             peer_kind_sent: false,
+            protocol_unsupported: false,
+            upgrade_errors: VecDeque::new(),
             keep_alive: KeepAlive::Yes,
         }
     }
@@ -166,6 +178,11 @@ impl ProtocolsHandler for GossipsubHandler {
         &mut self,
         (substream, peer_kind): <Self::InboundProtocol as InboundUpgrade<NegotiatedSubstream>>::Output,
     ) {
+        // If the peer doesn't support the protocol, reject all substreams
+        if self.protocol_unsupported {
+            return;
+        }
+
         self.inbound_substreams_created += 1;
 
         // update the known kind of peer
@@ -183,6 +200,11 @@ impl ProtocolsHandler for GossipsubHandler {
         (substream, peer_kind): <Self::OutboundProtocol as OutboundUpgrade<NegotiatedSubstream>>::Output,
         message: Self::OutboundOpenInfo,
     ) {
+        // If the peer doesn't support the protocol, reject all substreams
+        if self.protocol_unsupported {
+            return;
+        }
+
         self.outbound_substream_establishing = false;
         self.outbound_substreams_created += 1;
 
@@ -203,7 +225,9 @@ impl ProtocolsHandler for GossipsubHandler {
     }
 
     fn inject_event(&mut self, message: GossipsubRpc) {
-        self.send_queue.push(message);
+        if !self.protocol_unsupported {
+            self.send_queue.push(message);
+        }
     }
 
     fn inject_dial_upgrade_error(
@@ -215,9 +239,7 @@ impl ProtocolsHandler for GossipsubHandler {
     ) {
         self.outbound_substream_establishing = false;
         warn!("Dial upgrade error {:?}", e);
-        // Ignore upgrade errors for now.
-        // If a peer doesn't support this protocol, this will just ignore them, but not disconnect
-        // them.
+        self.upgrade_errors.push_back(e);
     }
 
     fn connection_keep_alive(&self) -> KeepAlive {
@@ -235,6 +257,45 @@ impl ProtocolsHandler for GossipsubHandler {
             Self::Error,
         >,
     > {
+        // Handle any upgrade errors
+        if let Some(error) = self.upgrade_errors.pop_front() {
+            let reported_error = match error {
+                // Timeout errors get mapped to NegotiationTimeout and we close the connection.
+                ProtocolsHandlerUpgrErr::Timeout | ProtocolsHandlerUpgrErr::Timer => {
+                    Some(GossipsubHandlerError::NegotiationTimeout)
+                }
+                // There was an error post negotiation, close the connection.
+                ProtocolsHandlerUpgrErr::Upgrade(UpgradeError::Apply(e)) => Some(e),
+                ProtocolsHandlerUpgrErr::Upgrade(UpgradeError::Select(negotiation_error)) => {
+                    match negotiation_error {
+                        NegotiationError::Failed => {
+                            // The protocol is not supported
+                            self.protocol_unsupported = true;
+                            if !self.peer_kind_sent {
+                                self.peer_kind_sent = true;
+                                // clear all substreams so the keep alive returns false
+                                self.inbound_substream = None;
+                                self.outbound_substream = None;
+                                return Poll::Ready(ProtocolsHandlerEvent::Custom(
+                                    HandlerEvent::PeerKind(PeerKind::NotSupported),
+                                ));
+                            } else {
+                                None
+                            }
+                        }
+                        NegotiationError::ProtocolError(e) => {
+                            Some(GossipsubHandlerError::NegotiationProtocolError(e))
+                        }
+                    }
+                }
+            };
+
+            // If there was a fatal error, close the connection.
+            if let Some(error) = reported_error {
+                return Poll::Ready(ProtocolsHandlerEvent::Close(error));
+            }
+        }
+
         if !self.peer_kind_sent {
             if let Some(peer_kind) = self.peer_kind.as_ref() {
                 self.peer_kind_sent = true;

@@ -98,6 +98,9 @@ impl ProtocolId {
             PeerKind::Gossipsubv1_1 => format!("/{}/{}", prefix, "1.1.0"),
             PeerKind::Gossipsub => format!("/{}/{}", prefix, "1.0.0"),
             PeerKind::Floodsub => format!("/{}/{}", "floodsub", "1.0.0"),
+            // NOTE: This is used for informing the behaviour of unsupported peers. We do not
+            // advertise this variant.
+            PeerKind::NotSupported => unreachable!("Should never advertise NotSupported"),
         }
         .into_bytes();
         ProtocolId { protocol_id, kind }

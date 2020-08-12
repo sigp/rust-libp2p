@@ -40,6 +40,8 @@ pub enum PeerKind {
     Gossipsub,
     /// A floodsub peer.
     Floodsub,
+    /// The peer doesn't support any of the protocols.
+    NotSupported,
 }
 
 /// A message received by the gossipsub system.
