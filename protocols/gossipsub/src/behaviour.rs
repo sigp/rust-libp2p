@@ -739,9 +739,6 @@ impl Gossipsub {
                 message_id,
                 reject_reason,
             );
-            if let Some((peer_score, ..)) = &mut self.peer_score {
-                peer_score.reject_message(propagation_source, &message, reject_reason);
-            }
             true
         } else {
             warn!("Rejected message not in cache. Message Id: {}", message_id);
