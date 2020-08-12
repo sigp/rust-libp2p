@@ -344,6 +344,7 @@ impl BackoffStorage {
     }
 }
 
+#[derive(Debug)]
 pub enum MessageAcceptance {
     /// The message is considered valid, and it should be delivered and forwarded to the network
     Accept,
