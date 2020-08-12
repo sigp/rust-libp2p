@@ -1885,6 +1885,7 @@ impl Gossipsub {
         self.mcache.shift();
 
         debug!("Completed Heartbeat");
+        debug!("peer_scores: {:?}", scores);
     }
 
     /// Emits gossip - Send IHAVE messages to a random set of gossip peers. This is applied to mesh
