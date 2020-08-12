@@ -686,9 +686,10 @@ impl Gossipsub {
     }
 
     /// This function should be called when `config.validate_messages()` is `true` after the
-    /// message got validated by the caller. Messages are stored in the ['Memcache'] and validation
-    /// is expected to be fast enough that the messages should still exist in the cache.There are
-    /// three possible validation outcomes and the outcome is given in acceptance.
+    /// message got validated by the caller. Messages are stored in the
+    /// ['Memcache'] and validation is expected to be fast enough that the messages should still
+    /// exist in the cache. There are three possible validation outcomes and the outcome is given
+    /// in acceptance.
     ///
     /// If acceptance = Accept the message will get propagated to the network. The
     /// `propagation_source` parameter indicates who the message was received by and will not
@@ -704,7 +705,7 @@ impl Gossipsub {
     /// in the cache anymore.
     ///
     /// This should only be called once per message.
-    pub fn validate_message(
+    pub fn report_message_validation_result(
         &mut self,
         message_id: &MessageId,
         propagation_source: &PeerId,
