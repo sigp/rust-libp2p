@@ -1337,8 +1337,8 @@ impl Gossipsub {
         if let Some(own_id) = self.publish_config.get_own_id() {
             if own_id != propagation_source && msg.source.as_ref().map_or(false, |s| s == own_id) {
                 debug!(
-                    "Dropping message claiming to be from self but forwarded from {:?}",
-                    propagation_source
+                    "Dropping message {:?} claiming to be from self but forwarded from {:?}",
+                    msg_id, propagation_source
                 );
                 if let Some((peer_score, _, _, gossip_promises)) = &mut self.peer_score {
                     peer_score.reject_message(propagation_source, &msg, RejectReason::SelfOrigin);
