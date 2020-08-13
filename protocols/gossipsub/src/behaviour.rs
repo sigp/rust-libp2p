@@ -55,7 +55,6 @@ use crate::handler::{GossipsubHandler, HandlerEvent};
 use crate::mcache::MessageCache;
 use crate::peer_score::{PeerScore, PeerScoreParams, PeerScoreThresholds, RejectReason};
 use crate::protocol::SIGNING_PREFIX;
-use crate::rpc_proto;
 use crate::time_cache::DuplicateCache;
 use crate::topic::{Hasher, Topic, TopicHash};
 use crate::types::{
@@ -63,6 +62,7 @@ use crate::types::{
     MessageId, PeerInfo,
 };
 use crate::types::{GossipsubRpc, PeerKind};
+use crate::{rpc_proto, TopicScoreParams};
 use std::cmp::Ordering::Equal;
 
 mod tests;
@@ -775,6 +775,12 @@ impl Gossipsub {
         let peer_score = PeerScore::new(params, self.config.message_id_fn());
         self.peer_score = Some((peer_score, threshold, interval, GossipPromises::default()));
         Ok(())
+    }
+
+    pub fn set_topic_params(&mut self, topic_hash: TopicHash, params: TopicScoreParams) {
+        if let Some((peer_score, ..)) = &mut self.peer_score {
+            peer_score.set_topic_params(topic_hash, params);
+        }
     }
 
     /// Sets the application specific score for a peer. Returns true if scoring is active and

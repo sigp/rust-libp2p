@@ -631,6 +631,10 @@ impl PeerScore {
         }
     }
 
+    pub fn set_topic_params(&mut self, topic_hash: TopicHash, params: TopicScoreParams) {
+        self.params.topics.insert(topic_hash, params);
+    }
+
     /// Increments the "invalid message deliveries" counter for all scored topics the message
     /// is published in.
     fn mark_invalid_message_delivery(&mut self, peer_id: &PeerId, msg: &GossipsubMessage) {
