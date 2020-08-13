@@ -1335,12 +1335,13 @@ impl Gossipsub {
 
         // reject messages claiming to be from ourselves but not locally published
         if let Some(own_id) = self.publish_config.get_own_id() {
-
             //TODO remove this "hack" as soon as lighthouse uses Anonymous instead of this fixed
             // PeerId.
             let lighthouse_anonymous_id = PeerId::from_bytes(vec![0, 1, 0]).expect("Valid peer id");
-            if own_id != &lighthouse_anonymous_id && own_id != propagation_source &&
-                msg.source.as_ref().map_or(false, |s| s == own_id) {
+            if own_id != &lighthouse_anonymous_id
+                && own_id != propagation_source
+                && msg.source.as_ref().map_or(false, |s| s == own_id)
+            {
                 debug!(
                     "Dropping message {:?} claiming to be from self but forwarded from {:?}",
                     msg_id, propagation_source
