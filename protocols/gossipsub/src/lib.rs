@@ -140,9 +140,10 @@ pub mod protocol;
 
 mod behaviour;
 mod config;
-mod duplicate;
 mod handler;
 mod mcache;
+#[allow(dead_code)]
+mod time_cache;
 mod topic;
 
 mod rpc_proto {

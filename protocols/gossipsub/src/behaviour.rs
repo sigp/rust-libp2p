@@ -19,7 +19,6 @@
 // DEALINGS IN THE SOFTWARE.
 
 use crate::config::{GossipsubConfig, ValidationMode};
-use crate::duplicate::DuplicateCache;
 use crate::error::PublishError;
 use crate::handler::GossipsubHandler;
 use crate::mcache::MessageCache;
@@ -28,6 +27,7 @@ use crate::protocol::{
     MessageId, SIGNING_PREFIX,
 };
 use crate::rpc_proto;
+use crate::time_cache::DuplicateCache;
 use crate::topic::{Topic, TopicHash};
 use futures::prelude::*;
 use libp2p_core::{
