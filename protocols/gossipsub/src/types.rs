@@ -1,7 +1,69 @@
 //! A collection of types using the Gossipsub system.
 use crate::TopicHash;
-use libp2p_core::PeerId;
+use libp2p_core::{identity::Keypair, PeerId};
 use std::fmt;
+
+/// Determines if published messages should be signed or not.
+///
+/// Without signing, a number of privacy preserving modes can be selected.
+///
+/// NOTE: The default validation settings are to require signatures. The [`ValidationMode`]
+/// should be updated in the [`GossipsubConfig`] to allow for unsigned messages.
+#[derive(Clone)]
+pub enum MessageAuthenticity {
+    /// Message signing is enabled. The author will be the owner of the key and the sequence number
+    /// will be a random number.
+    Signed(Keypair),
+    /// Message signing is disabled.
+    ///
+    /// The specified `PeerId` will be used as the author of all published messages. The sequence
+    /// number will be randomized.
+    Author(PeerId),
+    /// Message signing is disabled.
+    ///
+    /// A random `PeerId` will be used when publishing each message. The sequence number will be
+    /// randomized.
+    RandomAuthor,
+    /// Message signing is disabled.
+    ///
+    /// The author of the message and the sequence numbers are excluded from the message.
+    ///
+    /// NOTE: Excluding these fields may make these messages invalid by other nodes who
+    /// enforce validation of these fields. See [`ValidationMode`] in the `GossipsubConfig`
+    /// for how to customise this for rust-libp2p gossipsub.  A custom `message_id`
+    /// function will need to be set to prevent all messages from a peer being filtered
+    /// as duplicates.
+    Anonymous,
+}
+
+impl MessageAuthenticity {
+    /// Returns true if signing is enabled.
+    pub fn is_signing(&self) -> bool {
+        match self {
+            MessageAuthenticity::Signed(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_anonymous(&self) -> bool {
+        match self {
+            MessageAuthenticity::Anonymous => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug)]
+/// Validation kinds from the application for received messages.
+pub enum MessageAcceptance {
+    /// The message is considered valid, and it should be delivered and forwarded to the network.
+    Accept,
+    /// The message is considered invalid, and it should be rejected and trigger the P₄ penalty.
+    Reject,
+    /// The message is neither delivered nor forwarded to the network, but the router does not
+    /// trigger the P₄ penalty.
+    Ignore,
+}
 
 /// A type for gossipsub message ids.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

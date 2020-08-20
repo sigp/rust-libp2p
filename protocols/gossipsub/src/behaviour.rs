@@ -59,7 +59,7 @@ use crate::time_cache::DuplicateCache;
 use crate::topic::{Hasher, Topic, TopicHash};
 use crate::types::{
     GossipsubControlAction, GossipsubMessage, GossipsubSubscription, GossipsubSubscriptionAction,
-    MessageId, PeerInfo,
+    MessageAcceptance, MessageAuthenticity, MessageId, PeerInfo,
 };
 use crate::types::{GossipsubRpc, PeerKind};
 use crate::{rpc_proto, TopicScoreParams};
@@ -95,56 +95,6 @@ pub enum GossipsubEvent {
         /// The topic it has subscribed from.
         topic: TopicHash,
     },
-}
-
-/// Determines if published messages should be signed or not.
-///
-/// Without signing, a number of privacy preserving modes can be selected.
-///
-/// NOTE: The default validation settings are to require signatures. The [`ValidationMode`]
-/// should be updated in the [`GossipsubConfig`] to allow for unsigned messages.
-#[derive(Clone)]
-pub enum MessageAuthenticity {
-    /// Message signing is enabled. The author will be the owner of the key and the sequence number
-    /// will be a random number.
-    Signed(Keypair),
-    /// Message signing is disabled.
-    ///
-    /// The specified `PeerId` will be used as the author of all published messages. The sequence
-    /// number will be randomized.
-    Author(PeerId),
-    /// Message signing is disabled.
-    ///
-    /// A random `PeerId` will be used when publishing each message. The sequence number will be
-    /// randomized.
-    RandomAuthor,
-    /// Message signing is disabled.
-    ///
-    /// The author of the message and the sequence numbers are excluded from the message.
-    ///
-    /// NOTE: Excluding these fields may make these messages invalid by other nodes who
-    /// enforce validation of these fields. See [`ValidationMode`] in the `GossipsubConfig`
-    /// for how to customise this for rust-libp2p gossipsub.  A custom `message_id`
-    /// function will need to be set to prevent all messages from a peer being filtered
-    /// as duplicates.
-    Anonymous,
-}
-
-impl MessageAuthenticity {
-    /// Returns true if signing is enabled.
-    fn is_signing(&self) -> bool {
-        match self {
-            MessageAuthenticity::Signed(_) => true,
-            _ => false,
-        }
-    }
-
-    fn is_anonymous(&self) -> bool {
-        match self {
-            MessageAuthenticity::Anonymous => true,
-            _ => false,
-        }
-    }
 }
 
 /// A data structure for storing configuration for publishing messages. See [`MessageAuthenticity`]
@@ -198,17 +148,18 @@ impl From<MessageAuthenticity> for PublishConfig {
     }
 }
 
-/// Stores backoffs in an efficient manner
+/// Stores backoffs in an efficient manner.
 struct BackoffStorage {
-    ///stores backoffs and the index in backoffs_by_heartbeat per peer per topic
+    /// Stores backoffs and the index in backoffs_by_heartbeat per peer per topic.
     backoffs: HashMap<TopicHash, HashMap<PeerId, (Instant, usize)>>,
-    /// stores peer topic pairs per heartbeat (this is cyclic the current index is heartbeat_index)
+    /// Stores peer topic pairs per heartbeat (this is cyclic the current index is
+    /// heartbeat_index).
     backoffs_by_heartbeat: Vec<HashSet<(TopicHash, PeerId)>>,
-    /// the index in the backoffs_by_heartbeat vector corresponding to the current heartbeat
+    /// The index in the backoffs_by_heartbeat vector corresponding to the current heartbeat.
     heartbeat_index: usize,
-    /// the heartbeat interval duration from the config
+    /// The heartbeat interval duration from the config.
     heartbeat_interval: Duration,
-    /// backoff_slack from config
+    /// Backoff slack from the config.
     backoff_slack: u32,
 }
 
@@ -223,7 +174,7 @@ impl BackoffStorage {
         heartbeat_interval: Duration,
         backoff_slack: u32,
     ) -> BackoffStorage {
-        //we add one additional slot for partial heartbeat
+        // We add one additional slot for partial heartbeat
         let max_heartbeats =
             Self::heartbeats(prune_backoff, &heartbeat_interval) + backoff_slack as usize + 1;
         BackoffStorage {
@@ -236,7 +187,7 @@ impl BackoffStorage {
     }
 
     /// Updates the backoff for a peer (if there is already a more restrictive backup this call
-    /// doesn't change anything)
+    /// doesn't change anything).
     pub fn update_backoff(&mut self, topic: &TopicHash, peer: &PeerId, time: Duration) {
         let instant = Instant::now() + time;
         let insert_into_backoffs_by_heartbeat =
@@ -316,7 +267,7 @@ impl BackoffStorage {
     /// Applies a heartbeat. That should be called regularly in intervals of length
     /// `heartbeat_interval`.
     pub fn heartbeat(&mut self) {
-        //clean up backoffs_by_heartbeat
+        // Clean up backoffs_by_heartbeat
         if let Some(s) = self.backoffs_by_heartbeat.get_mut(self.heartbeat_index) {
             let backoffs = &mut self.backoffs;
             let slack = self.heartbeat_interval * self.backoff_slack;
@@ -339,20 +290,9 @@ impl BackoffStorage {
             });
         }
 
-        //increase heartbeat index
+        // Increase heartbeat index
         self.heartbeat_index = (self.heartbeat_index + 1) % self.backoffs_by_heartbeat.len();
     }
-}
-
-#[derive(Debug)]
-pub enum MessageAcceptance {
-    /// The message is considered valid, and it should be delivered and forwarded to the network
-    Accept,
-    /// The message is considered invalid, and it should be rejected and trigger the P₄ penalty
-    Reject,
-    /// The message is neither delivered nor forwarded to the network, but the router does not
-    /// trigger the P₄ penalty.
-    Ignore,
 }
 
 /// Network behaviour that handles the gossipsub protocol.
@@ -413,37 +353,40 @@ pub struct Gossipsub {
 
     /// We remember all peers we found through peer exchange, since those peers are not considered
     /// as safe as randomly discovered outbound peers. This behaviour diverges from the go
-    /// implementation to avoid possible love bombing attacks in px. When disconnecting peers will
+    /// implementation to avoid possible love bombing attacks in PX. When disconnecting peers will
     /// be removed from this list which may result in a true outbound rediscovery.
     px_peers: HashSet<PeerId>,
 
     /// Set of connected outbound peers (we only consider true outbound peers found through
-    /// discovery and not by px)
+    /// discovery and not by PX).
     outbound_peers: HashSet<PeerId>,
 
     /// Stores optional peer score data together with thresholds, decay interval and gossip
     /// promises.
     peer_score: Option<(PeerScore, PeerScoreThresholds, Interval, GossipPromises)>,
 
-    /// Counts the number of ihave received from each peer since the last heartbeat
+    /// Counts the number of `IHAVE` received from each peer since the last heartbeat.
     count_peer_have: HashMap<PeerId, usize>,
 
-    /// Counts the number of iwant that we sent the each peer since the last heartbeat
+    /// Counts the number of `IWANT` that we sent the each peer since the last heartbeat.
     count_iasked: HashMap<PeerId, usize>,
 }
 
 impl Gossipsub {
     /// Creates a `Gossipsub` struct given a set of parameters specified via a `GossipsubConfig`.
-    pub fn new(privacy: MessageAuthenticity, config: GossipsubConfig) -> Self {
+    pub fn new(
+        privacy: MessageAuthenticity,
+        config: GossipsubConfig,
+    ) -> Result<Self, &'static str> {
         // Set up the router given the configuration settings.
 
         // We do not allow configurations where a published message would also be rejected if it
         // were received locally.
-        validate_config(&privacy, &config.validation_mode());
+        validate_config(&privacy, &config.validation_mode())?;
 
         // Set up message publishing parameters.
 
-        Gossipsub {
+        Ok(Gossipsub {
             events: VecDeque::new(),
             control_pool: HashMap::new(),
             publish_config: privacy.into(),
@@ -476,7 +419,7 @@ impl Gossipsub {
             count_peer_have: HashMap::new(),
             count_iasked: HashMap::new(),
             peer_protocols: HashMap::new(),
-        }
+        })
     }
 
     /// Subscribe to a topic.
@@ -2590,20 +2533,23 @@ impl NetworkBehaviour for Gossipsub {
 
 /// Validates the combination of signing, privacy and message validation to ensure the
 /// configuration will not reject published messages.
-fn validate_config(authenticity: &MessageAuthenticity, validation_mode: &ValidationMode) {
+fn validate_config(
+    authenticity: &MessageAuthenticity,
+    validation_mode: &ValidationMode,
+) -> Result<(), &'static str> {
     match validation_mode {
         ValidationMode::Anonymous => {
             if authenticity.is_signing() {
-                panic!("Cannot enable message signing with an Anonymous validation mode. Consider changing either the ValidationMode or MessageAuthenticity");
+                return Err("Cannot enable message signing with an Anonymous validation mode. Consider changing either the ValidationMode or MessageAuthenticity");
             }
 
             if !authenticity.is_anonymous() {
-                panic!("Published messages contain an author but incoming messages with an author will be rejected. Consider adjusting the validation or privacy settings in the config");
+                return Err("Published messages contain an author but incoming messages with an author will be rejected. Consider adjusting the validation or privacy settings in the config");
             }
         }
         ValidationMode::Strict => {
             if !authenticity.is_signing() {
-                panic!(
+                return Err(
                     "Messages will be
                 published unsigned and incoming unsigned messages will be rejected. Consider adjusting
                 the validation or privacy settings in the config"
@@ -2612,6 +2558,7 @@ fn validate_config(authenticity: &MessageAuthenticity, validation_mode: &Validat
         }
         _ => {}
     }
+    Ok(())
 }
 
 impl fmt::Debug for Gossipsub {
