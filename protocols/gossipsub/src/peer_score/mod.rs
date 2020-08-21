@@ -631,6 +631,7 @@ impl PeerScore {
         }
     }
 
+    /// Sets scoring parameters for a topic.
     pub fn set_topic_params(&mut self, topic_hash: TopicHash, params: TopicScoreParams) {
         self.params.topics.insert(topic_hash, params);
     }
@@ -644,7 +645,7 @@ impl PeerScore {
                     peer_stats.stats_or_default_mut(topic_hash.clone(), &self.params)
                 {
                     debug!(
-                        "Peer {} delivered an invalid messag in topic {} and gets penalized \
+                        "Peer {} delivered an invalid message in topic {} and gets penalized \
                     for it",
                         peer_id, topic_hash
                     );

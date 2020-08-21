@@ -186,7 +186,7 @@ impl BackoffStorage {
         }
     }
 
-    /// Updates the backoff for a peer (if there is already a more restrictive backup this call
+    /// Updates the backoff for a peer (if there is already a more restrictive backoff than this call
     /// doesn't change anything).
     pub fn update_backoff(&mut self, topic: &TopicHash, peer: &PeerId, time: Duration) {
         let instant = Instant::now() + time;
@@ -317,7 +317,8 @@ pub struct Gossipsub {
     /// duplicates from being propagated to the application and on the network.
     duplication_cache: DuplicateCache<MessageId>,
 
-    /// maps peer ids to its protocol kind
+    /// A map of peers to their protocol kind. This is to identify different kinds of gossipsub
+    /// peers.
     peer_protocols: HashMap<PeerId, PeerKind>,
 
     /// A map of all connected peers - A map of topic hash to a list of gossipsub peer Ids.
@@ -540,7 +541,7 @@ impl Gossipsub {
         for topic_hash in &message.topics {
             if let Some(set) = self.topic_peers.get(&topic_hash) {
                 if self.config.flood_publish() {
-                    //forward to all peers above score
+                    // Forward to all peers above score and all explicit peers
                     recipient_peers.extend(
                         set.iter()
                             .filter(|p| {
@@ -552,14 +553,14 @@ impl Gossipsub {
                     continue;
                 }
 
-                //explicit peers
+                // Explicit peers
                 for peer in &self.explicit_peers {
                     if set.contains(peer) {
                         recipient_peers.insert(peer.clone());
                     }
                 }
 
-                //floodsub peers
+                // Floodsub peers
                 for (peer, kind) in &self.peer_protocols {
                     if kind == &PeerKind::Floodsub
                         && !self
@@ -570,17 +571,16 @@ impl Gossipsub {
                     }
                 }
 
-                //gossipsub peers
+                // Gossipsub peers
                 if self.mesh.get(&topic_hash).is_none() {
                     debug!("Topic: {:?} not in the mesh", topic_hash);
-                    // Build a list of peers to forward the message to
-                    // if we have fanout peers add them to the map.
+                    // If we have fanout peers add them to the map.
                     if self.fanout.contains_key(&topic_hash) {
                         for peer in self.fanout.get(&topic_hash).expect("Topic must exist") {
                             recipient_peers.insert(peer.clone());
                         }
                     } else {
-                        // we have no fanout peers, select mesh_n of them and add them to the fanout
+                        // We have no fanout peers, select mesh_n of them and add them to the fanout
                         let mesh_n = self.config.mesh_n();
                         let new_peers = Self::get_random_peers(
                             &self.topic_peers,
@@ -591,19 +591,19 @@ impl Gossipsub {
                                 |p| {
                                     !self.explicit_peers.contains(p)
                                         && !self
-                                            .score_below_threshold(p, |ts| ts.publish_threshold)
+                                            .score_below_threshold(p, |pst| pst.publish_threshold)
                                             .0
                                 }
                             },
                         );
-                        // add the new peers to the fanout and recipient peers
+                        // Add the new peers to the fanout and recipient peers
                         self.fanout.insert(topic_hash.clone(), new_peers.clone());
                         for peer in new_peers {
                             debug!("Peer added to fanout: {:?}", peer);
                             recipient_peers.insert(peer.clone());
                         }
                     }
-                    // we are publishing to fanout peers - update the time we published
+                    // We are publishing to fanout peers - update the time we published
                     self.fanout_last_pub
                         .insert(topic_hash.clone(), Instant::now());
                 }
@@ -675,7 +675,7 @@ impl Gossipsub {
         };
 
         if let Some(message) = self.mcache.remove(message_id) {
-            //tell peer_score about reject
+            // Tell peer_score about reject
             if let Some((peer_score, ..)) = &mut self.peer_score {
                 peer_score.reject_message(propagation_source, &message, reject_reason);
             }
@@ -705,7 +705,7 @@ impl Gossipsub {
 
     /// Activates the peer scoring system with the given parameters. This will reset all scores
     /// if there was already another peer scoring system activated. Returns an error if the
-    /// params where not valid.
+    /// params are not valid.
     pub fn with_peer_score(
         &mut self,
         params: PeerScoreParams,
@@ -720,9 +720,19 @@ impl Gossipsub {
         Ok(())
     }
 
-    pub fn set_topic_params(&mut self, topic_hash: TopicHash, params: TopicScoreParams) {
+    /// Sets scoring parameters for a topic.
+    ///
+    /// The `with_peer_score()` must first be called to initialise peer scoring.
+    pub fn set_topic_params<H: Hasher>(
+        &mut self,
+        topic: Topic<H>,
+        params: TopicScoreParams,
+    ) -> Result<(), &'static str> {
         if let Some((peer_score, ..)) = &mut self.peer_score {
-            peer_score.set_topic_params(topic_hash, params);
+            peer_score.set_topic_params(topic.hash(), params);
+            Ok(())
+        } else {
+            Err("Peer score must be initialised with `with_peer_score()`")
         }
     }
 
@@ -755,7 +765,8 @@ impl Gossipsub {
                 "JOIN: Removing peers from the fanout for topic: {:?}",
                 topic_hash
             );
-            //remove explicit peers and peers with negative scores
+
+            // remove explicit peers and peers with negative scores
             peers = peers
                 .into_iter()
                 .filter(|p| {
@@ -763,8 +774,8 @@ impl Gossipsub {
                 })
                 .collect();
 
-            // add up to mesh_n of them them to the mesh
-            // Note: These aren't randomly added, currently FIFO
+            // Add up to mesh_n of them them to the mesh
+            // NOTE: These aren't randomly added, currently FIFO
             let add_peers = std::cmp::min(peers.len(), self.config.mesh_n());
             debug!(
                 "JOIN: Adding {:?} peers from the fanout for topic: {:?}",
@@ -823,6 +834,7 @@ impl Gossipsub {
         debug!("Completed JOIN for topic: {:?}", topic_hash);
     }
 
+    /// Creates a PRUNE gossipsub action.
     fn make_prune(
         &mut self,
         topic_hash: &TopicHash,
@@ -833,16 +845,25 @@ impl Gossipsub {
             peer_score.prune(peer, topic_hash.clone());
         }
 
-        if let Some(PeerKind::Gossipsub) = self.peer_protocols.get(peer) {
-            // GossipSub v1.0 -- no peer exchange, the peer won't be able to parse it anyway
-            return GossipsubControlAction::Prune {
-                topic_hash: topic_hash.clone(),
-                peers: Vec::new(),
-                backoff: None,
-            };
+        match self.peer_protocols.get(peer) {
+            Some(PeerKind::Floodsub) => {
+                error!("Attempted to prune a Floodsub peer");
+            }
+            Some(PeerKind::Gossipsub) => {
+                // GossipSub v1.0 -- no peer exchange, the peer won't be able to parse it anyway
+                return GossipsubControlAction::Prune {
+                    topic_hash: topic_hash.clone(),
+                    peers: Vec::new(),
+                    backoff: None,
+                };
+            }
+            None => {
+                error!("Attempted to Prune an unknown peer");
+            }
+            _ => {} // Gossipsub 1.1 peer perform the `Prune`
         }
 
-        //select peers for peer exchange
+        // Select peers for peer exchange
         let peers = if do_px {
             Self::get_random_peers(
                 &self.topic_peers,
@@ -858,7 +879,7 @@ impl Gossipsub {
             Vec::new()
         };
 
-        //update backoff
+        // update backoff
         self.backoffs
             .update_backoff(topic_hash, peer, self.config.prune_backoff());
 
@@ -873,7 +894,7 @@ impl Gossipsub {
     fn leave(&mut self, topic_hash: &TopicHash) {
         debug!("Running LEAVE for topic {:?}", topic_hash);
 
-        // if our mesh contains the topic, send prune to peers and delete it from the mesh
+        // If our mesh contains the topic, send prune to peers and delete it from the mesh
         if let Some((_, peers)) = self.mesh.remove_entry(topic_hash) {
             for peer in peers {
                 // Send a PRUNE control message
@@ -885,10 +906,10 @@ impl Gossipsub {
         debug!("Completed LEAVE for topic: {:?}", topic_hash);
     }
 
-    ///Checks if the given peer is still connected and if not dials the peer again
+    /// Checks if the given peer is still connected and if not dials the peer again.
     fn check_explicit_peer_connection(&mut self, peer_id: &PeerId) {
         if !self.peer_topics.contains_key(peer_id) {
-            //connect to peer
+            // Connect to peer
             debug!("Connecting to explicit peer {:?}", peer_id);
             self.events.push_back(NetworkBehaviourAction::DialPeer {
                 peer_id: peer_id.clone(),
@@ -897,6 +918,8 @@ impl Gossipsub {
         }
     }
 
+    /// Determines if a peer's score is below a given `PeerScoreThreshold` chosen via the
+    /// `threshold` parameter.
     fn score_below_threshold(
         &self,
         peer_id: &PeerId,
@@ -916,8 +939,8 @@ impl Gossipsub {
     /// Handles an IHAVE control message. Checks our cache of messages. If the message is unknown,
     /// requests it with an IWANT control message.
     fn handle_ihave(&mut self, peer_id: &PeerId, ihave_msgs: Vec<(TopicHash, Vec<MessageId>)>) {
-        // we ignore IHAVE gossip from any peer whose score is below the gossip threshold
-        if let (true, score) = self.score_below_threshold(peer_id, |ts| ts.gossip_threshold) {
+        // We ignore IHAVE gossip from any peer whose score is below the gossip threshold
+        if let (true, score) = self.score_below_threshold(peer_id, |pst| pst.gossip_threshold) {
             debug!(
                 "IHAVE: ignoring peer {:?} with score below threshold [score = {}]",
                 peer_id, score
@@ -925,7 +948,7 @@ impl Gossipsub {
             return;
         }
 
-        //IHAVE flood protection
+        // IHAVE flood protection
         let peer_have = self.count_peer_have.entry(peer_id.clone()).or_insert(0);
         *peer_have += 1;
         if *peer_have > self.config.max_ihave_messages() {
@@ -974,7 +997,7 @@ impl Gossipsub {
             let iasked = self.count_iasked.entry(peer_id.clone()).or_insert(0);
             let mut iask = iwant_ids.len();
             if *iasked + iask > self.config.max_ihave_length() {
-                iask = self.config.max_ihave_length() - *iasked;
+                iask = self.config.max_ihave_length().saturating_sub(*iasked);
             }
 
             // Send the list of IWANT control messages
@@ -1014,8 +1037,8 @@ impl Gossipsub {
     /// Handles an IWANT control message. Checks our cache of messages. If the message exists it is
     /// forwarded to the requesting peer.
     fn handle_iwant(&mut self, peer_id: &PeerId, iwant_msgs: Vec<MessageId>) {
-        // we ignore IWANT gossip from any peer whose score is below the gossip threshold
-        if let (true, score) = self.score_below_threshold(peer_id, |ts| ts.gossip_threshold) {
+        // We ignore IWANT gossip from any peer whose score is below the gossip threshold
+        if let (true, score) = self.score_below_threshold(peer_id, |pst| pst.gossip_threshold) {
             debug!(
                 "IWANT: ignoring peer {:?} with score below threshold [score = {}]",
                 peer_id, score
@@ -1028,7 +1051,7 @@ impl Gossipsub {
         let mut cached_messages = HashMap::new();
 
         for id in iwant_msgs {
-            // if we have it and the ihave count is not above the threshold, add it do the
+            // If we have it and the IHAVE count is not above the threshold, add it do the
             // cached_messages mapping
             if let Some((msg, count)) = self.mcache.get_with_iwant_counts(&id, peer_id) {
                 if count > self.config.gossip_retransimission() {

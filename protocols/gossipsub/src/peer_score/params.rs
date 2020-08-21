@@ -8,66 +8,6 @@ const DEFAULT_DECAY_INTERVAL: u64 = 1;
 /// The default rate to decay to 0.
 const DEFAULT_DECAY_TO_ZERO: f64 = 0.1;
 
-// TODO: Adjust these defaults
-impl Default for TopicScoreParams {
-    fn default() -> Self {
-        TopicScoreParams {
-            topic_weight: 0.5,
-            // P1
-            time_in_mesh_weight: 1.0,
-            time_in_mesh_quantum: Duration::from_millis(1),
-            time_in_mesh_cap: 3600.0,
-            // P2
-            first_message_deliveries_weight: 1.0,
-            first_message_deliveries_decay: 0.5,
-            first_message_deliveries_cap: 2000.0,
-            // P3
-            mesh_message_deliveries_weight: -1.0,
-            mesh_message_deliveries_decay: 0.5,
-            mesh_message_deliveries_cap: 100.0,
-            mesh_message_deliveries_threshold: 20.0,
-            mesh_message_deliveries_window: Duration::from_millis(10),
-            mesh_message_deliveries_activation: Duration::from_secs(5),
-            // P3b
-            mesh_failure_penalty_weight: -1.0,
-            mesh_failure_penalty_decay: 0.5,
-            // P4
-            invalid_message_deliveries_weight: -1.0,
-            invalid_message_deliveries_decay: 0.3,
-        }
-    }
-}
-
-impl Default for PeerScoreThresholds {
-    fn default() -> Self {
-        PeerScoreThresholds {
-            gossip_threshold: -10.0,
-            publish_threshold: -50.0,
-            graylist_threshold: -80.0,
-            accept_px_threshold: 10.0,
-            opportunistic_graft_threshold: 20.0,
-        }
-    }
-}
-
-impl Default for PeerScoreParams {
-    fn default() -> Self {
-        PeerScoreParams {
-            topics: HashMap::new(),
-            topic_score_cap: 3600.0,
-            app_specific_weight: 10.0,
-            ip_colocation_factor_weight: -5.0,
-            ip_colocation_factor_threshold: 10.0,
-            ip_colocation_factor_whitelist: HashSet::new(),
-            behaviour_penalty_weight: -10.0,
-            behaviour_penalty_decay: 0.2,
-            decay_interval: Duration::from_secs(DEFAULT_DECAY_INTERVAL),
-            decay_to_zero: DEFAULT_DECAY_TO_ZERO,
-            retain_score: Duration::from_secs(3600),
-        }
-    }
-}
-
 /// Computes the decay factor for a parameter, assuming the `decay_interval` is 1s
 /// and that the value decays to zero if it drops below 0.01.
 pub fn score_parameter_decay(decay: Duration) -> f64 {
@@ -107,6 +47,18 @@ pub struct PeerScoreThresholds {
     /// The median mesh score threshold before triggering opportunistic
     /// grafting; this should have a small positive value.
     pub opportunistic_graft_threshold: f64,
+}
+
+impl Default for PeerScoreThresholds {
+    fn default() -> Self {
+        PeerScoreThresholds {
+            gossip_threshold: -10.0,
+            publish_threshold: -50.0,
+            graylist_threshold: -80.0,
+            accept_px_threshold: 10.0,
+            opportunistic_graft_threshold: 20.0,
+        }
+    }
 }
 
 impl PeerScoreThresholds {
@@ -173,6 +125,24 @@ pub struct PeerScoreParams {
 
     /// Time to remember counters for a disconnected peer.
     pub retain_score: Duration,
+}
+
+impl Default for PeerScoreParams {
+    fn default() -> Self {
+        PeerScoreParams {
+            topics: HashMap::new(),
+            topic_score_cap: 3600.0,
+            app_specific_weight: 10.0,
+            ip_colocation_factor_weight: -5.0,
+            ip_colocation_factor_threshold: 10.0,
+            ip_colocation_factor_whitelist: HashSet::new(),
+            behaviour_penalty_weight: -10.0,
+            behaviour_penalty_decay: 0.2,
+            decay_interval: Duration::from_secs(DEFAULT_DECAY_INTERVAL),
+            decay_to_zero: DEFAULT_DECAY_TO_ZERO,
+            retain_score: Duration::from_secs(3600),
+        }
+    }
 }
 
 /// Peer score parameter validation
@@ -284,6 +254,37 @@ pub struct TopicScoreParams {
     ///  The weight of the parameter MUST be negative (or zero to disable).
     pub invalid_message_deliveries_weight: f64,
     pub invalid_message_deliveries_decay: f64,
+}
+
+/// NOTE: The topic score parameters are very network specific.
+///       For any production system, these values should be manually set.
+impl Default for TopicScoreParams {
+    fn default() -> Self {
+        TopicScoreParams {
+            topic_weight: 0.5,
+            // P1
+            time_in_mesh_weight: 1.0,
+            time_in_mesh_quantum: Duration::from_millis(1),
+            time_in_mesh_cap: 3600.0,
+            // P2
+            first_message_deliveries_weight: 1.0,
+            first_message_deliveries_decay: 0.5,
+            first_message_deliveries_cap: 2000.0,
+            // P3
+            mesh_message_deliveries_weight: -1.0,
+            mesh_message_deliveries_decay: 0.5,
+            mesh_message_deliveries_cap: 100.0,
+            mesh_message_deliveries_threshold: 20.0,
+            mesh_message_deliveries_window: Duration::from_millis(10),
+            mesh_message_deliveries_activation: Duration::from_secs(5),
+            // P3b
+            mesh_failure_penalty_weight: -1.0,
+            mesh_failure_penalty_decay: 0.5,
+            // P4
+            invalid_message_deliveries_weight: -1.0,
+            invalid_message_deliveries_decay: 0.3,
+        }
+    }
 }
 
 impl TopicScoreParams {

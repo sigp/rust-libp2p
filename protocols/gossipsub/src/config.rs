@@ -197,7 +197,7 @@ pub struct GossipsubConfig {
     max_ihave_length: usize,
 
     /// GossipSubMaxIHaveMessages is the maximum number of IHAVE messages to accept from a peer
-    /// within a heartbeat.
+    /// within a heartbeat. The default is 10.
     max_ihave_messages: usize,
 
     /// Time to wait for a message requested through IWANT following an IHAVE advertisement.
