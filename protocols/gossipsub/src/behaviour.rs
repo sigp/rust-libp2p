@@ -59,13 +59,63 @@ use crate::time_cache::DuplicateCache;
 use crate::topic::{Hasher, Topic, TopicHash};
 use crate::types::{
     GossipsubControlAction, GossipsubMessage, GossipsubSubscription, GossipsubSubscriptionAction,
-    MessageAcceptance, MessageAuthenticity, MessageId, PeerInfo,
+    MessageAcceptance, MessageId, PeerInfo,
 };
 use crate::types::{GossipsubRpc, PeerKind};
 use crate::{rpc_proto, TopicScoreParams};
 use std::cmp::Ordering::Equal;
 
 mod tests;
+
+/// Determines if published messages should be signed or not.
+///
+/// Without signing, a number of privacy preserving modes can be selected.
+///
+/// NOTE: The default validation settings are to require signatures. The [`ValidationMode`]
+/// should be updated in the [`GossipsubConfig`] to allow for unsigned messages.
+#[derive(Clone)]
+pub enum MessageAuthenticity {
+    /// Message signing is enabled. The author will be the owner of the key and the sequence number
+    /// will be a random number.
+    Signed(Keypair),
+    /// Message signing is disabled.
+    ///
+    /// The specified `PeerId` will be used as the author of all published messages. The sequence
+    /// number will be randomized.
+    Author(PeerId),
+    /// Message signing is disabled.
+    ///
+    /// A random `PeerId` will be used when publishing each message. The sequence number will be
+    /// randomized.
+    RandomAuthor,
+    /// Message signing is disabled.
+    ///
+    /// The author of the message and the sequence numbers are excluded from the message.
+    ///
+    /// NOTE: Excluding these fields may make these messages invalid by other nodes who
+    /// enforce validation of these fields. See [`ValidationMode`] in the `GossipsubConfig`
+    /// for how to customise this for rust-libp2p gossipsub.  A custom `message_id`
+    /// function will need to be set to prevent all messages from a peer being filtered
+    /// as duplicates.
+    Anonymous,
+}
+
+impl MessageAuthenticity {
+    /// Returns true if signing is enabled.
+    pub fn is_signing(&self) -> bool {
+        match self {
+            MessageAuthenticity::Signed(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_anonymous(&self) -> bool {
+        match self {
+            MessageAuthenticity::Anonymous => true,
+            _ => false,
+        }
+    }
+}
 
 /// Event that can happen on the gossipsub behaviour.
 #[derive(Debug)]
@@ -1016,7 +1066,7 @@ impl Gossipsub {
             iwant_ids_vec.truncate(iask as usize);
             *iasked += iask;
 
-            let message_ids = iwant_ids_vec.into_iter().cloned().collect();
+            let message_ids = iwant_ids_vec.into_iter().cloned().collect::<Vec<_>>();
             if let Some((_, _, _, gossip_promises)) = &mut self.peer_score {
                 gossip_promises.add_promise(
                     peer_id.clone(),
@@ -1079,13 +1129,13 @@ impl Gossipsub {
                 },
             );
         }
-        debug!("Completed IWANT handling for peer: {:?}", peer_id);
+        debug!("Completed IWANT handling for peer: {}", peer_id);
     }
 
     /// Handles GRAFT control messages. If subscribed to the topic, adds the peer to mesh, if not,
     /// responds with PRUNE messages.
     fn handle_graft(&mut self, peer_id: &PeerId, topics: Vec<TopicHash>) {
-        debug!("Handling GRAFT message for peer: {:?}", peer_id);
+        debug!("Handling GRAFT message for peer: {}", peer_id);
 
         let mut to_prune_topics = HashSet::new();
 
@@ -1093,7 +1143,7 @@ impl Gossipsub {
 
         // we don't GRAFT to/from explicit peers; complain loudly if this happens
         if self.explicit_peers.contains(peer_id) {
-            warn!("GRAFT: ignoring request from direct peer {:?}", peer_id);
+            warn!("GRAFT: ignoring request from direct peer {}", peer_id);
             // this is possibly a bug from non-reciprocal configuration; send a PRUNE for all topics
             to_prune_topics = HashSet::from_iter(topics.into_iter());
             // but don't PX
@@ -1103,7 +1153,7 @@ impl Gossipsub {
             let now = Instant::now();
             for topic_hash in topics {
                 if let Some(peers) = self.mesh.get_mut(&topic_hash) {
-                    //if the peer is already in the mesh ignore the graft
+                    // if the peer is already in the mesh ignore the graft
                     if peers.contains(peer_id) {
                         continue;
                     }
@@ -1112,15 +1162,19 @@ impl Gossipsub {
                     if let Some(backoff_time) = self.backoffs.get_backoff_time(&topic_hash, peer_id)
                     {
                         if backoff_time > now {
-                            debug!("GRAFT: ignoring backed off peer {:?}", peer_id);
-                            //add behavioural penalty
+                            warn!(
+                                "GRAFT: peer attempted graft within backoff time, penalizing {}",
+                                peer_id
+                            );
+                            // add behavioural penalty
                             if let Some((peer_score, ..)) = &mut self.peer_score {
                                 peer_score.add_penalty(peer_id, 1);
 
                                 // check the flood cutoff
-                                let flood_cutoff = backoff_time
-                                    + self.config.graft_flood_threshold()
-                                    - self.config.prune_backoff();
+                                let flood_cutoff = (backoff_time
+                                    + self.config.graft_flood_threshold())
+                                .checked_sub(self.config.prune_backoff())
+                                .unwrap_or_else(|| now);
                                 if flood_cutoff > now {
                                     //extra penalty
                                     peer_score.add_penalty(peer_id, 1);
@@ -1149,8 +1203,8 @@ impl Gossipsub {
                         continue;
                     }
 
-                    //check mesh upper bound and only allow graft if upperbound not reached or
-                    //if it is an outbound peer
+                    // check mesh upper bound and only allow graft if the upper bound is not reached or
+                    // if it is an outbound peer
                     if peers.len() >= self.config.mesh_n_high()
                         && !self.outbound_peers.contains(peer_id)
                     {
@@ -1185,7 +1239,7 @@ impl Gossipsub {
                 .collect();
             // Send the prune messages to the peer
             info!(
-                "GRAFT: Not subscribed to topics -  Sending PRUNE to peer: {:?}",
+                "GRAFT: Not subscribed to topics -  Sending PRUNE to peer: {}",
                 peer_id
             );
             self.send_message(
@@ -1197,7 +1251,7 @@ impl Gossipsub {
                 },
             );
         }
-        debug!("Completed GRAFT handling for peer: {:?}", peer_id);
+        debug!("Completed GRAFT handling for peer: {}", peer_id);
     }
 
     /// Handles PRUNE control messages. Removes peer from the mesh.
@@ -1206,15 +1260,15 @@ impl Gossipsub {
         peer_id: &PeerId,
         prune_data: Vec<(TopicHash, Vec<PeerInfo>, Option<u64>)>,
     ) {
-        debug!("Handling PRUNE message for peer: {}", peer_id.to_string());
+        debug!("Handling PRUNE message for peer: {}", peer_id);
         let (below_threshold, score) =
-            self.score_below_threshold(peer_id, |ts| ts.accept_px_threshold);
+            self.score_below_threshold(peer_id, |pst| pst.accept_px_threshold);
         for (topic_hash, px, backoff) in prune_data {
             if let Some(peers) = self.mesh.get_mut(&topic_hash) {
                 // remove the peer if it exists in the mesh
                 if peers.remove(peer_id) {
                     info!(
-                        "PRUNE: Removing peer: {} from the mesh for topic: {:?}",
+                        "PRUNE: Removing peer: {} from the mesh for topic: {}",
                         peer_id.to_string(),
                         topic_hash
                     );
@@ -1247,7 +1301,15 @@ impl Gossipsub {
                         continue;
                     }
 
-                    self.px_connect(px);
+                    // NOTE: We cannot dial any peers from PX currently as we typically will not
+                    // know their multiaddr. Until SignedRecords are spec'd this
+                    // remains a stub. By default `config.prune_peers()` is set to zero and
+                    // this is skipped. If the user modifies this, this will only be able to
+                    // dial already known peers (from an external discovery mechanism for
+                    // example).
+                    if self.config.prune_peers() > 0 {
+                        self.px_connect(px);
+                    }
                 }
             }
         }
@@ -1256,24 +1318,24 @@ impl Gossipsub {
 
     fn px_connect(&mut self, mut px: Vec<PeerInfo>) {
         let n = self.config.prune_peers();
-        //ignore peerInfo with no ID
-        //TODO can we use peerInfo without any IDs if they have a signed peer record?
+        // Ignore peerInfo with no ID
+        //TODO: Once signed records are spec'd: Can we use peerInfo without any IDs if they have a signed peer record?
         px = px.into_iter().filter(|p| p.peer_id.is_some()).collect();
         if px.len() > n {
-            //only use at most prune_peers many random peers
+            // only use at most prune_peers many random peers
             let mut rng = thread_rng();
             px.partial_shuffle(&mut rng, n);
             px = px.into_iter().take(n).collect();
         }
 
         for p in px {
-            //TODO extract signed peer record if given and handle it, see
+            // TODO: Once signed records are spec'd: extract signed peer record if given and handle it, see
             // https://github.com/libp2p/specs/pull/217
             if let Some(peer_id) = p.peer_id {
-                //mark as px peer
+                // mark as px peer
                 self.px_peers.insert(peer_id.clone());
 
-                //dial peer
+                // dial peer
                 self.events.push_back(NetworkBehaviourAction::DialPeer {
                     peer_id,
                     condition: DialPeerCondition::Disconnected,
@@ -1301,15 +1363,12 @@ impl Gossipsub {
 
         // reject messages claiming to be from ourselves but not locally published
         if let Some(own_id) = self.publish_config.get_own_id() {
-            //TODO remove this "hack" as soon as lighthouse uses Anonymous instead of this fixed
-            // PeerId.
-            let lighthouse_anonymous_id = PeerId::from_bytes(vec![0, 1, 0]).expect("Valid peer id");
-            if own_id != &lighthouse_anonymous_id
+            if !self.config.allow_self_origin()
                 && own_id != propagation_source
                 && msg.source.as_ref().map_or(false, |s| s == own_id)
             {
                 debug!(
-                    "Dropping message {:?} claiming to be from self but forwarded from {:?}",
+                    "Dropping message {} claiming to be from self but forwarded from {}",
                     msg_id, propagation_source
                 );
                 if let Some((peer_score, _, _, gossip_promises)) = &mut self.peer_score {
@@ -1322,23 +1381,24 @@ impl Gossipsub {
 
         // Add the message to the duplication cache and memcache.
         if !self.duplication_cache.insert(msg_id.clone()) {
-            debug!("Message already received, ignoring. Message: {:?}", msg_id);
+            debug!("Message already received, ignoring. Message: {}", msg_id);
             if let Some((peer_score, ..)) = &mut self.peer_score {
                 peer_score.duplicated_message(propagation_source, &msg);
             }
             return;
         }
 
-        //tells score that message arrived (but is maybe not fully validated yet)
-        //Consider message as delivered for gossip promises
+        // Tells score that message arrived (but is maybe not fully validated yet)
+        // Consider message as delivered for gossip promises
         if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
             peer_score.validate_message(propagation_source, &msg);
             gossip_promises.deliver_message(&msg_id);
         }
 
+        // Add the message to our memcache
         self.mcache.put(msg.clone());
 
-        // dispatch the message to the user
+        // Dispatch the message to the user if we are subscribed to any of the topics
         if self.mesh.keys().any(|t| msg.topics.iter().any(|u| t == u)) {
             debug!("Sending received message to user");
             self.events.push_back(NetworkBehaviourAction::GenerateEvent(
@@ -1348,6 +1408,12 @@ impl Gossipsub {
                     message: msg.clone(),
                 },
             ));
+        } else {
+            debug!(
+                "Received message on a topic we are not subscribed to. Topics {:?}",
+                msg.topics.iter().collect::<Vec<_>>()
+            );
+            return;
         }
 
         // forward the message to mesh peers, if no validation is required
@@ -1387,7 +1453,7 @@ impl Gossipsub {
         let mut application_event = Vec::new();
 
         for subscription in subscriptions {
-            // get the peers from the mapping, or insert empty lists if topic doesn't exist
+            // get the peers from the mapping, or insert empty lists if the topic doesn't exist
             let peer_list = self
                 .topic_peers
                 .entry(subscription.topic_hash.clone())
@@ -1500,6 +1566,7 @@ impl Gossipsub {
         );
     }
 
+    /// Applies penalties to peers that did not respond to our IWANT requests.
     fn apply_iwant_penalties(&mut self) {
         if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
             for (peer, count) in gossip_promises.get_broken_promises() {
@@ -1518,24 +1585,24 @@ impl Gossipsub {
         let mut to_prune = HashMap::new();
         let mut no_px = HashSet::new();
 
-        //clean up expired backoffs
+        // clean up expired backoffs
         self.backoffs.heartbeat();
 
         // clean up ihave counters
         self.count_iasked.clear();
         self.count_peer_have.clear();
 
-        //apply iwant penalties
+        // apply iwant penalties
         self.apply_iwant_penalties();
 
-        //check connections to explicit peers
+        // check connections to explicit peers
         if self.heartbeat_ticks % self.config.check_explicit_peers_ticks() == 0 {
             for p in self.explicit_peers.clone() {
                 self.check_explicit_peer_connection(&p);
             }
         }
 
-        //cache scores throughout the heartbeat
+        // cache scores throughout the heartbeat
         let mut scores = HashMap::new();
         let peer_score = &self.peer_score;
         let mut score = |p: &PeerId| match peer_score {
@@ -1628,10 +1695,10 @@ impl Gossipsub {
                 shuffled.shuffle(&mut rng);
                 shuffled
                     .sort_by(|p1, p2| score(p1).partial_cmp(&score(p2)).unwrap_or(Ordering::Equal));
-                //shuffle everything except the last retain_scores many peers (the best ones)
+                // shuffle everything except the last retain_scores many peers (the best ones)
                 shuffled[..peers.len() - self.config.retain_scores()].shuffle(&mut rng);
 
-                //count total number of outbound peers
+                // count total number of outbound peers
                 let mut outbound = {
                     let outbound_peers = &self.outbound_peers;
                     shuffled
@@ -1667,10 +1734,10 @@ impl Gossipsub {
 
             // do we have enough outbound peers?
             if peers.len() >= self.config.mesh_n_low() {
-                //count number of outbound peers we have
+                // count number of outbound peers we have
                 let outbound = { peers.iter().filter(|p| outbound_peers.contains(*p)).count() };
 
-                //if we have not enough outbound peers, graft to some new outbound peers
+                // if we have not enough outbound peers, graft to some new outbound peers
                 if outbound < self.config.mesh_outbound_min() {
                     let needed = self.config.mesh_outbound_min() - outbound;
                     let peer_list = Self::get_random_peers(
@@ -1894,7 +1961,7 @@ impl Gossipsub {
                 let mut peer_message_ids = message_ids.clone();
 
                 if peer_message_ids.len() > self.config.max_ihave_length() {
-                    // we do this per peer so that we emit a different set for each peer.
+                    // We do this per peer so that we emit a different set for each peer.
                     // we have enough redundancy in the system that this will significantly increase
                     // the message coverage when we do truncate.
                     peer_message_ids.partial_shuffle(&mut rng, self.config.max_ihave_length());
@@ -1988,12 +2055,16 @@ impl Gossipsub {
 
     /// Helper function which forwards a message to mesh\[topic\] peers.
     /// Returns true if at least one peer was messaged.
-    fn forward_msg(&mut self, message: GossipsubMessage, source: Option<&PeerId>) -> bool {
+    fn forward_msg(
+        &mut self,
+        message: GossipsubMessage,
+        propagation_source: Option<&PeerId>,
+    ) -> bool {
         let msg_id = (self.config.message_id_fn())(&message);
 
-        //message is fully validated inform peer_score
-        if let Some((peer_score, _, _, gossip_promises)) = &mut self.peer_score {
-            if let Some(peer) = source {
+        // message is fully validated inform peer_score
+        if let Some((peer_score, ..)) = &mut self.peer_score {
+            if let Some(peer) = propagation_source {
                 peer_score.deliver_message(peer, &message);
             }
         }
@@ -2006,17 +2077,22 @@ impl Gossipsub {
             // mesh
             if let Some(mesh_peers) = self.mesh.get(&topic) {
                 for peer_id in mesh_peers {
-                    if Some(peer_id) != source {
+                    if Some(peer_id) != propagation_source
+                        && Some(peer_id) != message.source.as_ref()
+                    {
                         recipient_peers.insert(peer_id.clone());
                     }
                 }
             }
         }
 
-        //add explicit peers
+        // Add explicit peers
         for p in &self.explicit_peers {
             if let Some(topics) = self.peer_topics.get(p) {
-                if Some(p) != source && message.topics.iter().any(|t| topics.contains(t)) {
+                if Some(p) != propagation_source
+                    && Some(p) != message.source.as_ref()
+                    && message.topics.iter().any(|t| topics.contains(t))
+                {
                     recipient_peers.insert(p.clone());
                 }
             }
@@ -2260,8 +2336,8 @@ impl NetworkBehaviour for Gossipsub {
         Vec::new()
     }
 
-    fn inject_connected(&mut self, id: &PeerId) {
-        info!("New peer connected: {:?}", id);
+    fn inject_connected(&mut self, peer_id: &PeerId) {
+        info!("New peer connected: {}", peer_id);
         // We need to send our subscriptions to the newly-connected node.
         let mut subscriptions = vec![];
         for topic_hash in self.mesh.keys() {
@@ -2274,7 +2350,7 @@ impl NetworkBehaviour for Gossipsub {
         if !subscriptions.is_empty() {
             // send our subscriptions to the peer
             self.send_message(
-                id.clone(),
+                peer_id.clone(),
                 GossipsubRpc {
                     messages: Vec::new(),
                     subscriptions,
@@ -2283,24 +2359,28 @@ impl NetworkBehaviour for Gossipsub {
             );
         }
 
-        // For the time being assume all gossipsub peers
-        self.peer_topics.insert(id.clone(), Default::default());
+        // Insert an empty set of the topics of this peer until known.
+        self.peer_topics.insert(peer_id.clone(), Default::default());
 
-        // By default we assume a peer is only a floodsub peer
+        // By default we assume a peer is only a floodsub peer.
+        //
+        // The protocol negotiation occurs once a message is sent/received. Once this happens we
+        // update the type of peer that this is in order to determine which kind of routing should
+        // occur.
         self.peer_protocols
-            .entry(id.clone())
+            .entry(peer_id.clone())
             .or_insert(PeerKind::Floodsub);
 
         if let Some((peer_score, ..)) = &mut self.peer_score {
-            peer_score.add_peer(id.clone());
+            peer_score.add_peer(peer_id.clone());
         }
     }
 
-    fn inject_disconnected(&mut self, id: &PeerId) {
-        // remove from mesh, topic_peers, peer_topic and fanout
-        debug!("Peer disconnected: {:?}", id);
+    fn inject_disconnected(&mut self, peer_id: &PeerId) {
+        // remove from mesh, topic_peers, peer_topic and the fanout
+        debug!("Peer disconnected: {}", peer_id);
         {
-            let topics = match self.peer_topics.get(id) {
+            let topics = match self.peer_topics.get(peer_id) {
                 Some(topics) => (topics),
                 None => {
                     warn!("Disconnected node, not in connected nodes");
@@ -2313,39 +2393,44 @@ impl NetworkBehaviour for Gossipsub {
                 // check the mesh for the topic
                 if let Some(mesh_peers) = self.mesh.get_mut(&topic) {
                     // check if the peer is in the mesh and remove it
-                    mesh_peers.remove(id);
+                    mesh_peers.remove(peer_id);
                 }
 
                 // remove from topic_peers
                 if let Some(peer_list) = self.topic_peers.get_mut(&topic) {
-                    if !peer_list.remove(id) {
+                    if !peer_list.remove(peer_id) {
                         // debugging purposes
-                        warn!("Disconnected node: {:?} not in topic_peers peer list", &id);
+                        warn!(
+                            "Disconnected node: {} not in topic_peers peer list",
+                            peer_id
+                        );
                     }
                 } else {
                     warn!(
-                        "Disconnected node: {:?} with topic: {:?} not in topic_peers",
-                        &id, &topic
+                        "Disconnected node: {} with topic: {:?} not in topic_peers",
+                        &peer_id, &topic
                     );
                 }
 
                 // remove from fanout
-                self.fanout.get_mut(&topic).map(|peers| peers.remove(id));
+                self.fanout
+                    .get_mut(&topic)
+                    .map(|peers| peers.remove(peer_id));
             }
 
             //forget px and outbound status for this peer
-            self.px_peers.remove(id);
-            self.outbound_peers.remove(id);
+            self.px_peers.remove(peer_id);
+            self.outbound_peers.remove(peer_id);
         }
 
-        // remove peer from peer_topics and peer_protocols
-        let was_in = self.peer_topics.remove(id);
-        debug_assert!(was_in.is_some());
-        let was_in = self.peer_protocols.remove(id);
-        debug_assert!(was_in.is_some());
+        // Remove peer from peer_topics and peer_protocols
+        // NOTE: It is possible the peer has already been removed from all mappings if it does not
+        // support the protocol.
+        self.peer_topics.remove(peer_id);
+        self.peer_protocols.remove(peer_id);
 
         if let Some((peer_score, ..)) = &mut self.peer_score {
-            peer_score.remove_peer(id);
+            peer_score.remove_peer(peer_id);
         }
     }
 
@@ -2355,21 +2440,21 @@ impl NetworkBehaviour for Gossipsub {
         _: &ConnectionId,
         endpoint: &ConnectedPoint,
     ) {
-        //check if the peer is an outbound peer
+        // Check if the peer is an outbound peer
         if let ConnectedPoint::Dialer { .. } = endpoint {
-            //Diverging from the go implementation we only want to consider a peer as outbound peer
-            //if its first connection is outbound. To check if this connection is the first we
-            //check if the peer isn't connected yet. This only works because the
-            //`inject_connection_established` event for the first connection gets called immediately
-            //before `inject_connected` gets called.
+            // Diverging from the go implementation we only want to consider a peer as outbound peer
+            // if its first connection is outbound. To check if this connection is the first we
+            // check if the peer isn't connected yet. This only works because the
+            // `inject_connection_established` event for the first connection gets called immediately
+            // before `inject_connected` gets called.
             if !self.peer_topics.contains_key(peer) && !self.px_peers.contains(peer) {
-                //the first connection is outbound and it is not a peer from peer exchange => mark
-                //it as outbound peer
+                // The first connection is outbound and it is not a peer from peer exchange => mark
+                // it as outbound peer
                 self.outbound_peers.insert(peer.clone());
             }
         }
 
-        //add ip to peer scoring system
+        // Add the IP to the peer scoring system
         if let Some((peer_score, ..)) = &mut self.peer_score {
             if let Some(ip) = get_ip_addr(get_remote_addr(endpoint)) {
                 peer_score.add_ip(peer.clone(), ip);
@@ -2383,7 +2468,7 @@ impl NetworkBehaviour for Gossipsub {
         _: &ConnectionId,
         endpoint: &ConnectedPoint,
     ) {
-        //remove ip from peer scoring system
+        // Remove IP from peer scoring system
         if let Some((peer_score, ..)) = &mut self.peer_score {
             if let Some(ip) = get_ip_addr(get_remote_addr(endpoint)) {
                 peer_score.remove_ip(peer, &ip);
@@ -2398,7 +2483,7 @@ impl NetworkBehaviour for Gossipsub {
         endpoint_old: &ConnectedPoint,
         endpoint_new: &ConnectedPoint,
     ) {
-        //exchange ip in peer scoring system
+        // Exchange IP in peer scoring system
         if let Some((peer_score, ..)) = &mut self.peer_score {
             if let Some(ip) = get_ip_addr(get_remote_addr(endpoint_old)) {
                 peer_score.remove_ip(peer, &ip);
@@ -2417,8 +2502,9 @@ impl NetworkBehaviour for Gossipsub {
     ) {
         match handler_event {
             HandlerEvent::PeerKind(kind) => {
+                // We have identified the protocol this peer is using
                 if let PeerKind::NotSupported = kind {
-                    //we treat this peer as disconnected
+                    // We treat this peer as disconnected
                     self.inject_disconnected(&propagation_source);
                 } else if let Some(old_kind) = self.peer_protocols.get_mut(&propagation_source) {
                     // Only change the value if the old value is Floodsub (the default set in
@@ -2434,20 +2520,22 @@ impl NetworkBehaviour for Gossipsub {
             } => {
                 // Handle any invalid messages from this peer
                 if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
-                    let mut id_fn = self.config.message_id_fn();
+                    let id_fn = self.config.message_id_fn();
                     for (_message, validation_error) in invalid_messages {
+                        warn!("Message rejected. Reason: {:?}", validation_error);
                         let reason = RejectReason::ProtocolValidationError(validation_error);
                         peer_score.reject_message(&propagation_source, &_message, reason);
                         gossip_promises.reject_message(&id_fn(&_message), &reason);
                     }
                 }
 
-                // Handle the gossipsub RPC
+                // Handle the Gossipsub RPC
 
                 // Check if peer is graylisted in which case we ignore the event
                 if let (true, _) =
-                    self.score_below_threshold(&propagation_source, |ts| ts.graylist_threshold)
+                    self.score_below_threshold(&propagation_source, |pst| pst.graylist_threshold)
                 {
+                    debug!("RPC Dropped from greylisted peer {}", propagation_source);
                     return;
                 }
 
@@ -2539,7 +2627,7 @@ impl NetworkBehaviour for Gossipsub {
             });
         }
 
-        //update scores
+        // update scores
         if let Some((peer_score, _, interval, _)) = &mut self.peer_score {
             while let Poll::Ready(Some(())) = interval.poll_next_unpin(cx) {
                 peer_score.refresh_scores();

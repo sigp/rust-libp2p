@@ -132,8 +132,13 @@ pub struct GossipsubConfig {
     /// the message id.
     message_id_fn: fn(&GossipsubMessage) -> MessageId,
 
+    /// By default, gossipsub will reject messages that are sent to us that has the same message
+    /// source as we have specified locally. Enabling this, allows these messages and prevents
+    /// penalizing the peer that sent us the message. Default is false.
+    allow_self_origin: bool,
+
     /// Whether Peer eXchange is enabled; this should be enabled in bootstrappers and other well
-    /// connected/trusted nodes. The default is true.
+    /// connected/trusted nodes. The default is false.
     do_px: bool,
 
     /// Controls the number of peers to include in prune Peer eXchange.
@@ -209,7 +214,6 @@ pub struct GossipsubConfig {
     support_floodsub: bool,
 }
 
-//TODO use a macro for getters + the builder
 impl GossipsubConfig {
     //all the getters
 
@@ -331,6 +335,13 @@ impl GossipsubConfig {
         self.message_id_fn
     }
 
+    /// By default, gossipsub will reject messages that are sent to us that has the same message
+    /// source as we have specified locally. Enabling this, allows these messages and prevents
+    /// penalizing the peer that sent us the message. Default is false.
+    pub fn allow_self_origin(&self) -> bool {
+        self.allow_self_origin
+    }
+
     /// Whether Peer eXchange is enabled; this should be enabled in bootstrappers and other well
     /// connected/trusted nodes. The default is true.
     pub fn do_px(&self) -> bool {
@@ -341,7 +352,8 @@ impl GossipsubConfig {
     /// When we prune a peer that's eligible for PX (has a good score, etc), we will try to
     /// send them signed peer records for up to `prune_peers` other peers that we
     /// know of. It is recommended that this value is larger than `mesh_n_high` so that the pruned
-    /// peer can reliably form a full mesh. The default is 16.
+    /// peer can reliably form a full mesh. The default is typically 16 however until signed
+    /// records are spec'd this is disabled and set to 0.
     pub fn prune_peers(&self) -> usize {
         self.prune_peers
     }
@@ -499,8 +511,9 @@ impl GossipsubConfigBuilder {
                         .push_str(&message.sequence_number.unwrap_or_default().to_string());
                     MessageId::from(source_string)
                 },
-                do_px: true,
-                prune_peers: 16,
+                allow_self_origin: false,
+                do_px: false,
+                prune_peers: 0, // NOTE: Increasing this currently has little effect until Signed records are implemented.
                 prune_backoff: Duration::from_secs(60),
                 backoff_slack: 1,
                 flood_publish: true,
@@ -805,6 +818,7 @@ impl std::fmt::Debug for GossipsubConfig {
         let _ = builder.field("duplicate_cache_time", &self.duplicate_cache_time);
         let _ = builder.field("validate_messages", &self.validate_messages);
         let _ = builder.field("validation_mode", &self.validation_mode);
+        let _ = builder.field("allow_self_origin", &self.allow_self_origin);
         let _ = builder.field("do_px", &self.do_px);
         let _ = builder.field("prune_peers", &self.prune_peers);
         let _ = builder.field("prune_backoff", &self.prune_backoff);

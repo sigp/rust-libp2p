@@ -1,57 +1,27 @@
+// Copyright 2020 Sigma Prime Pty Ltd.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the "Software"),
+// to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the
+// Software is furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+// DEALINGS IN THE SOFTWARE.
+
 //! A collection of types using the Gossipsub system.
 use crate::TopicHash;
-use libp2p_core::{identity::Keypair, PeerId};
+use libp2p_core::PeerId;
 use std::fmt;
-
-/// Determines if published messages should be signed or not.
-///
-/// Without signing, a number of privacy preserving modes can be selected.
-///
-/// NOTE: The default validation settings are to require signatures. The [`ValidationMode`]
-/// should be updated in the [`GossipsubConfig`] to allow for unsigned messages.
-#[derive(Clone)]
-pub enum MessageAuthenticity {
-    /// Message signing is enabled. The author will be the owner of the key and the sequence number
-    /// will be a random number.
-    Signed(Keypair),
-    /// Message signing is disabled.
-    ///
-    /// The specified `PeerId` will be used as the author of all published messages. The sequence
-    /// number will be randomized.
-    Author(PeerId),
-    /// Message signing is disabled.
-    ///
-    /// A random `PeerId` will be used when publishing each message. The sequence number will be
-    /// randomized.
-    RandomAuthor,
-    /// Message signing is disabled.
-    ///
-    /// The author of the message and the sequence numbers are excluded from the message.
-    ///
-    /// NOTE: Excluding these fields may make these messages invalid by other nodes who
-    /// enforce validation of these fields. See [`ValidationMode`] in the `GossipsubConfig`
-    /// for how to customise this for rust-libp2p gossipsub.  A custom `message_id`
-    /// function will need to be set to prevent all messages from a peer being filtered
-    /// as duplicates.
-    Anonymous,
-}
-
-impl MessageAuthenticity {
-    /// Returns true if signing is enabled.
-    pub fn is_signing(&self) -> bool {
-        match self {
-            MessageAuthenticity::Signed(_) => true,
-            _ => false,
-        }
-    }
-
-    pub fn is_anonymous(&self) -> bool {
-        match self {
-            MessageAuthenticity::Anonymous => true,
-            _ => false,
-        }
-    }
-}
 
 #[derive(Debug)]
 /// Validation kinds from the application for received messages.
