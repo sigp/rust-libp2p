@@ -659,10 +659,10 @@ impl GossipsubConfigBuilder {
         self
     }
 
-    /// Whether Peer eXchange is enabled; this should be enabled in bootstrappers and other well
+    /// Enables Peer eXchange. This should be enabled in bootstrappers and other well
     /// connected/trusted nodes. The default is true.
-    pub fn do_px(&mut self, do_px: bool) -> &mut Self {
-        self.config.do_px = do_px;
+    pub fn do_px(&mut self) -> &mut Self {
+        self.config.do_px = true;
         self
     }
 

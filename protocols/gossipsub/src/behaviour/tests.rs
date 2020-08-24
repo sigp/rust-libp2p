@@ -2121,6 +2121,7 @@ mod tests {
     fn test_only_send_nonnegative_scoring_peers_in_px() {
         let config = GossipsubConfigBuilder::new()
             .prune_peers(16)
+            .do_px()
             .build()
             .unwrap();
 
@@ -2149,8 +2150,6 @@ mod tests {
         );
 
         // Check that px in prune message only contains third peer
-        dbg!(&gs.control_pool);
-        dbg!(&gs.events);
         assert_eq!(
             count_control_msgs(&gs, |peer_id, m| peer_id == &peers[1]
                 && match m {
@@ -2754,13 +2753,8 @@ mod tests {
 
         assert_eq!(gs.mesh[&topics[0]].len(), n);
 
-        dbg!(&peers);
-        dbg!(&gs.mesh[&topics[0]]);
-
         //heartbeat to prune some peers
         gs.heartbeat();
-
-        dbg!(&gs.mesh[&topics[0]]);
 
         assert_eq!(gs.mesh[&topics[0]].len(), config.mesh_n());
 
