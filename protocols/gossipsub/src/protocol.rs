@@ -46,7 +46,7 @@ pub(crate) const SIGNING_PREFIX: &'static [u8] = b"libp2p-pubsub:";
 /// Implementation of the `ConnectionUpgrade` for the Gossipsub protocol.
 #[derive(Clone)]
 pub struct ProtocolConfig {
-    /// The gossipsub protocol id to listen on.
+    /// The Gossipsub protocol id to listen on.
     protocol_ids: Vec<ProtocolId>,
     /// The maximum transmit size for a packet.
     max_transmit_size: usize,
@@ -724,6 +724,7 @@ mod tests {
     }
 
     #[test]
+    /// Test that RPC messages can be encoded and decoded successfully.
     fn encode_decode() {
         fn prop(message: Message) {
             let message = message.0;

@@ -407,6 +407,7 @@ impl ProtocolsHandler for GossipsubHandler {
             }
         }
 
+        // process outbound stream
         loop {
             match std::mem::replace(
                 &mut self.outbound_substream,

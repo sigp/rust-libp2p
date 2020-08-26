@@ -293,6 +293,11 @@ impl GossipsubRpc {
         size += 2 + (64 - (size as u64).leading_zeros() as usize) / 8;
         size
     }
+
+    /// Returns true if all the fields are empty.
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty() && self.subscriptions.is_empty() && self.control_msgs.is_empty()
+    }
 }
 
 impl fmt::Debug for GossipsubRpc {
