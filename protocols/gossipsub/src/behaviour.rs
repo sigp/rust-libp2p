@@ -355,7 +355,7 @@ pub struct Gossipsub {
     config: GossipsubConfig,
 
     /// Events that need to be yielded to the outside when polling.
-    events: VecDeque<NetworkBehaviourAction<Arc<GossipsubRpc>, GossipsubEvent>>,
+    events: VecDeque<NetworkBehaviourAction<Arc<rpc_proto::Rpc>, GossipsubEvent>>,
 
     /// Pools non-urgent control messages between heartbeats.
     control_pool: HashMap<PeerId, Vec<GossipsubControlAction>>,
@@ -481,29 +481,32 @@ impl Gossipsub {
     /// Subscribe to a topic.
     ///
     /// Returns true if the subscription worked. Returns false if we were already subscribed.
-    pub fn subscribe<H: Hasher>(&mut self, topic: Topic<H>) -> bool {
+    pub fn subscribe<H: Hasher>(&mut self, topic: Topic<H>) -> Result<bool, PublishError> {
         debug!("Subscribing to topic: {}", topic);
         let topic_hash = topic.hash();
         if self.mesh.get(&topic_hash).is_some() {
             debug!("Topic: {} is already in the mesh.", topic);
-            return false;
+            return Ok(false);
         }
 
         // send subscription request to all peers
         let peer_list = self.peer_topics.keys().cloned().collect::<Vec<_>>();
         if !peer_list.is_empty() {
-            let event = Arc::new(GossipsubRpc {
-                messages: Vec::new(),
-                subscriptions: vec![GossipsubSubscription {
-                    topic_hash: topic_hash.clone(),
-                    action: GossipsubSubscriptionAction::Subscribe,
-                }],
-                control_msgs: Vec::new(),
-            });
+            let event = Arc::new(
+                GossipsubRpc {
+                    messages: Vec::new(),
+                    subscriptions: vec![GossipsubSubscription {
+                        topic_hash: topic_hash.clone(),
+                        action: GossipsubSubscriptionAction::Subscribe,
+                    }],
+                    control_msgs: Vec::new(),
+                }
+                .into_protobuf(),
+            );
 
             for peer in peer_list {
                 debug!("Sending SUBSCRIBE to peer: {:?}", peer);
-                self.send_message(peer, event.clone());
+                self.send_message(peer, event.clone())?;
             }
         }
 
@@ -511,37 +514,40 @@ impl Gossipsub {
         // this will add new peers to the mesh for the topic
         self.join(&topic_hash);
         info!("Subscribed to topic: {}", topic);
-        true
+        Ok(true)
     }
 
     /// Unsubscribes from a topic.
     ///
     /// Returns true if we were subscribed to this topic.
-    pub fn unsubscribe<H: Hasher>(&mut self, topic: Topic<H>) -> bool {
+    pub fn unsubscribe<H: Hasher>(&mut self, topic: Topic<H>) -> Result<bool, PublishError> {
         debug!("Unsubscribing from topic: {}", topic);
         let topic_hash = &topic.hash();
 
         if self.mesh.get(topic_hash).is_none() {
             debug!("Already unsubscribed from topic: {:?}", topic_hash);
             // we are not subscribed
-            return false;
+            return Ok(false);
         }
 
         // announce to all peers
         let peer_list = self.peer_topics.keys().cloned().collect::<Vec<_>>();
         if !peer_list.is_empty() {
-            let event = Arc::new(GossipsubRpc {
-                messages: Vec::new(),
-                subscriptions: vec![GossipsubSubscription {
-                    topic_hash: topic_hash.clone(),
-                    action: GossipsubSubscriptionAction::Unsubscribe,
-                }],
-                control_msgs: Vec::new(),
-            });
+            let event = Arc::new(
+                GossipsubRpc {
+                    messages: Vec::new(),
+                    subscriptions: vec![GossipsubSubscription {
+                        topic_hash: topic_hash.clone(),
+                        action: GossipsubSubscriptionAction::Unsubscribe,
+                    }],
+                    control_msgs: Vec::new(),
+                }
+                .into_protobuf(),
+            );
 
             for peer in peer_list {
                 debug!("Sending UNSUBSCRIBE to peer: {}", peer.to_string());
-                self.send_message(peer, event.clone());
+                self.send_message(peer, event.clone())?;
             }
         }
 
@@ -550,7 +556,7 @@ impl Gossipsub {
         self.leave(&topic_hash);
 
         info!("Unsubscribed from topic: {:?}", topic_hash);
-        true
+        Ok(true)
     }
 
     /// Publishes a message to the network.
@@ -572,14 +578,17 @@ impl Gossipsub {
             self.build_message(topics.into_iter().map(|t| t.hash()).collect(), data.into())?;
         let msg_id = (self.config.message_id_fn())(&message);
 
-        let event = Arc::new(GossipsubRpc {
-            subscriptions: Vec::new(),
-            messages: vec![message],
-            control_msgs: Vec::new(),
-        });
+        let event = Arc::new(
+            GossipsubRpc {
+                subscriptions: Vec::new(),
+                messages: vec![message.clone()],
+                control_msgs: Vec::new(),
+            }
+            .into_protobuf(),
+        );
 
         // check that the size doesn't exceed the max transmission size
-        if event.size() > self.config.max_transmit_size() {
+        if event.encoded_len() > self.config.max_transmit_size() {
             // NOTE: The size limit can be reached by excessive topics or an excessive message.
             // This is an estimate that should be within 10% of the true encoded value. It is
             // possible to have a message that exceeds the RPC limit and is not caught here. A
@@ -599,16 +608,16 @@ impl Gossipsub {
         }
 
         // If the message isn't a duplicate add it to the memcache.
-        self.mcache.put(event.messages[0].clone());
+        self.mcache.put(message.clone());
 
         debug!("Publishing message: {:?}", msg_id);
 
         // If we are not flood publishing forward the message to mesh peers.
         let mesh_peers_sent =
-            !self.config.flood_publish() && self.forward_msg(event.messages[0].clone(), None);
+            !self.config.flood_publish() && self.forward_msg(message.clone(), None)?;
 
         let mut recipient_peers = HashSet::new();
-        for topic_hash in &event.messages[0].topics {
+        for topic_hash in &message.topics {
             if let Some(set) = self.topic_peers.get(&topic_hash) {
                 if self.config.flood_publish() {
                     // Forward to all peers above score and all explicit peers
@@ -687,7 +696,7 @@ impl Gossipsub {
         // Send to peers we know are subscribed to the topic.
         for peer_id in recipient_peers.iter() {
             debug!("Sending message to peer: {:?}", peer_id);
-            self.send_message(peer_id.clone(), event.clone());
+            self.send_message(peer_id.clone(), event.clone())?;
         }
 
         info!("Published message: {:?}", msg_id);
@@ -719,7 +728,7 @@ impl Gossipsub {
         message_id: &MessageId,
         propagation_source: &PeerId,
         acceptance: MessageAcceptance,
-    ) -> bool {
+    ) -> Result<bool, PublishError> {
         let reject_reason = match acceptance {
             MessageAcceptance::Accept => {
                 let message = match self.mcache.validate(message_id) {
@@ -729,11 +738,11 @@ impl Gossipsub {
                             "Message not in cache. Ignoring forwarding. Message Id: {}",
                             message_id
                         );
-                        return false;
+                        return Ok(false);
                     }
                 };
-                self.forward_msg(message, Some(propagation_source));
-                return true;
+                self.forward_msg(message, Some(propagation_source))?;
+                return Ok(true);
             }
             MessageAcceptance::Reject => RejectReason::ValidationFailed,
             MessageAcceptance::Ignore => RejectReason::ValidationIgnored,
@@ -744,10 +753,10 @@ impl Gossipsub {
             if let Some((peer_score, ..)) = &mut self.peer_score {
                 peer_score.reject_message(propagation_source, &message, reject_reason);
             }
-            true
+            Ok(true)
         } else {
             warn!("Rejected message not in cache. Message Id: {}", message_id);
-            false
+            Ok(false)
         }
     }
 
@@ -1149,14 +1158,17 @@ impl Gossipsub {
             debug!("IWANT: Sending cached messages to peer: {:?}", peer_id);
             // Send the messages to the peer
             let message_list = cached_messages.into_iter().map(|entry| entry.1).collect();
-            self.send_message(
+            if let Err(_) = self.send_message(
                 peer_id.clone(),
                 GossipsubRpc {
                     subscriptions: Vec::new(),
                     messages: message_list,
                     control_msgs: Vec::new(),
-                },
-            );
+                }
+                .into_protobuf(),
+            ) {
+                error!("Failed to send cached messages. Messages too large");
+            }
         }
         debug!("Completed IWANT handling for peer: {}", peer_id);
     }
@@ -1270,14 +1282,18 @@ impl Gossipsub {
                 "GRAFT: Not subscribed to topics -  Sending PRUNE to peer: {}",
                 peer_id
             );
-            self.send_message(
+
+            if let Err(_) = self.send_message(
                 peer_id.clone(),
                 GossipsubRpc {
                     subscriptions: Vec::new(),
                     messages: Vec::new(),
                     control_msgs: prune_messages,
-                },
-            );
+                }
+                .into_protobuf(),
+            ) {
+                error!("Failed to send graft. Message too large");
+            }
         }
         debug!("Completed GRAFT handling for peer: {}", peer_id);
     }
@@ -1475,7 +1491,9 @@ impl Gossipsub {
         // forward the message to mesh peers, if no validation is required
         if !self.config.validate_messages() {
             let message_id = (self.config.message_id_fn())(&msg);
-            self.forward_msg(msg, Some(propagation_source));
+            if let Err(_) = self.forward_msg(msg, Some(propagation_source)) {
+                error!("Failed to forward message. Too large");
+            }
             debug!("Completed message handling for message: {:?}", message_id);
         }
     }
@@ -1601,14 +1619,17 @@ impl Gossipsub {
         // If we need to send grafts to peer, do so immediately, rather than waiting for the
         // heartbeat.
         if !grafts.is_empty() {
-            self.send_message(
+            if let Err(_) = self.send_message(
                 propagation_source.clone(),
                 GossipsubRpc {
                     subscriptions: Vec::new(),
                     messages: Vec::new(),
                     control_msgs: grafts,
-                },
-            );
+                }
+                .into_protobuf(),
+            ) {
+                error!("Failed sending grafts. Message too large");
+            }
         }
 
         // Notify the application of the subscriptions
@@ -2076,14 +2097,17 @@ impl Gossipsub {
             }
 
             // send the control messages
-            self.send_message(
+            if let Err(_) = self.send_message(
                 peer.clone(),
                 GossipsubRpc {
                     subscriptions: Vec::new(),
                     messages: Vec::new(),
                     control_msgs,
-                },
-            );
+                }
+                .into_protobuf(),
+            ) {
+                error!("Failed to send control messages. Message too large");
+            }
         }
 
         // handle the remaining prunes
@@ -2098,14 +2122,17 @@ impl Gossipsub {
                     )
                 })
                 .collect();
-            self.send_message(
+            if let Err(_) = self.send_message(
                 peer.clone(),
                 GossipsubRpc {
                     subscriptions: Vec::new(),
                     messages: Vec::new(),
                     control_msgs: remaining_prunes,
-                },
-            );
+                }
+                .into_protobuf(),
+            ) {
+                error!("Failed to send prune messages. Message too large");
+            }
         }
     }
 
@@ -2115,7 +2142,7 @@ impl Gossipsub {
         &mut self,
         message: GossipsubMessage,
         propagation_source: Option<&PeerId>,
-    ) -> bool {
+    ) -> Result<bool, PublishError> {
         let msg_id = (self.config.message_id_fn())(&message);
 
         // message is fully validated inform peer_score
@@ -2156,20 +2183,23 @@ impl Gossipsub {
 
         // forward the message to peers
         if !recipient_peers.is_empty() {
-            let event = Arc::new(GossipsubRpc {
-                subscriptions: Vec::new(),
-                messages: vec![message.clone()],
-                control_msgs: Vec::new(),
-            });
+            let event = Arc::new(
+                GossipsubRpc {
+                    subscriptions: Vec::new(),
+                    messages: vec![message.clone()],
+                    control_msgs: Vec::new(),
+                }
+                .into_protobuf(),
+            );
 
             for peer in recipient_peers.iter() {
                 debug!("Sending message: {:?} to peer {:?}", msg_id, peer);
-                self.send_message(peer.clone(), event.clone());
+                self.send_message(peer.clone(), event.clone())?;
             }
             debug!("Completed forwarding message");
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -2337,102 +2367,161 @@ impl Gossipsub {
     /// Takes each control action mapping and turns it into a message
     fn flush_control_pool(&mut self) {
         for (peer, controls) in self.control_pool.drain().collect::<Vec<_>>() {
-            self.send_message(
+            if let Err(_) = self.send_message(
                 peer,
                 GossipsubRpc {
                     subscriptions: Vec::new(),
                     messages: Vec::new(),
                     control_msgs: controls,
-                },
-            );
+                }
+                .into_protobuf(),
+            ) {
+                error!("Failed to flush control pool. Message too large");
+            }
         }
     }
 
     /// Send a GossipsubRpc message to a peer. This will wrap the message in an arc if it
     /// is not already an arc.
-    fn send_message(&mut self, peer_id: PeerId, message: impl Into<Arc<GossipsubRpc>>) {
+    fn send_message(
+        &mut self,
+        peer_id: PeerId,
+        message: impl Into<Arc<rpc_proto::Rpc>>,
+    ) -> Result<(), PublishError> {
         // If the message is oversized, try and fragment it. If it cannot be fragmented, log an
         // error and drop the message (all individual messages should be small enough to fit in the
         // max_transmit_size)
 
-        match self.fragment_message(message.into()) {
-            Ok(messages) => {
-                for message in messages {
-                    self.events
-                        .push_back(NetworkBehaviourAction::NotifyHandler {
-                            peer_id: peer_id.clone(),
-                            event: message,
-                            handler: NotifyHandler::Any,
-                        })
-                }
-            }
-            Err(e) => error!("{}", e),
+        let messages = self.fragment_message(message.into())?;
+
+        for message in messages {
+            self.events
+                .push_back(NetworkBehaviourAction::NotifyHandler {
+                    peer_id: peer_id.clone(),
+                    event: message,
+                    handler: NotifyHandler::Any,
+                })
         }
+        Ok(())
     }
 
     // If a message is too large to be sent as-is, this attempts to fragment it into smaller RPC
     // messages to be sent.
     fn fragment_message(
         &self,
-        rpc: Arc<GossipsubRpc>,
-    ) -> Result<Vec<Arc<GossipsubRpc>>, &'static str> {
-        // If the estimated size is within 10% of limit, fragment the message.
-        // NOTE: We're using an estimated size to allow the actual protobuf encoding to be handled
-        // by the protocols handler.
-        if ((rpc.size() as f64 * 1.1) as usize) < self.config.max_transmit_size() {
+        rpc: Arc<rpc_proto::Rpc>,
+    ) -> Result<Vec<Arc<rpc_proto::Rpc>>, PublishError> {
+        if rpc.encoded_len() < self.config.max_transmit_size() {
             return Ok(vec![rpc]);
-        };
+        }
 
-        let new_rpc = GossipsubRpc {
+        let new_rpc = rpc_proto::Rpc {
             subscriptions: Vec::new(),
-            messages: Vec::new(),
-            control_msgs: Vec::new(),
+            publish: Vec::new(),
+            control: None,
         };
 
         let mut rpc_list = vec![new_rpc.clone()];
 
+        // Gets an RPC if the object size will fit, otherwise create a new RPC. The last element
+        // will be the RPC to add an object.
+        macro_rules! create_or_add_rpc {
+            ($object_size: ident ) => {
+                let list_index = rpc_list.len() - 1; // the list is never empty
+
+                if rpc_list[list_index].encoded_len() + $object_size + 2
+                    > self.config.max_transmit_size()
+                    && rpc_list[list_index] != new_rpc
+                {
+                    // create a new rpc and use this as the current
+                    rpc_list.push(new_rpc.clone());
+                }
+            };
+        };
+
         macro_rules! add_item {
             ($object: ident, $type: ident ) => {
-                let object_size = $object.size();
+                let object_size = $object.encoded_len();
 
-                if object_size > self.config.max_transmit_size() {
+                if object_size + 2 > self.config.max_transmit_size() {
                     // This should not be possible. All received and published messages have already
                     // been vetted to fit within the size.
-                    return Err("Cannot fragment message, too large");
+                    error!("Individual message too large to fragment");
+                    return Err(PublishError::MessageTooLarge);
                 }
 
-                // obtain the current rpc container or create a new one
-                {
-                    let list_index = rpc_list.len() - 1; // the list is never empty
-                    let current_rpc = &mut rpc_list[list_index];
-
-                    // if the estimated size is within 10% fragment further
-                    if ((current_rpc.size() + object_size) as f64 * 1.1) as usize
-                        > self.config.max_transmit_size()
-                        && !current_rpc.is_empty()
-                    {
-                        // create a new rpc and use this as the current
-                        rpc_list.push(new_rpc.clone());
-                        &mut rpc_list[list_index + 1]
-                    } else {
-                        // Return the current rpc
-                        &mut rpc_list[list_index]
-                    }
-                }
-                .$type
-                .push($object.clone());
+                create_or_add_rpc!(object_size);
+                rpc_list
+                    .last_mut()
+                    .expect("Must have at least one element")
+                    .$type
+                    .push($object.clone());
             };
         }
 
         // Add messages until the limit
-        for message in &rpc.messages {
-            add_item!(message, messages);
+        for message in &rpc.publish {
+            add_item!(message, publish);
         }
         for subscription in &rpc.subscriptions {
             add_item!(subscription, subscriptions);
         }
-        for control_msg in &rpc.control_msgs {
-            add_item!(control_msg, control_msgs);
+
+        // handle the control messages. If all are within the max_transmit_size, send them without
+        // fragmenting, otherwise, fragment the control messages
+        let empty_control = rpc_proto::ControlMessage::default();
+        if let Some(control) = rpc.control.as_ref() {
+            if control.encoded_len() + 2 > self.config.max_transmit_size() {
+                // fragment the RPC
+                for ihave in &control.ihave {
+                    let len = ihave.encoded_len();
+                    create_or_add_rpc!(len);
+                    rpc_list
+                        .last_mut()
+                        .expect("Always an element")
+                        .control
+                        .get_or_insert_with(|| empty_control.clone())
+                        .ihave
+                        .push(ihave.clone());
+                }
+                for iwant in &control.iwant {
+                    let len = iwant.encoded_len();
+                    create_or_add_rpc!(len);
+                    rpc_list
+                        .last_mut()
+                        .expect("Always an element")
+                        .control
+                        .get_or_insert_with(|| empty_control.clone())
+                        .iwant
+                        .push(iwant.clone());
+                }
+                for graft in &control.graft {
+                    let len = graft.encoded_len();
+                    create_or_add_rpc!(len);
+                    rpc_list
+                        .last_mut()
+                        .expect("Always an element")
+                        .control
+                        .get_or_insert_with(|| empty_control.clone())
+                        .graft
+                        .push(graft.clone());
+                }
+                for prune in &control.prune {
+                    let len = prune.encoded_len();
+                    create_or_add_rpc!(len);
+                    rpc_list
+                        .last_mut()
+                        .expect("Always an element")
+                        .control
+                        .get_or_insert_with(|| empty_control.clone())
+                        .prune
+                        .push(prune.clone());
+                }
+            } else {
+                let len = control.encoded_len();
+                create_or_add_rpc!(len);
+                rpc_list.last_mut().expect("Always an element").control = Some(control.clone());
+            }
         }
 
         return Ok(rpc_list.into_iter().map(|v| Arc::new(v)).collect());
@@ -2490,14 +2579,17 @@ impl NetworkBehaviour for Gossipsub {
 
         if !subscriptions.is_empty() {
             // send our subscriptions to the peer
-            self.send_message(
+            if let Err(_) = self.send_message(
                 peer_id.clone(),
                 GossipsubRpc {
                     messages: Vec::new(),
                     subscriptions,
                     control_msgs: Vec::new(),
-                },
-            );
+                }
+                .into_protobuf(),
+            ) {
+                error!("Failed to send subscriptions, message too large");
+            }
         }
 
         // Insert an empty set of the topics of this peer until known.
@@ -2925,20 +3017,24 @@ mod local_test {
         // Message under the limit should be fine.
         let mut rpc = empty_rpc();
         rpc.messages.push(test_message());
+
+        let mut rpc_proto = rpc.clone().into_protobuf();
+        let fragmented_messages = gs.fragment_message(Arc::new(rpc_proto.clone())).unwrap();
         assert_eq!(
-            gs.fragment_message(Arc::new(rpc.clone())),
-            Ok(vec![Arc::new(rpc.clone())]),
+            fragmented_messages,
+            vec![Arc::new(rpc_proto.clone())],
             "Messages under the limit shouldn't be fragmented"
         );
 
         // Messages over the limit should be split
 
-        while rpc.size() < max_transmit_size {
+        while rpc_proto.encoded_len() < max_transmit_size {
             rpc.messages.push(test_message());
+            rpc_proto = rpc.clone().into_protobuf();
         }
 
         let fragmented_messages = gs
-            .fragment_message(Arc::new(rpc))
+            .fragment_message(Arc::new(rpc_proto))
             .expect("Should be able to fragment the messages");
 
         assert!(
@@ -2949,7 +3045,7 @@ mod local_test {
         // all fragmented messages should be under the limit
         for message in fragmented_messages {
             assert!(
-                message.size() < max_transmit_size,
+                message.encoded_len() < max_transmit_size,
                 "all messages should be less than the transmission size"
             );
         }
@@ -2966,11 +3062,12 @@ mod local_test {
                 .unwrap();
             let gs = Gossipsub::new(MessageAuthenticity::RandomAuthor, config).unwrap();
 
+            let rpc_proto = rpc.into_protobuf();
             let fragmented_messages = gs
-                .fragment_message(Arc::new(rpc.clone()))
+                .fragment_message(Arc::new(rpc_proto.clone()))
                 .expect("Messages must be valid");
 
-            if ((rpc.size() as f64 * 1.1) as usize) <= max_transmit_size {
+            if rpc_proto.encoded_len() <= max_transmit_size {
                 assert_eq!(
                     fragmented_messages.len(),
                     1,
@@ -2986,7 +3083,7 @@ mod local_test {
             // all fragmented messages should be under the limit
             for message in fragmented_messages {
                 assert!(
-                    message.size() < max_transmit_size,
+                    message.encoded_len() < max_transmit_size,
                     "all messages should be less than the transmission size"
                 );
             }
