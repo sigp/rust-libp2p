@@ -2622,6 +2622,10 @@ impl NetworkBehaviour for Gossipsub {
             HandlerEvent::PeerKind(kind) => {
                 // We have identified the protocol this peer is using
                 if let PeerKind::NotSupported = kind {
+                    debug!(
+                        "Peer does not support gossipsub protocols. {}",
+                        propagation_source
+                    );
                     // We treat this peer as disconnected
                     self.inject_disconnected(&propagation_source);
                 } else if let Some(old_kind) = self.peer_protocols.get_mut(&propagation_source) {
