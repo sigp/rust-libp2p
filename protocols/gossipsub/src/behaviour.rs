@@ -2495,7 +2495,7 @@ impl NetworkBehaviour for Gossipsub {
                 Some(topics) => (topics),
                 None => {
                     if !self.blacklisted_peers.contains(peer_id) {
-                        warn!("Disconnected node, not in connected nodes");
+                        debug!("Disconnected node, not in connected nodes");
                     }
                     return;
                 }
