@@ -18,10 +18,10 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-
-
-use crate::protocol::{GossipsubMessage, MessageId};
 use crate::topic::TopicHash;
+use crate::types::{GossipsubMessage, MessageId};
+use libp2p_core::PeerId;
+use log::debug;
 use std::{collections::HashMap, fmt};
 
 /// CacheEntry stored in the history.
@@ -35,6 +35,8 @@ pub struct CacheEntry {
 #[derive(Clone)]
 pub struct MessageCache {
     msgs: HashMap<MessageId, GossipsubMessage>,
+    /// For every message and peer the number of times this peer asked for the message
+    iwant_counts: HashMap<MessageId, HashMap<PeerId, u32>>,
     history: Vec<Vec<CacheEntry>>,
     gossip: usize,
     msg_id: fn(&GossipsubMessage) -> MessageId,
@@ -60,6 +62,7 @@ impl MessageCache {
         MessageCache {
             gossip,
             msgs: HashMap::default(),
+            iwant_counts: HashMap::default(),
             history: vec![Vec::new(); history_capacity],
             msg_id,
         }
@@ -86,6 +89,27 @@ impl MessageCache {
     /// Get a message with `message_id`
     pub fn get(&self, message_id: &MessageId) -> Option<&GossipsubMessage> {
         self.msgs.get(message_id)
+    }
+
+    ///increases the iwant count for the given message by one and returns the message together
+    /// with the iwant if the message exists.
+    pub fn get_with_iwant_counts(
+        &mut self,
+        message_id: &MessageId,
+        peer: &PeerId,
+    ) -> Option<(&GossipsubMessage, u32)> {
+        let iwant_counts = &mut self.iwant_counts;
+        self.msgs.get(message_id).map(|message| {
+            (message, {
+                let count = iwant_counts
+                    .entry(message_id.clone())
+                    .or_default()
+                    .entry(peer.clone())
+                    .or_default();
+                *count += 1;
+                *count
+            })
+        })
     }
 
     /// Gets and validates a message with `message_id`.
@@ -129,18 +153,38 @@ impl MessageCache {
     /// last entry
     pub fn shift(&mut self) {
         for entry in self.history.pop().expect("history is always > 1") {
-            self.msgs.remove(&entry.mid);
+            if let Some(msg) = self.msgs.remove(&entry.mid) {
+                if !msg.validated {
+                    // If GossipsubConfig::validate_messages is true, the implementing
+                    // application has to ensure that Gossipsub::validate_message gets called for
+                    // each received message within the cache timeout time."
+                    debug!("The message with id {} got removed from the cache without being validated.",
+                    &entry.mid
+                    );
+                }
+            }
+
+            self.iwant_counts.remove(&entry.mid);
         }
 
         // Insert an empty vec in position 0
         self.history.insert(0, Vec::new());
+    }
+
+    /// Removes a message from the cache and returns it if existent
+    pub fn remove(&mut self, message_id: &MessageId) -> Option<GossipsubMessage> {
+        //We only remove the message from msgs and iwant_count and keep the message_id in the
+        // history vector. Zhe id in the history vector will simply be ignored on popping.
+
+        self.iwant_counts.remove(message_id);
+        self.msgs.remove(message_id)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Topic, TopicHash};
+    use crate::{IdentTopic as Topic, TopicHash};
     use libp2p_core::PeerId;
 
     fn gen_testm(x: u64, topics: Vec<TopicHash>) -> GossipsubMessage {
@@ -186,8 +230,8 @@ mod tests {
     fn test_put_get_one() {
         let mut mc = new_cache(10, 15);
 
-        let topic1_hash = Topic::new("topic1".into()).no_hash().clone();
-        let topic2_hash = Topic::new("topic2".into()).no_hash().clone();
+        let topic1_hash = Topic::new("topic1").hash().clone();
+        let topic2_hash = Topic::new("topic2").hash().clone();
 
         let m = gen_testm(10, vec![topic1_hash, topic2_hash]);
 
@@ -212,8 +256,8 @@ mod tests {
     fn test_get_wrong() {
         let mut mc = new_cache(10, 15);
 
-        let topic1_hash = Topic::new("topic1".into()).no_hash().clone();
-        let topic2_hash = Topic::new("topic2".into()).no_hash().clone();
+        let topic1_hash = Topic::new("topic1").hash().clone();
+        let topic2_hash = Topic::new("topic2").hash().clone();
 
         let m = gen_testm(10, vec![topic1_hash, topic2_hash]);
 
@@ -259,8 +303,8 @@ mod tests {
     fn test_shift() {
         let mut mc = new_cache(1, 5);
 
-        let topic1_hash = Topic::new("topic1".into()).no_hash().clone();
-        let topic2_hash = Topic::new("topic2".into()).no_hash().clone();
+        let topic1_hash = Topic::new("topic1").hash().clone();
+        let topic2_hash = Topic::new("topic2").hash().clone();
 
         // Build the message
         for i in 0..10 {
@@ -283,8 +327,8 @@ mod tests {
     fn test_empty_shift() {
         let mut mc = new_cache(1, 5);
 
-        let topic1_hash = Topic::new("topic1".into()).no_hash().clone();
-        let topic2_hash = Topic::new("topic2".into()).no_hash().clone();
+        let topic1_hash = Topic::new("topic1").hash().clone();
+        let topic2_hash = Topic::new("topic2").hash().clone();
         // Build the message
         for i in 0..10 {
             let m = gen_testm(i, vec![topic1_hash.clone(), topic2_hash.clone()]);
@@ -309,8 +353,8 @@ mod tests {
     fn test_remove_last_from_shift() {
         let mut mc = new_cache(4, 5);
 
-        let topic1_hash = Topic::new("topic1".into()).no_hash().clone();
-        let topic2_hash = Topic::new("topic2".into()).no_hash().clone();
+        let topic1_hash = Topic::new("topic1").hash().clone();
+        let topic2_hash = Topic::new("topic2").hash().clone();
         // Build the message
         for i in 0..10 {
             let m = gen_testm(i, vec![topic1_hash.clone(), topic2_hash.clone()]);
