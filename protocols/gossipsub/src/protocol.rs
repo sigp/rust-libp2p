@@ -376,7 +376,10 @@ impl Decoder for GossipsubCodec {
             let sequence_number = if verify_sequence_no {
                 if let Some(seq_no) = message.seqno {
                     if seq_no.len() != 8 {
-                        debug!("Invalid sequence number length for received message");
+                        debug!(
+                            "Invalid sequence number length for received message. Size: {}",
+                            seq_no.len()
+                        );
                         let message = GossipsubMessage {
                             source: None, // don't bother inform the application
                             data: message.data.unwrap_or_default(),
