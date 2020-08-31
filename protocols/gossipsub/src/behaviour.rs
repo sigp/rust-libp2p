@@ -336,8 +336,8 @@ impl Gossipsub {
         self.mesh.keys()
     }
 
-    /// Lists peers for a certain topic hash.
-    pub fn peers(&self, topic_hash: &TopicHash) -> impl Iterator<Item = &PeerId> {
+    /// Lists all mesh peers for a certain topic hash.
+    pub fn mesh_peers(&self, topic_hash: &TopicHash) -> impl Iterator<Item = &PeerId> {
         self.mesh
             .get(topic_hash)
             .into_iter()
@@ -345,13 +345,25 @@ impl Gossipsub {
             .flatten()
     }
 
-    /// Lists all peers for any topic.
-    pub fn all_peers(&self) -> impl Iterator<Item = &PeerId> {
+    /// Lists all mesh peers for all topics.
+    pub fn all_mesh_peers(&self) -> impl Iterator<Item = &PeerId> {
         let mut res = BTreeSet::new();
         for peers in self.mesh.values() {
             res.extend(peers);
         }
         res.into_iter()
+    }
+
+    /// Lists all known peers and their associated subscribed topics.
+    pub fn all_peers(&self) -> impl Iterator<Item = (&PeerId, Vec<&TopicHash>)> {
+        self.peer_topics
+            .iter()
+            .map(|(peer_id, topic_set)| (peer_id, topic_set.iter().collect()))
+    }
+
+    /// Lists all known peers and their associated protocol.
+    pub fn peer_protocol(&self) -> impl Iterator<Item = (&PeerId, &PeerKind)> {
+        self.peer_protocols.iter()
     }
 
     /// Subscribe to a topic.
