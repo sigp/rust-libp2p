@@ -366,6 +366,13 @@ impl Gossipsub {
         self.peer_protocols.iter()
     }
 
+    /// Returns the gossipsub score for a given peer, if one exists.
+    pub fn peer_score(&self, peer_id: &PeerId) -> Option<f64> {
+        self.peer_score
+            .as_ref()
+            .map(|(score, ..)| score.score(peer_id))
+    }
+
     /// Subscribe to a topic.
     ///
     /// Returns true if the subscription worked. Returns false if we were already subscribed.
