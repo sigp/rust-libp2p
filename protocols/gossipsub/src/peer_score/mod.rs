@@ -322,8 +322,11 @@ impl PeerScore {
         }
 
         // P7: behavioural pattern penalty
-        let p7 = peer_stats.behaviour_penalty * peer_stats.behaviour_penalty;
-        score += p7 * self.params.behaviour_penalty_weight;
+        if peer_stats.behaviour_penalty > self.params.behaviour_penalty_threshold {
+            let excess = peer_stats.behaviour_penalty - self.params.behaviour_penalty_threshold;
+            let p7 = excess * excess;
+            score += p7 * self.params.behaviour_penalty_weight;
+        }
         score
     }
 
