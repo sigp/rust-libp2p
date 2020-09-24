@@ -459,7 +459,7 @@ impl Gossipsub {
         &mut self,
         topic: Topic<H>,
         data: impl Into<Vec<u8>>,
-    ) -> Result<(), PublishError> {
+    ) -> Result<MessageId, PublishError> {
         self.publish_many(iter::once(topic), data)
     }
 
@@ -468,7 +468,7 @@ impl Gossipsub {
         &mut self,
         topics: impl IntoIterator<Item = Topic<H>>,
         data: impl Into<Vec<u8>>,
-    ) -> Result<(), PublishError> {
+    ) -> Result<MessageId, PublishError> {
         let message =
             self.build_message(topics.into_iter().map(|t| t.hash()).collect(), data.into())?;
         let msg_id = (self.config.message_id_fn())(&message);
@@ -594,8 +594,8 @@ impl Gossipsub {
             self.send_message(peer_id.clone(), event.clone())?;
         }
 
-        info!("Published message: {:?}", msg_id);
-        Ok(())
+        info!("Published message: {:?}", &msg_id);
+        Ok(msg_id)
     }
 
     /// This function should be called when `config.validate_messages()` is `true` after the
