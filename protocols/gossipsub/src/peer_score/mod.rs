@@ -488,6 +488,7 @@ impl PeerScore {
                 }
 
                 topic_stats.mesh_status = MeshStatus::InActive;
+                topic_stats.mesh_message_deliveries_active = false;
             }
 
             peer_stats.status = ConnectionStatus::Disconnected {
@@ -528,6 +529,7 @@ impl PeerScore {
                     topic_stats.mesh_failure_penalty += deficit * deficit;
                 }
                 topic_stats.mesh_message_deliveries_active = false;
+                topic_stats.mesh_status = MeshStatus::InActive;
             }
         }
     }
