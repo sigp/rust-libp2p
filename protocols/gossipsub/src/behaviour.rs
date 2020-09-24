@@ -950,7 +950,7 @@ impl Gossipsub {
             }
 
             for id in ids {
-                if self.mcache.get(&id).is_none() {
+                if !self.duplication_cache.contains(&id) {
                     // have not seen this message, request it
                     iwant_ids.insert(id);
                 }
