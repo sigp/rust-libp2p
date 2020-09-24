@@ -2681,6 +2681,22 @@ impl NetworkBehaviour for Gossipsub {
                 rpc,
                 invalid_messages,
             } => {
+                // Handle the gossipsub RPC
+
+                // Handle subscriptions
+                // Update connected peers topics
+                if !rpc.subscriptions.is_empty() {
+                    self.handle_received_subscriptions(&rpc.subscriptions, &propagation_source);
+                }
+
+                // Check if peer is graylisted in which case we ignore the event
+                if let (true, _) =
+                self.score_below_threshold(&propagation_source, |pst| pst.graylist_threshold)
+                {
+                    debug!("RPC Dropped from greylisted peer {}", propagation_source);
+                    return;
+                }
+
                 // Handle any invalid messages from this peer
                 if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
                     let id_fn = self.config.message_id_fn();
@@ -2699,22 +2715,6 @@ impl NetworkBehaviour for Gossipsub {
                             message.source
                         );
                     }
-                }
-
-                // Handle the Gossipsub RPC
-
-                // Check if peer is graylisted in which case we ignore the event
-                if let (true, _) =
-                    self.score_below_threshold(&propagation_source, |pst| pst.graylist_threshold)
-                {
-                    debug!("RPC Dropped from greylisted peer {}", propagation_source);
-                    return;
-                }
-
-                // Handle subscriptions
-                // Update connected peers topics
-                if !rpc.subscriptions.is_empty() {
-                    self.handle_received_subscriptions(&rpc.subscriptions, &propagation_source);
                 }
 
                 // Handle messages
