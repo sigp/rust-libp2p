@@ -688,17 +688,33 @@ impl Gossipsub {
 
     /// Activates the peer scoring system with the given parameters. This will reset all scores
     /// if there was already another peer scoring system activated. Returns an error if the
-    /// params are not valid.
+    /// params are not valid or if they got already set.
     pub fn with_peer_score(
         &mut self,
         params: PeerScoreParams,
         threshold: PeerScoreThresholds,
     ) -> Result<(), String> {
+        self.with_peer_score_and_message_delivery_time_callback(params, threshold, None)
+    }
+
+    /// Activates the peer scoring system with the given parameters and a message delivery time
+    /// callback. Returns an error if the parameters got already set.
+    pub fn with_peer_score_and_message_delivery_time_callback(
+        &mut self,
+        params: PeerScoreParams,
+        threshold: PeerScoreThresholds,
+        callback: Option<fn(&PeerId, &TopicHash, f64)>,
+    ) -> Result<(), String> {
         params.validate()?;
         threshold.validate()?;
 
+        if self.peer_score.is_some() {
+            return Err("Peer score set twice".into());
+        }
+
         let interval = Interval::new(params.decay_interval);
-        let peer_score = PeerScore::new(params, self.config.message_id_fn());
+        let peer_score = PeerScore::new_with_message_delivery_time_callback(params, self.config
+            .message_id_fn(), callback);
         self.peer_score = Some((peer_score, threshold, interval, GossipPromises::default()));
         Ok(())
     }
