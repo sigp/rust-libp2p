@@ -696,7 +696,37 @@ impl PeerScore {
 
     /// Sets scoring parameters for a topic.
     pub fn set_topic_params(&mut self, topic_hash: TopicHash, params: TopicScoreParams) {
-        self.params.topics.insert(topic_hash, params);
+        use hash_map::Entry::*;
+        match self.params.topics.entry(topic_hash.clone()) {
+            Occupied(mut entry) => {
+                let first_message_deliveries_cap = params.first_message_deliveries_cap;
+                let mesh_message_delivieries_cap = params.mesh_message_deliveries_cap;
+                let old_params = entry.insert(params);
+
+                if old_params.first_message_deliveries_cap > first_message_deliveries_cap {
+                    for (_, stats) in &mut self.peer_stats {
+                        if let Some(tstats) = stats.topics.get_mut(&topic_hash) {
+                            if tstats.first_message_deliveries > first_message_deliveries_cap {
+                                tstats.first_message_deliveries = first_message_deliveries_cap;
+                            }
+                        }
+                    }
+                }
+
+                if old_params.mesh_message_deliveries_cap > mesh_message_delivieries_cap {
+                    for (_, stats) in &mut self.peer_stats {
+                        if let Some(tstats) = stats.topics.get_mut(&topic_hash) {
+                            if tstats.mesh_message_deliveries > mesh_message_delivieries_cap {
+                                tstats.mesh_message_deliveries = mesh_message_delivieries_cap;
+                            }
+                        }
+                    }
+                }
+            },
+            Vacant(entry) => {
+                entry.insert(params);
+            }
+        }
     }
 
     /// Increments the "invalid message deliveries" counter for all scored topics the message
