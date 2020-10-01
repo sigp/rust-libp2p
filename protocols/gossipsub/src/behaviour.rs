@@ -278,6 +278,9 @@ pub struct Gossipsub {
 
     /// Counts the number of `IWANT` that we sent the each peer since the last heartbeat.
     count_iasked: HashMap<PeerId, usize>,
+
+    /// short term cache for published messsage ids
+    published_message_ids: DuplicateCache<MessageId>,
 }
 
 impl Gossipsub {
@@ -321,13 +324,14 @@ impl Gossipsub {
                 config.heartbeat_interval(),
             ),
             heartbeat_ticks: 0,
-            config,
             px_peers: HashSet::new(),
             outbound_peers: HashSet::new(),
             peer_score: None,
             count_peer_have: HashMap::new(),
             count_iasked: HashMap::new(),
             peer_protocols: HashMap::new(),
+            published_message_ids: DuplicateCache::new(config.published_message_ids_cache_time()),
+            config,
         })
     }
 
@@ -506,6 +510,12 @@ impl Gossipsub {
         self.mcache.put(message.clone());
 
         debug!("Publishing message: {:?}", msg_id);
+
+        // If the message is anonymous or has a random author add it to the published message ids
+        // cache.
+        if let PublishConfig::RandomAuthor | PublishConfig::Anonymous = self.publish_config {
+            self.published_message_ids.insert(msg_id.clone());
+        }
 
         // If we are not flood publishing forward the message to mesh peers.
         let mesh_peers_sent =
@@ -1363,21 +1373,24 @@ impl Gossipsub {
         }
 
         // reject messages claiming to be from ourselves but not locally published
-        if let Some(own_id) = self.publish_config.get_own_id() {
-            if !self.config.allow_self_origin()
+        let self_published = if let Some(own_id) = self.publish_config.get_own_id() {
+            !self.config.allow_self_origin()
                 && own_id != propagation_source
                 && msg.source.as_ref().map_or(false, |s| s == own_id)
-            {
-                debug!(
-                    "Dropping message {} claiming to be from self but forwarded from {}",
-                    msg_id, propagation_source
-                );
-                if let Some((peer_score, _, _, gossip_promises)) = &mut self.peer_score {
-                    peer_score.reject_message(propagation_source, &msg, RejectReason::SelfOrigin);
-                    gossip_promises.reject_message(&msg_id, &RejectReason::SelfOrigin);
-                }
-                return;
+        } else {
+            self.published_message_ids.contains(&msg_id)
+        };
+
+        if self_published {
+            debug!(
+                "Dropping message {} claiming to be from self but forwarded from {}",
+                msg_id, propagation_source
+            );
+            if let Some((peer_score, _, _, gossip_promises)) = &mut self.peer_score {
+                peer_score.reject_message(propagation_source, &msg, RejectReason::SelfOrigin);
+                gossip_promises.reject_message(&msg_id, &RejectReason::SelfOrigin);
             }
+            return;
         }
 
         // Add the message to the duplication cache and memcache.
