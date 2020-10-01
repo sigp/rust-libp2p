@@ -219,7 +219,7 @@ pub struct GossipsubConfig {
     support_floodsub: bool,
 
     /// Published message ids time cache duration. The default is 10 seconds.
-    published_message_ids_cache_time: Duration
+    published_message_ids_cache_time: Duration,
 }
 
 impl GossipsubConfig {
@@ -792,8 +792,10 @@ impl GossipsubConfigBuilder {
         self
     }
 
-    pub fn published_message_ids_cache_time(&mut self, published_message_ids_cache_time: Duration)
-        -> &mut Self {
+    pub fn published_message_ids_cache_time(
+        &mut self,
+        published_message_ids_cache_time: Duration,
+    ) -> &mut Self {
         self.config.published_message_ids_cache_time = published_message_ids_cache_time;
         self
     }
@@ -863,8 +865,10 @@ impl std::fmt::Debug for GossipsubConfig {
         let _ = builder.field("max_ihave_messages", &self.max_ihave_messages);
         let _ = builder.field("iwant_followup_time", &self.iwant_followup_time);
         let _ = builder.field("support_floodsub", &self.support_floodsub);
-        let _ = builder.field("published_message_ids_cache_time",
-                              &self.published_message_ids_cache_time);
+        let _ = builder.field(
+            "published_message_ids_cache_time",
+            &self.published_message_ids_cache_time,
+        );
         builder.finish()
     }
 }
