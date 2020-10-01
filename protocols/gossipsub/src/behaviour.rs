@@ -2662,6 +2662,9 @@ impl NetworkBehaviour for Gossipsub {
         if let Some((peer_score, ..)) = &mut self.peer_score {
             if let Some(ip) = get_ip_addr(get_remote_addr(endpoint)) {
                 peer_score.add_ip(&peer_id, ip);
+            } else {
+                trace!("Couldn't extract ip from endpoint of peer {} with endpoint {:?}", peer_id,
+                       endpoint)
             }
         }
     }
@@ -2676,6 +2679,9 @@ impl NetworkBehaviour for Gossipsub {
         if let Some((peer_score, ..)) = &mut self.peer_score {
             if let Some(ip) = get_ip_addr(get_remote_addr(endpoint)) {
                 peer_score.remove_ip(peer, &ip);
+            } else {
+                trace!("Couldn't extract ip from endpoint of peer {} with endpoint {:?}", peer,
+                       endpoint)
             }
         }
     }
@@ -2691,9 +2697,15 @@ impl NetworkBehaviour for Gossipsub {
         if let Some((peer_score, ..)) = &mut self.peer_score {
             if let Some(ip) = get_ip_addr(get_remote_addr(endpoint_old)) {
                 peer_score.remove_ip(peer, &ip);
+            } else {
+                trace!("Couldn't extract ip from endpoint of peer {} with endpoint {:?}", peer,
+                       endpoint_old)
             }
             if let Some(ip) = get_ip_addr(get_remote_addr(endpoint_new)) {
                 peer_score.add_ip(&peer, ip);
+            } else {
+                trace!("Couldn't extract ip from endpoint of peer {} with endpoint {:?}", peer,
+                       endpoint_new)
             }
         }
     }
