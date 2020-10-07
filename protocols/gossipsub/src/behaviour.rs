@@ -778,11 +778,13 @@ impl Gossipsub {
                 topic_hash
             );
 
-            // remove explicit peers and peers with negative scores
+            // remove explicit peers, peers with negative scores, and backoffed peers
             peers = peers
                 .into_iter()
                 .filter(|p| {
-                    !self.explicit_peers.contains(p) && !self.score_below_threshold(p, |_| 0.0).0
+                    !self.explicit_peers.contains(p)
+                        && !self.score_below_threshold(p, |_| 0.0).0
+                        && !self.backoffs.is_backoff_with_slack(topic_hash, p)
                 })
                 .collect();
 
@@ -814,6 +816,7 @@ impl Gossipsub {
                     !added_peers.contains(peer)
                         && !self.explicit_peers.contains(peer)
                         && !self.score_below_threshold(peer, |_| 0.0).0
+                        && !self.backoffs.is_backoff_with_slack(topic_hash, peer)
                 },
             );
             added_peers.extend(new_peers.clone());
@@ -1242,6 +1245,41 @@ impl Gossipsub {
         debug!("Completed GRAFT handling for peer: {}", peer_id);
     }
 
+    fn remove_peer_from_mesh(
+        &mut self,
+        peer_id: &PeerId,
+        topic_hash: &TopicHash,
+        backoff: Option<u64>,
+        always_update_backoff: bool,
+    ) {
+        let mut update_backoff = always_update_backoff;
+        if let Some(peers) = self.mesh.get_mut(&topic_hash) {
+            // remove the peer if it exists in the mesh
+            if peers.remove(peer_id) {
+                info!(
+                    "PRUNE: Removing peer: {} from the mesh for topic: {}",
+                    peer_id.to_string(),
+                    topic_hash
+                );
+
+                if let Some((peer_score, ..)) = &mut self.peer_score {
+                    peer_score.prune(peer_id, topic_hash.clone());
+                }
+
+                update_backoff = true;
+            }
+        }
+        if update_backoff {
+            let time = if let Some(backoff) = backoff {
+                Duration::from_secs(backoff)
+            } else {
+                self.config.prune_backoff()
+            };
+            // is there a backoff specified by the peer? if so obey it.
+            self.backoffs.update_backoff(&topic_hash, peer_id, time);
+        }
+    }
+
     /// Handles PRUNE control messages. Removes peer from the mesh.
     fn handle_prune(
         &mut self,
@@ -1252,31 +1290,9 @@ impl Gossipsub {
         let (below_threshold, score) =
             self.score_below_threshold(peer_id, |pst| pst.accept_px_threshold);
         for (topic_hash, px, backoff) in prune_data {
-            if let Some(peers) = self.mesh.get_mut(&topic_hash) {
-                // remove the peer if it exists in the mesh
-                if peers.remove(peer_id) {
-                    info!(
-                        "PRUNE: Removing peer: {} from the mesh for topic: {}",
-                        peer_id.to_string(),
-                        topic_hash
-                    );
-                }
+            self.remove_peer_from_mesh(peer_id, &topic_hash, backoff, true);
 
-                if let Some((peer_score, ..)) = &mut self.peer_score {
-                    peer_score.prune(peer_id, topic_hash.clone());
-                }
-
-                // is there a backoff specified by the peer? if so obey it.
-                self.backoffs.update_backoff(
-                    &topic_hash,
-                    peer_id,
-                    if let Some(backoff) = backoff {
-                        Duration::from_secs(backoff)
-                    } else {
-                        self.config.prune_backoff()
-                    },
-                );
-
+            if self.mesh.contains_key(&topic_hash) {
                 //connect to px peers
                 if !px.is_empty() {
                     // we ignore PX from peers with insufficient score
@@ -1464,6 +1480,9 @@ impl Gossipsub {
             subscriptions,
             propagation_source.to_string()
         );
+
+        let mut unsubscribed_peers = Vec::new();
+
         let subscribed_topics = match self.peer_topics.get_mut(propagation_source) {
             Some(topics) => topics,
             None => {
@@ -1514,6 +1533,9 @@ impl Gossipsub {
                             |_| 0.0,
                         )
                         .0
+                        && !self
+                            .backoffs
+                            .is_backoff_with_slack(&subscription.topic_hash, propagation_source)
                     {
                         if let Some(peers) = self.mesh.get_mut(&subscription.topic_hash) {
                             if peers.len() < self.config.mesh_n_low() {
@@ -1560,12 +1582,8 @@ impl Gossipsub {
                     }
                     // remove topic from the peer_topics mapping
                     subscribed_topics.remove(&subscription.topic_hash);
-                    // remove the peer from the mesh if it exists
-                    if let Some(peers) = self.mesh.get_mut(&subscription.topic_hash) {
-                        peers.remove(propagation_source);
-                        // the peer requested the unsubscription so we don't need to send a PRUNE.
-                    }
-
+                    unsubscribed_peers
+                        .push((propagation_source.clone(), subscription.topic_hash.clone()));
                     // generate an unsubscribe event to be polled
                     application_event.push(NetworkBehaviourAction::GenerateEvent(
                         GossipsubEvent::Unsubscribed {
@@ -1575,6 +1593,11 @@ impl Gossipsub {
                     ));
                 }
             }
+        }
+
+        // remove unsubscribed peers from the mesh if it exists
+        for (peer_id, topic_hash) in unsubscribed_peers {
+            self.remove_peer_from_mesh(&peer_id, &topic_hash, None, false);
         }
 
         // If we need to send grafts to peer, do so immediately, rather than waiting for the
