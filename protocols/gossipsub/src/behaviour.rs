@@ -937,7 +937,15 @@ impl Gossipsub {
         peer_id: &PeerId,
         threshold: impl Fn(&PeerScoreThresholds) -> f64,
     ) -> (bool, f64) {
-        if let Some((peer_score, thresholds, ..)) = &self.peer_score {
+        Self::score_below_threshold_from_scores(&self.peer_score, peer_id, threshold)
+    }
+
+    fn score_below_threshold_from_scores(
+        peer_score: &Option<(PeerScore, PeerScoreThresholds, Interval, GossipPromises)>,
+        peer_id: &PeerId,
+        threshold: impl Fn(&PeerScoreThresholds) -> f64,
+    ) -> (bool, f64) {
+        if let Some((peer_score, thresholds, ..)) = peer_score {
             let score = peer_score.score(peer_id);
             if score < threshold(thresholds) {
                 return (true, score);
@@ -1500,6 +1508,12 @@ impl Gossipsub {
                             Some(PeerKind::Gossipsub) => true,
                             _ => false,
                         }
+                        && !Self::score_below_threshold_from_scores(
+                            &self.peer_score,
+                            propagation_source,
+                            |_| 0.0,
+                        )
+                        .0
                     {
                         if let Some(peers) = self.mesh.get_mut(&subscription.topic_hash) {
                             if peers.len() < self.config.mesh_n_low() {
