@@ -73,7 +73,7 @@ mod tests;
 /// Without signing, a number of privacy preserving modes can be selected.
 ///
 /// NOTE: The default validation settings are to require signatures. The [`ValidationMode`]
-/// should be updated in the [`GossipsubConfig`] to allow for unsigned messages.
+/// should be updated in the [`GenericGossipsubConfig`] to allow for unsigned messages.
 #[derive(Clone)]
 pub enum MessageAuthenticity {
     /// Message signing is enabled. The author will be the owner of the key and the sequence number
@@ -94,7 +94,7 @@ pub enum MessageAuthenticity {
     /// The author of the message and the sequence numbers are excluded from the message.
     ///
     /// NOTE: Excluding these fields may make these messages invalid by other nodes who
-    /// enforce validation of these fields. See [`ValidationMode`] in the `GossipsubConfig`
+    /// enforce validation of these fields. See [`ValidationMode`] in the `GenericGossipsubConfig`
     /// for how to customise this for rust-libp2p gossipsub.  A custom `message_id`
     /// function will need to be set to prevent all messages from a peer being filtered
     /// as duplicates.
@@ -203,7 +203,7 @@ impl From<MessageAuthenticity> for PublishConfig {
 
 /// Network behaviour that handles the gossipsub protocol.
 ///
-/// NOTE: Initialisation requires a [`MessageAuthenticity`] and [`GossipsubConfig`] instance. If message signing is
+/// NOTE: Initialisation requires a [`MessageAuthenticity`] and [`GenericGossipsubConfig`] instance. If message signing is
 /// disabled, the [`ValidationMode`] in the config should be adjusted to an appropriate level to
 /// accept unsigned messages.
 pub struct GenericGossipsub<T: AsRef<[u8]>> {
@@ -290,7 +290,7 @@ pub struct GenericGossipsub<T: AsRef<[u8]>> {
 pub type Gossipsub = GenericGossipsub<Vec<u8>>;
 
 impl<T: Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>> GenericGossipsub<T> {
-    /// Creates a `Gossipsub` struct given a set of parameters specified via a `GossipsubConfig`.
+    /// Creates a `GenericGossipsub` struct given a set of parameters specified via a `GenericGossipsubConfig`.
     pub fn new(
         privacy: MessageAuthenticity,
         config: GenericGossipsubConfig<T>,
@@ -2186,7 +2186,7 @@ impl<T: Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>> GenericGossipsub<T>
         }
     }
 
-    /// Constructs a `GossipsubMessage` performing message signing if required.
+    /// Constructs a `GenericGossipsubMessage` performing message signing if required.
     pub(crate) fn build_message(
         &self,
         topics: Vec<TopicHash>,

@@ -133,8 +133,8 @@ pub struct GenericGossipsubConfig<T> {
     /// addressing, where this function may be set to `hash(message)`. This would prevent messages
     /// of the same content from being duplicated.
     ///
-    /// The function takes a `GossipsubMessage` as input and outputs a String to be interpreted as
-    /// the message id.
+    /// The function takes a `GenericGossipsubMessage` as input and outputs a String to be
+    /// interpreted as the message id.
     message_id_fn: fn(&GenericGossipsubMessage<T>) -> MessageId,
 
     /// By default, gossipsub will reject messages that are sent to us that has the same message
@@ -345,7 +345,7 @@ impl<T> GenericGossipsubConfig<T> {
     /// addressing, where this function may be set to `hash(message)`. This would prevent messages
     /// of the same content from being duplicated.
     ///
-    /// The function takes a `GossipsubMessage` as input and outputs a String to be interpreted as
+    /// The function takes a `GenericGossipsubMessage` as input and outputs a String to be interpreted as
     /// the message id.
     pub fn message_id(&self, message: &GenericGossipsubMessage<T>) -> MessageId {
         (self.message_id_fn)(message)
@@ -677,7 +677,7 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
     /// addressing, where this function may be set to `hash(message)`. This would prevent messages
     /// of the same content from being duplicated.
     ///
-    /// The function takes a `GossipsubMessage` as input and outputs a String to be interpreted as
+    /// The function takes a `GenericGossipsubMessage` as input and outputs a String to be interpreted as
     /// the message id.
     pub fn message_id_fn(
         &mut self,
@@ -809,7 +809,7 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
         self
     }
 
-    /// Constructs a `GossipsubConfig` from the given configuration and validates the settings.
+    /// Constructs a `GenericGossipsubConfig` from the given configuration and validates the settings.
     pub fn build(&self) -> Result<GenericGossipsubConfig<T>, &str> {
         // check all constraints on config
 
