@@ -157,6 +157,10 @@ impl<T> GossipsubMessageWithId<T> {
     pub fn message_id(&self) -> &MessageId {
         &self.data.id
     }
+
+    pub fn data(&self) -> &T {
+        &self.data.data
+    }
 }
 
 // for backwards compatibility
