@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use libp2p_core::PeerId;
 
-use crate::types::{GossipsubMessage, MessageId};
+use crate::types::{GenericGossipsubMessage, MessageId};
 
 /// The types of message validation that can be employed by gossipsub.
 #[derive(Debug, Clone)]
@@ -49,7 +49,7 @@ pub enum ValidationMode {
 
 /// Configuration parameters that define the performance of the gossipsub network.
 #[derive(Clone)]
-pub struct GossipsubConfig {
+pub struct GenericGossipsubConfig<T> {
     /// The protocol id prefix to negotiate this protocol. The protocol id is of the form
     /// `/<prefix>/<supported-versions>`. As gossipsub supports version 1.0 and 1.1, there are two
     /// protocol id's supported.
@@ -135,7 +135,7 @@ pub struct GossipsubConfig {
     ///
     /// The function takes a `GossipsubMessage` as input and outputs a String to be interpreted as
     /// the message id.
-    message_id_fn: fn(&GossipsubMessage) -> MessageId,
+    message_id_fn: fn(&GenericGossipsubMessage<T>) -> MessageId,
 
     /// By default, gossipsub will reject messages that are sent to us that has the same message
     /// source as we have specified locally. Enabling this, allows these messages and prevents
@@ -222,7 +222,10 @@ pub struct GossipsubConfig {
     published_message_ids_cache_time: Duration,
 }
 
-impl GossipsubConfig {
+// for backwards compatibility
+pub type GossipsubConfig = GenericGossipsubConfig<Vec<u8>>;
+
+impl<T> GenericGossipsubConfig<T> {
     //all the getters
 
     /// The protocol id prefix to negotiate this protocol. The protocol id is of the form
@@ -344,8 +347,8 @@ impl GossipsubConfig {
     ///
     /// The function takes a `GossipsubMessage` as input and outputs a String to be interpreted as
     /// the message id.
-    pub fn message_id_fn(&self) -> fn(&GossipsubMessage) -> MessageId {
-        self.message_id_fn
+    pub fn message_id(&self, message: &GenericGossipsubMessage<T>) -> MessageId {
+        (self.message_id_fn)(message)
     }
 
     /// By default, gossipsub will reject messages that are sent to us that has the same message
@@ -465,39 +468,42 @@ impl GossipsubConfig {
     }
 }
 
-impl Default for GossipsubConfig {
-    fn default() -> GossipsubConfig {
+impl<T: Clone> Default for GenericGossipsubConfig<T> {
+    fn default() -> Self {
         //use GossipsubConfigBuilder to also validate defaults
-        GossipsubConfigBuilder::new()
+        GenericGossipsubConfigBuilder::new()
             .build()
             .expect("Default config parameters should be valid parameters")
     }
 }
 
 /// The builder struct for constructing a gossipsub configuration.
-pub struct GossipsubConfigBuilder {
-    config: GossipsubConfig,
+pub struct GenericGossipsubConfigBuilder<T> {
+    config: GenericGossipsubConfig<T>,
 }
 
-impl Default for GossipsubConfigBuilder {
-    fn default() -> GossipsubConfigBuilder {
-        GossipsubConfigBuilder {
-            config: GossipsubConfig::default(),
+//for backwards compatibility
+pub type GossipsubConfigBuilder = GenericGossipsubConfigBuilder<Vec<u8>>;
+
+impl<T: Clone> Default for GenericGossipsubConfigBuilder<T> {
+    fn default() -> Self {
+        GenericGossipsubConfigBuilder {
+            config: GenericGossipsubConfig::default(),
         }
     }
 }
 
-impl From<GossipsubConfig> for GossipsubConfigBuilder {
-    fn from(config: GossipsubConfig) -> Self {
-        GossipsubConfigBuilder { config }
+impl<T> From<GenericGossipsubConfig<T>> for GenericGossipsubConfigBuilder<T> {
+    fn from(config: GenericGossipsubConfig<T>) -> Self {
+        GenericGossipsubConfigBuilder { config }
     }
 }
 
-impl GossipsubConfigBuilder {
+impl<T: Clone> GenericGossipsubConfigBuilder<T> {
     // set default values
-    pub fn new() -> GossipsubConfigBuilder {
-        GossipsubConfigBuilder {
-            config: GossipsubConfig {
+    pub fn new() -> Self {
+        GenericGossipsubConfigBuilder {
+            config: GenericGossipsubConfig {
                 protocol_id_prefix: Cow::Borrowed("meshsub"),
                 history_length: 5,
                 history_gossip: 3,
@@ -673,7 +679,10 @@ impl GossipsubConfigBuilder {
     ///
     /// The function takes a `GossipsubMessage` as input and outputs a String to be interpreted as
     /// the message id.
-    pub fn message_id_fn(&mut self, id_fn: fn(&GossipsubMessage) -> MessageId) -> &mut Self {
+    pub fn message_id_fn(
+        &mut self,
+        id_fn: fn(&GenericGossipsubMessage<T>) -> MessageId,
+    ) -> &mut Self {
         self.config.message_id_fn = id_fn;
         self
     }
@@ -801,7 +810,7 @@ impl GossipsubConfigBuilder {
     }
 
     /// Constructs a `GossipsubConfig` from the given configuration and validates the settings.
-    pub fn build(&self) -> Result<GossipsubConfig, &str> {
+    pub fn build(&self) -> Result<GenericGossipsubConfig<T>, &str> {
         // check all constraints on config
 
         if self.config.max_transmit_size < 100 {
@@ -832,7 +841,7 @@ impl GossipsubConfigBuilder {
     }
 }
 
-impl std::fmt::Debug for GossipsubConfig {
+impl<T> std::fmt::Debug for GenericGossipsubConfig<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut builder = f.debug_struct("GossipsubConfig");
         let _ = builder.field("protocol_id_prefix", &self.protocol_id_prefix);
