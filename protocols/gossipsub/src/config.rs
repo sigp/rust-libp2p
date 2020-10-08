@@ -24,6 +24,7 @@ use std::time::Duration;
 use libp2p_core::PeerId;
 
 use crate::types::{GenericGossipsubMessage, MessageId};
+use crate::RawGossipsubMessage;
 
 /// The types of message validation that can be employed by gossipsub.
 #[derive(Debug, Clone)]
@@ -136,6 +137,8 @@ pub struct GenericGossipsubConfig<T> {
     /// The function takes a `GenericGossipsubMessage` as input and outputs a String to be
     /// interpreted as the message id.
     message_id_fn: fn(&GenericGossipsubMessage<T>) -> MessageId,
+
+    fast_message_id_fn: Option<fn(&RawGossipsubMessage) -> MessageId>,
 
     /// By default, gossipsub will reject messages that are sent to us that has the same message
     /// source as we have specified locally. Enabling this, allows these messages and prevents
@@ -351,6 +354,10 @@ impl<T> GenericGossipsubConfig<T> {
         (self.message_id_fn)(message)
     }
 
+    pub fn fast_message_id(&self, message: &RawGossipsubMessage) -> Option<MessageId> {
+        self.fast_message_id_fn.map(|fast_message_id_fn| fast_message_id_fn(message))
+    }
+
     /// By default, gossipsub will reject messages that are sent to us that has the same message
     /// source as we have specified locally. Enabling this, allows these messages and prevents
     /// penalizing the peer that sent us the message. Default is false.
@@ -535,6 +542,7 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
                         .push_str(&message.sequence_number.unwrap_or_default().to_string());
                     MessageId::from(source_string)
                 },
+                fast_message_id_fn: None,
                 allow_self_origin: false,
                 do_px: false,
                 prune_peers: 0, // NOTE: Increasing this currently has little effect until Signed records are implemented.
@@ -684,6 +692,14 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
         id_fn: fn(&GenericGossipsubMessage<T>) -> MessageId,
     ) -> &mut Self {
         self.config.message_id_fn = id_fn;
+        self
+    }
+
+    pub fn fast_message_id_fn(
+        &mut self,
+        fast_id_fn: fn(&RawGossipsubMessage) -> MessageId,
+    ) -> &mut Self {
+        self.config.fast_message_id_fn = Some(fast_id_fn);
         self
     }
 

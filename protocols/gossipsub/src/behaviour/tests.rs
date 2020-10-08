@@ -36,6 +36,8 @@ mod tests {
 
     use super::super::*;
     use crate::error::ValidationError;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     // helper functions for testing
 
@@ -4766,5 +4768,79 @@ mod tests {
             peers,
             "Expected all_peers to contain all peers."
         );
+    }
+
+    #[test]
+    fn test_msg_id_fn_only_called_once_with_fast_message_ids() {
+        struct Pointers {
+            slow_counter: u32,
+            fast_counter: u32
+        };
+
+        let mut counters = Pointers {
+            slow_counter: 0,
+            fast_counter: 0,
+        };
+
+        let counters_pointer: *mut Pointers = &mut counters;
+
+        let counters_address = counters_pointer as u64;
+
+        macro_rules! get_counters_and_hash {
+            ($m: expr) => {{
+                let mut address_bytes: [u8; 8] = Default::default();
+                address_bytes.copy_from_slice($m.data.as_slice());
+                let address = u64::from_be_bytes(address_bytes);
+                let counters_pointer: *mut Pointers = address as *mut Pointers;
+                let mut hasher = DefaultHasher::new();
+                $m.data.hash(&mut hasher);
+                let id: MessageId = hasher.finish().to_be_bytes().into();
+                (id, counters_pointer)
+            }};
+        }
+
+        let message_id_fn = |m: &RawGossipsubMessage| {
+            let (mut id, mut counters_pointer) = get_counters_and_hash!(m);
+            unsafe {
+                (*counters_pointer).slow_counter += 1;
+            }
+            id.0.reverse();
+            id
+        };
+        let fast_message_id_fn = |m: &RawGossipsubMessage| {
+            let (id, mut counters_pointer) = get_counters_and_hash!(m);
+            unsafe {
+                (*counters_pointer).fast_counter += 1;
+            }
+            id
+        };
+        let config = GossipsubConfigBuilder::new()
+            .message_id_fn(message_id_fn)
+            .fast_message_id_fn(fast_message_id_fn)
+            .build()
+            .unwrap();
+        let (mut gs, _, topic_hashes) = build_and_inject_nodes_with_config(
+            0,
+            vec![String::from("topic1")],
+            true,
+            config,
+        );
+
+        let message = RawGossipsubMessage {
+            source: None,
+            data: counters_address.to_be_bytes().to_vec(),
+            sequence_number: None,
+            topics: vec![topic_hashes[0].clone()],
+            signature: None,
+            key: None,
+            validated: true,
+        };
+
+        for _ in 0..5 {
+            gs.handle_received_message(message.clone(), &PeerId::random());
+        }
+
+        assert!(counters.fast_counter <= 5);
+        assert_eq!(counters.slow_counter, 1)
     }
 }
