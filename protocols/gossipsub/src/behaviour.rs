@@ -58,8 +58,9 @@ use crate::protocol::SIGNING_PREFIX;
 use crate::time_cache::{DuplicateCache, TimeCache};
 use crate::topic::{Hasher, Topic, TopicHash};
 use crate::types::{
-    GenericGossipsubMessage, GossipsubControlAction, GossipsubMessageWithId, GossipsubSubscription,
-    GossipsubSubscriptionAction, MessageAcceptance, MessageId, PeerInfo, RawGossipsubMessage,
+    FastMessageId, GenericGossipsubMessage, GossipsubControlAction, GossipsubMessageWithId,
+    GossipsubSubscription, GossipsubSubscriptionAction, MessageAcceptance, MessageId, PeerInfo,
+    RawGossipsubMessage,
 };
 use crate::types::{GossipsubRpc, PeerKind};
 use crate::{rpc_proto, TopicScoreParams};
@@ -286,7 +287,7 @@ pub struct GenericGossipsub<T: AsRef<[u8]>> {
     published_message_ids: DuplicateCache<MessageId>,
 
     /// short term cache for fast message ids mapping them to the real message ids
-    fast_messsage_id_cache: TimeCache<MessageId, MessageId>,
+    fast_messsage_id_cache: TimeCache<FastMessageId, MessageId>,
 }
 
 // for backwards compatibility
@@ -1333,8 +1334,11 @@ impl<T: Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>> GenericGossipsub<T>
 
     /// Applies some basic checks to whether this message is valid. Does not apply user validation
     /// checks.
-    fn mesage_with_id_is_valid<S>(&mut self, msg: &mut GossipsubMessageWithId<S>,
-                                  propagation_source: &PeerId) -> bool {
+    fn mesage_with_id_is_valid<S>(
+        &mut self,
+        msg: &mut GossipsubMessageWithId<S>,
+        propagation_source: &PeerId,
+    ) -> bool {
         debug!(
             "Handling message: {:?} from peer: {}",
             msg.message_id(),
@@ -1367,8 +1371,8 @@ impl<T: Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>> GenericGossipsub<T>
                         &msg,
                         RejectReason::BlackListedSource,
                     );
-                    gossip_promises.reject_message(msg.message_id(),
-                                                   &RejectReason::BlackListedSource);
+                    gossip_promises
+                        .reject_message(msg.message_id(), &RejectReason::BlackListedSource);
                 }
                 return false;
             }
@@ -1393,7 +1397,8 @@ impl<T: Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>> GenericGossipsub<T>
         if self_published {
             debug!(
                 "Dropping message {} claiming to be from self but forwarded from {}",
-                msg.message_id(), propagation_source
+                msg.message_id(),
+                propagation_source
             );
             if let Some((peer_score, _, _, gossip_promises)) = &mut self.peer_score {
                 peer_score.reject_message(propagation_source, &msg, RejectReason::SelfOrigin);
@@ -1430,11 +1435,15 @@ impl<T: Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>> GenericGossipsub<T>
         // Add the message to the duplication caches and memcache.
         if let Some(fast_message_id) = fast_message_id {
             //add id to cache
-            self.fast_messsage_id_cache.entry(fast_message_id)
+            self.fast_messsage_id_cache
+                .entry(fast_message_id)
                 .or_insert_with(|| msg.message_id().clone());
         }
         if !self.duplication_cache.insert(msg.message_id().clone()) {
-            debug!("Message already received, ignoring. Message: {}", msg.message_id());
+            debug!(
+                "Message already received, ignoring. Message: {}",
+                msg.message_id()
+            );
             if let Some((peer_score, ..)) = &mut self.peer_score {
                 peer_score.duplicated_message(propagation_source, &msg);
             }
@@ -2836,8 +2845,8 @@ where
                         if let Some(msg_id) = self
                             .config
                             .fast_message_id(&message)
-                            .and_then(|id| fast_message_id_cache.get(&id)) {
-
+                            .and_then(|id| fast_message_id_cache.get(&id))
+                        {
                             let message = GossipsubMessageWithId::new(message, msg_id.clone());
                             peer_score.reject_message(&propagation_source, &message, reason);
                             gossip_promises.reject_message(msg_id, &reason);

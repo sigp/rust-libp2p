@@ -29,10 +29,14 @@ mod tests {
     use async_std::net::Ipv4Addr;
     use rand::Rng;
 
-    use crate::{GossipsubConfig, GossipsubConfigBuilder, GossipsubMessage, IdentTopic as Topic, TopicScoreParams, GenericGossipsubConfigBuilder};
+    use crate::{
+        GenericGossipsubConfigBuilder, GossipsubConfig, GossipsubConfigBuilder, GossipsubMessage,
+        IdentTopic as Topic, TopicScoreParams,
+    };
 
     use super::super::*;
     use crate::error::ValidationError;
+    use crate::types::FastMessageId;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -43,7 +47,9 @@ mod tests {
         topics: Vec<String>,
         to_subscribe: bool,
     ) -> (GenericGossipsub<T>, Vec<PeerId>, Vec<TopicHash>)
-        where T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]> {
+    where
+        T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
+    {
         // use a default GossipsubConfig
         build_and_inject_nodes_with_config(
             peer_no,
@@ -59,7 +65,9 @@ mod tests {
         to_subscribe: bool,
         gs_config: GenericGossipsubConfig<T>,
     ) -> (GenericGossipsub<T>, Vec<PeerId>, Vec<TopicHash>)
-        where T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]> {
+    where
+        T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
+    {
         // create a gossipsub struct
         build_and_inject_nodes_with_config_and_explicit(peer_no, topics, to_subscribe, gs_config, 0)
     }
@@ -73,7 +81,9 @@ mod tests {
         gs_config: GenericGossipsubConfig<T>,
         explicit: usize,
     ) -> (GenericGossipsub<T>, Vec<PeerId>, Vec<TopicHash>)
-        where T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]> {
+    where
+        T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
+    {
         build_and_inject_nodes_with_config_and_explicit_and_outbound(
             peer_no,
             topics,
@@ -92,7 +102,9 @@ mod tests {
         explicit: usize,
         outbound: usize,
     ) -> (GenericGossipsub<T>, Vec<PeerId>, Vec<TopicHash>)
-        where T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]> {
+    where
+        T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
+    {
         build_and_inject_nodes_with_config_and_explicit_and_outbound_and_scoring(
             peer_no,
             topics,
@@ -113,7 +125,9 @@ mod tests {
         outbound: usize,
         scoring: Option<(PeerScoreParams, PeerScoreThresholds)>,
     ) -> (GenericGossipsub<T>, Vec<PeerId>, Vec<TopicHash>)
-        where T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]> {
+    where
+        T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
+    {
         let keypair = libp2p_core::identity::Keypair::generate_secp256k1();
         // create a gossipsub struct
         let mut gs: GenericGossipsub<T> =
@@ -155,7 +169,9 @@ mod tests {
         outbound: bool,
         explicit: bool,
     ) -> PeerId
-        where T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]> {
+    where
+        T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
+    {
         add_peer_with_addr(gs, topic_hashes, outbound, explicit, Multiaddr::empty())
     }
 
@@ -166,7 +182,9 @@ mod tests {
         explicit: bool,
         address: Multiaddr,
     ) -> PeerId
-        where T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]> {
+    where
+        T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
+    {
         add_peer_with_addr_and_kind(
             gs,
             topic_hashes,
@@ -185,7 +203,9 @@ mod tests {
         address: Multiaddr,
         kind: Option<PeerKind>,
     ) -> PeerId
-        where T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]> {
+    where
+        T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
+    {
         let peer = PeerId::random();
         //peers.push(peer.clone());
         gs.inject_connection_established(
@@ -1119,7 +1139,8 @@ mod tests {
             .map(|&t| String::from(t))
             .collect();
 
-        let (mut gs, peers, topic_hashes) = build_and_inject_nodes::<Vec<u8>>(20, topics.clone(), true);
+        let (mut gs, peers, topic_hashes) =
+            build_and_inject_nodes::<Vec<u8>>(20, topics.clone(), true);
 
         let mut their_topics = topic_hashes.clone();
         // their_topics = [topic1, topic2, topic3]
@@ -1648,7 +1669,8 @@ mod tests {
     fn test_connect_to_px_peers_on_handle_prune() {
         let config = GossipsubConfig::default();
 
-        let (mut gs, peers, topics) = build_and_inject_nodes::<Vec<u8>>(1, vec!["test".into()], true);
+        let (mut gs, peers, topics) =
+            build_and_inject_nodes::<Vec<u8>>(1, vec!["test".into()], true);
 
         //handle prune from single peer with px peers
 
@@ -1979,7 +2001,8 @@ mod tests {
         //add a lot of peers
         let m =
             config.mesh_n_low() + config.gossip_lazy() * (2.0 / config.gossip_factor()) as usize;
-        let (mut gs, _, topic_hashes) = build_and_inject_nodes::<Vec<u8>>(m, vec!["topic".into()], true);
+        let (mut gs, _, topic_hashes) =
+            build_and_inject_nodes::<Vec<u8>>(m, vec!["topic".into()], true);
 
         //receive message
         let message = RawGossipsubMessage {
@@ -4689,7 +4712,8 @@ mod tests {
     #[test]
     fn test_dont_send_floodsub_peers_in_px() {
         //build mesh with one peer
-        let (mut gs, peers, topics) = build_and_inject_nodes::<Vec<u8>>(1, vec!["test".into()], true);
+        let (mut gs, peers, topics) =
+            build_and_inject_nodes::<Vec<u8>>(1, vec!["test".into()], true);
 
         //add two floodsub peers
         let _p1 = add_peer_with_addr_and_kind(
@@ -4780,7 +4804,7 @@ mod tests {
         struct Pointers {
             slow_counter: u32,
             fast_counter: u32,
-            from_counter: u32
+            from_counter: u32,
         };
 
         let mut counters = Pointers {
@@ -4831,20 +4855,21 @@ mod tests {
             ($m: expr) => {{
                 let mut hasher = DefaultHasher::new();
                 $m.hash(&mut hasher);
-                let id: MessageId = hasher.finish().to_be_bytes().into();
+                let id = hasher.finish().to_be_bytes().into();
                 (id, get_counters_pointer!($m))
             }};
         }
 
-        let message_id_fn = |m: &GenericGossipsubMessage<MessageData>| {
-            let (mut id, mut counters_pointer) = get_counters_and_hash!(&m.data.0);
+        let message_id_fn = |m: &GenericGossipsubMessage<MessageData>| -> MessageId {
+            let (mut id, mut counters_pointer): (MessageId, *mut Pointers) =
+                get_counters_and_hash!(&m.data.0);
             unsafe {
                 (*counters_pointer).slow_counter += 1;
             }
             id.0.reverse();
             id
         };
-        let fast_message_id_fn = |m: &RawGossipsubMessage| {
+        let fast_message_id_fn = |m: &RawGossipsubMessage| -> FastMessageId {
             let (id, mut counters_pointer) = get_counters_and_hash!(&m.data);
             unsafe {
                 (*counters_pointer).fast_counter += 1;
@@ -4856,12 +4881,8 @@ mod tests {
             .fast_message_id_fn(fast_message_id_fn)
             .build()
             .unwrap();
-        let (mut gs, _, topic_hashes) = build_and_inject_nodes_with_config(
-            0,
-            vec![String::from("topic1")],
-            true,
-            config,
-        );
+        let (mut gs, _, topic_hashes) =
+            build_and_inject_nodes_with_config(0, vec![String::from("topic1")], true, config);
 
         let message = RawGossipsubMessage {
             source: None,
