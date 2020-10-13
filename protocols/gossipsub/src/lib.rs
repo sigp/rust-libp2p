@@ -55,10 +55,10 @@
 //!
 //! ## GossipsubConfig
 //!
-//! The [`GossipsubConfig`] struct specifies various network performance/tuning configuration
+//! The [`GenericGossipsubConfig`] struct specifies various network performance/tuning configuration
 //! parameters. Specifically it specifies:
 //!
-//! [`GossipsubConfig`]: struct.GossipsubConfig.html
+//! [`GenericGossipsubConfig`]: struct.GenericGossipsubConfig.html
 //!
 //! - `protocol_id` - The protocol id that this implementation will accept connections on.
 //! - `history_length` - The number of heartbeats which past messages are kept in cache (default: 5).
@@ -83,16 +83,16 @@
 //! propagate the message to peers.
 //!
 //! This struct implements the `Default` trait and can be initialised via
-//! `GossipsubConfig::default()`.
+//! `GenericGossipsubConfig::default()`.
 //!
 //!
 //! ## Gossipsub
 //!
-//! The [`Gossipsub`] struct implements the `NetworkBehaviour` trait allowing it to act as the
+//! The [`GenericGossipsub`] struct implements the `NetworkBehaviour` trait allowing it to act as the
 //! routing behaviour in a `Swarm`. This struct requires an instance of `PeerId` and
-//! [`GossipsubConfig`].
+//! [`GenericGossipsubConfig`].
 //!
-//! [`Gossipsub`]: struct.Gossipsub.html
+//! [`GenericGossipsub`]: struct.Gossipsub.html
 
 //! ## Example
 //!
@@ -103,11 +103,11 @@
 //! #extern crate futures;
 //! #extern crate tokio;
 //! #use libp2p::gossipsub::GossipsubEvent;
-//! #use libp2p::{gossipsub, secio,
+//! #use libp2p::{identity, gossipsub,
 //! #    tokio_codec::{FramedRead, LinesCodec},
 //! #};
-//! let local_key = secio::SecioKeyPair::ed25519_generated().unwrap();
-//! let local_pub_key = local_key.to_public_key();
+//! let local_key = identity::Keypair::generate_ed25519();
+//! let local_pub_key = local_key.public();
 //!
 //! // Set up an encrypted TCP Transport over the Mplex and Yamux protocols
 //! let transport = libp2p::build_development_transport(local_key);
@@ -153,13 +153,21 @@ mod rpc_proto {
     include!(concat!(env!("OUT_DIR"), "/gossipsub.pb.rs"));
 }
 
-pub use self::behaviour::{Gossipsub, GossipsubEvent, MessageAuthenticity};
-pub use self::config::{GossipsubConfig, GossipsubConfigBuilder, ValidationMode};
+pub use self::behaviour::{
+    GenericGossipsub, GenericGossipsubEvent, Gossipsub, GossipsubEvent, MessageAuthenticity,
+};
+pub use self::config::{
+    GenericGossipsubConfig, GenericGossipsubConfigBuilder, GossipsubConfig, GossipsubConfigBuilder,
+    ValidationMode,
+};
 pub use self::peer_score::{
     score_parameter_decay, score_parameter_decay_with_base, PeerScoreParams, PeerScoreThresholds,
     TopicScoreParams,
 };
 pub use self::topic::{Hasher, Topic, TopicHash};
-pub use self::types::{GossipsubMessage, GossipsubRpc, MessageAcceptance, MessageId};
+pub use self::types::{
+    FastMessageId, GenericGossipsubMessage, GossipsubMessage, GossipsubRpc, MessageAcceptance,
+    MessageId, RawGossipsubMessage,
+};
 pub type IdentTopic = Topic<self::topic::IdentityHash>;
 pub type Sha256Topic = Topic<self::topic::Sha256Hash>;

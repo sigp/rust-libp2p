@@ -23,6 +23,7 @@ use crate::rpc_proto;
 use crate::TopicHash;
 use libp2p_core::PeerId;
 use std::fmt;
+use std::fmt::Debug;
 
 #[derive(Debug)]
 /// Validation kinds from the application for received messages.
@@ -36,33 +37,43 @@ pub enum MessageAcceptance {
     Ignore,
 }
 
-/// A type for gossipsub message ids.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct MessageId(pub Vec<u8>);
+/// Macro for declaring message id types
+macro_rules! declare_message_id_type {
+    ($name: ident, $name_string: expr) => {
+        #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        pub struct $name(pub Vec<u8>);
 
-impl MessageId {
-    pub fn new(value: &[u8]) -> Self {
-        Self(value.to_vec())
-    }
+        impl $name {
+            pub fn new(value: &[u8]) -> Self {
+                Self(value.to_vec())
+            }
+        }
+
+        impl<T: Into<Vec<u8>>> From<T> for $name {
+            fn from(value: T) -> Self {
+                Self(value.into())
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", hex_fmt::HexFmt(&self.0))
+            }
+        }
+
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}({})", $name_string, hex_fmt::HexFmt(&self.0))
+            }
+        }
+    };
 }
 
-impl<T: Into<Vec<u8>>> From<T> for MessageId {
-    fn from(value: T) -> Self {
-        Self(value.into())
-    }
-}
+// A type for gossipsub message ids.
+declare_message_id_type!(MessageId, "MessageId");
 
-impl std::fmt::Display for MessageId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex_fmt::HexFmt(&self.0))
-    }
-}
-
-impl std::fmt::Debug for MessageId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MessageId({})", hex_fmt::HexFmt(&self.0))
-    }
-}
+// A type for gossipsub fast messsage ids, not to confuse with "real" message ids.
+declare_message_id_type!(FastMessageId, "FastMessageId");
 
 #[derive(Debug, Clone, PartialEq)]
 /// Describes the types of peers that can exist in the gossipsub context.
@@ -79,12 +90,12 @@ pub enum PeerKind {
 
 /// A message received by the gossipsub system.
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct GossipsubMessage {
+pub struct GenericGossipsubMessage<T> {
     /// Id of the peer that published this message.
     pub source: Option<PeerId>,
 
     /// Content of the message. Its meaning is out of scope of this library.
-    pub data: Vec<u8>,
+    pub data: T,
 
     /// A random sequence number.
     pub sequence_number: Option<u64>,
@@ -104,12 +115,73 @@ pub struct GossipsubMessage {
     pub validated: bool,
 }
 
-impl fmt::Debug for GossipsubMessage {
+impl<T> GenericGossipsubMessage<T> {
+    pub fn from<S: Into<T>>(m: GenericGossipsubMessage<S>) -> Self {
+        Self {
+            source: m.source,
+            data: m.data.into(),
+            sequence_number: m.sequence_number,
+            topics: m.topics,
+            signature: m.signature,
+            key: m.key,
+            validated: m.validated,
+        }
+    }
+}
+
+pub type RawGossipsubMessage = GenericGossipsubMessage<Vec<u8>>;
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct DataWithId<T> {
+    pub id: MessageId,
+    pub data: T,
+}
+
+impl<T: Into<Vec<u8>>> Into<Vec<u8>> for DataWithId<T> {
+    fn into(self) -> Vec<u8> {
+        self.data.into()
+    }
+}
+
+impl<T: AsRef<[u8]>> AsRef<[u8]> for DataWithId<T> {
+    fn as_ref(&self) -> &[u8] {
+        self.data.as_ref()
+    }
+}
+
+pub type GossipsubMessageWithId<T> = GenericGossipsubMessage<DataWithId<T>>;
+
+impl<T> GossipsubMessageWithId<T> {
+    pub fn new(m: GenericGossipsubMessage<T>, id: MessageId) -> Self {
+        Self {
+            source: m.source,
+            data: DataWithId { id, data: m.data },
+            sequence_number: m.sequence_number,
+            topics: m.topics,
+            signature: m.signature,
+            key: m.key,
+            validated: m.validated,
+        }
+    }
+
+    pub fn message_id(&self) -> &MessageId {
+        &self.data.id
+    }
+
+    pub fn data(&self) -> &T {
+        &self.data.data
+    }
+}
+
+// for backwards compatibility
+pub type GossipsubMessage = GossipsubMessageWithId<Vec<u8>>;
+
+impl<T: Debug + AsRef<[u8]>> fmt::Debug for GenericGossipsubMessage<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GossipsubMessage")
             .field(
                 "data",
-                &format_args!("{:<20}", &hex_fmt::HexFmt(&self.data)),
+                &format_args!("{:<20}", &hex_fmt::HexFmt(&self.data.as_ref())),
             )
             .field("source", &self.source)
             .field("sequence_number", &self.sequence_number)
@@ -179,7 +251,7 @@ pub enum GossipsubControlAction {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct GossipsubRpc {
     /// List of messages that were part of this RPC query.
-    pub messages: Vec<GossipsubMessage>,
+    pub messages: Vec<RawGossipsubMessage>,
     /// List of subscriptions.
     pub subscriptions: Vec<GossipsubSubscription>,
     /// List of Gossipsub control messages.
