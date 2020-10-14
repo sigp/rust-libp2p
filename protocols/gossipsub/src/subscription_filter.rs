@@ -20,6 +20,7 @@
 
 use crate::types::GossipsubSubscription;
 use crate::TopicHash;
+use log::info;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 pub trait TopicSubscriptionFilter {
@@ -61,7 +62,14 @@ pub trait TopicSubscriptionFilter {
         mut subscriptions: HashSet<&'a GossipsubSubscription>,
         _currently_subscribed_topics: &BTreeSet<TopicHash>,
     ) -> Result<HashSet<&'a GossipsubSubscription>, String> {
-        subscriptions.retain(|s| self.allow_incoming_subscription(s));
+        subscriptions.retain(|s| {
+            if self.allow_incoming_subscription(s) {
+                true
+            } else {
+                info!("Filtered incoming subscription {:?}", s);
+                false
+            }
+        });
         Ok(subscriptions)
     }
 
@@ -169,13 +177,13 @@ where
     fn filter_incoming_subscription_set<'a>(
         &mut self,
         subscriptions: HashSet<&'a GossipsubSubscription>,
-        _currently_subscribed_topics: &BTreeSet<TopicHash>,
+        currently_subscribed_topics: &BTreeSet<TopicHash>,
     ) -> Result<HashSet<&'a GossipsubSubscription>, String> {
         let intermediate = self
             .filter1
-            .filter_incoming_subscription_set(subscriptions, _currently_subscribed_topics)?;
+            .filter_incoming_subscription_set(subscriptions, currently_subscribed_topics)?;
         self.filter2
-            .filter_incoming_subscription_set(intermediate, _currently_subscribed_topics)
+            .filter_incoming_subscription_set(intermediate, currently_subscribed_topics)
     }
 }
 

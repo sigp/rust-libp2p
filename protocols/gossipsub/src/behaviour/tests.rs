@@ -5002,11 +5002,13 @@ mod tests {
     #[test]
     fn test_subscribe_and_graft_with_negative_score() {
         //simulate a communication between two gossipsub instances
-        let (mut gs1, _, topic_hashes) =
-            inject_nodes1()
-                .topics(vec!["test".into()])
-                .scoring(Some((PeerScoreParams::default(), PeerScoreThresholds::default())))
-                .create_network();
+        let (mut gs1, _, topic_hashes) = inject_nodes1()
+            .topics(vec!["test".into()])
+            .scoring(Some((
+                PeerScoreParams::default(),
+                PeerScoreThresholds::default(),
+            )))
+            .create_network();
 
         let (mut gs2, _, _) = inject_nodes2().create_network();
 
