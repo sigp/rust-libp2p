@@ -23,7 +23,7 @@ use std::{
     collections::HashSet,
     collections::VecDeque,
     collections::{BTreeSet, HashMap},
-    fmt, iter,
+    fmt,
     iter::FromIterator,
     net::IpAddr,
     sync::Arc,
@@ -496,23 +496,13 @@ where
         Ok(true)
     }
 
-    /// Publishes a message to the network.
+    /// Publishes a message with multiple topics to the network.
     pub fn publish<H: Hasher>(
         &mut self,
         topic: Topic<H>,
         data: impl Into<T>,
     ) -> Result<MessageId, PublishError> {
-        self.publish_many(iter::once(topic), data)
-    }
-
-    /// Publishes a message with multiple topics to the network.
-    pub fn publish_many<H: Hasher>(
-        &mut self,
-        topics: impl IntoIterator<Item = Topic<H>>,
-        data: impl Into<T>,
-    ) -> Result<MessageId, PublishError> {
-        let message =
-            self.build_message(topics.into_iter().map(|t| t.hash()).collect(), data.into())?;
+        let message = self.build_message(topic.into(), data.into())?;
         let msg_id = self.config.message_id(&message);
 
         let event = Arc::new(
@@ -562,7 +552,7 @@ where
             !self.config.flood_publish() && self.forward_msg(message.clone(), None)?;
 
         let mut recipient_peers = HashSet::new();
-        for topic_hash in &message.topics {
+        for topic_hash in &message.topic {
             if let Some(set) = self.topic_peers.get(&topic_hash) {
                 if self.config.flood_publish() {
                     // Forward to all peers above score and all explicit peers
@@ -1520,7 +1510,12 @@ where
         self.mcache.put(msg.clone());
 
         // Dispatch the message to the user if we are subscribed to any of the topics
-        if self.mesh.keys().any(|t| msg.topics.iter().any(|u| t == u)) {
+        if msg
+            .topic
+            .as_ref()
+            .map(|t| self.mesh.contains_key(&t))
+            .unwrap_or(false)
+        {
             debug!("Sending received message to user");
             self.events.push_back(NetworkBehaviourAction::GenerateEvent(
                 GenericGossipsubEvent::Message {
@@ -1531,8 +1526,8 @@ where
             ));
         } else {
             debug!(
-                "Received message on a topic we are not subscribed to. Topics {:?}",
-                msg.topics.iter().collect::<Vec<_>>()
+                "Received message on a topic we are not subscribed to: {:?}",
+                msg.topic
             );
             return;
         }
@@ -2265,7 +2260,7 @@ where
         let mut recipient_peers = HashSet::new();
 
         // add mesh peers
-        for topic in &message.topics {
+        for topic in &message.topic {
             // mesh
             if let Some(mesh_peers) = self.mesh.get(&topic) {
                 for peer_id in mesh_peers {
@@ -2283,7 +2278,11 @@ where
             if let Some(topics) = self.peer_topics.get(p) {
                 if Some(p) != propagation_source
                     && Some(p) != message.source.as_ref()
-                    && message.topics.iter().any(|t| topics.contains(t))
+                    && message
+                        .topic
+                        .as_ref()
+                        .map(|t| topics.contains(t))
+                        .unwrap_or(false)
                 {
                     recipient_peers.insert(p.clone());
                 }
@@ -2315,7 +2314,7 @@ where
     /// Constructs a `GenericGossipsubMessage` performing message signing if required.
     pub(crate) fn build_message(
         &self,
-        topics: Vec<TopicHash>,
+        topic: TopicHash,
         data: T,
     ) -> Result<GenericGossipsubMessage<T>, SigningError> {
         match &self.publish_config {
@@ -2332,11 +2331,7 @@ where
                         from: Some(author.clone().into_bytes()),
                         data: Some(data.clone().into()),
                         seqno: Some(sequence_number.to_be_bytes().to_vec()),
-                        topic_ids: topics
-                            .clone()
-                            .into_iter()
-                            .map(TopicHash::into_string)
-                            .collect(),
+                        topic: Some(topic.clone().into_string()),
                         signature: None,
                         key: None,
                     };
@@ -2358,7 +2353,7 @@ where
                     // To be interoperable with the go-implementation this is treated as a 64-bit
                     // big-endian uint.
                     sequence_number: Some(sequence_number),
-                    topics,
+                    topic: Some(topic),
                     signature,
                     key: inline_key.clone(),
                     validated: true, // all published messages are valid
@@ -2371,7 +2366,7 @@ where
                     // To be interoperable with the go-implementation this is treated as a 64-bit
                     // big-endian uint.
                     sequence_number: Some(rand::random()),
-                    topics,
+                    topic: Some(topic),
                     signature: None,
                     key: None,
                     validated: true, // all published messages are valid
@@ -2384,7 +2379,7 @@ where
                     // To be interoperable with the go-implementation this is treated as a 64-bit
                     // big-endian uint.
                     sequence_number: Some(rand::random()),
-                    topics,
+                    topic: Some(topic),
                     signature: None,
                     key: None,
                     validated: true, // all published messages are valid
@@ -2397,7 +2392,7 @@ where
                     // To be interoperable with the go-implementation this is treated as a 64-bit
                     // big-endian uint.
                     sequence_number: None,
-                    topics,
+                    topic: Some(topic),
                     signature: None,
                     key: None,
                     validated: true, // all published messages are valid
@@ -3135,7 +3130,7 @@ mod local_test {
             source: Some(PeerId::random()),
             data: vec![0; 100],
             sequence_number: None,
-            topics: vec![],
+            topic: None,
             signature: None,
             key: None,
             validated: false,

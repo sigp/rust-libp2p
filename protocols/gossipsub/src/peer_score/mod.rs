@@ -562,7 +562,7 @@ impl PeerScore {
             .or_insert_with(|| DeliveryRecord::default());
 
         if let Some(callback) = self.message_delivery_time_callback {
-            for topic in &_msg.topics {
+            for topic in &_msg.topic {
                 if self
                     .peer_stats
                     .get(_from)
@@ -673,7 +673,7 @@ impl PeerScore {
             } else {
                 0.0
             };
-            for topic in &msg.topics {
+            for topic in &msg.topic {
                 if self
                     .peer_stats
                     .get(from)
@@ -761,7 +761,7 @@ impl PeerScore {
         msg: &GossipsubMessageWithId<T>,
     ) {
         if let Some(peer_stats) = self.peer_stats.get_mut(peer_id) {
-            for topic_hash in msg.topics.iter() {
+            for topic_hash in msg.topic.iter() {
                 if let Some(topic_stats) =
                     peer_stats.stats_or_default_mut(topic_hash.clone(), &self.params)
                 {
@@ -785,7 +785,7 @@ impl PeerScore {
         msg: &GossipsubMessageWithId<T>,
     ) {
         if let Some(peer_stats) = self.peer_stats.get_mut(peer_id) {
-            for topic_hash in msg.topics.iter() {
+            for topic_hash in msg.topic.iter() {
                 if let Some(topic_stats) =
                     peer_stats.stats_or_default_mut(topic_hash.clone(), &self.params)
                 {
@@ -836,7 +836,7 @@ impl PeerScore {
             } else {
                 None
             };
-            for topic_hash in msg.topics.iter() {
+            for topic_hash in msg.topic.iter() {
                 if let Some(topic_stats) =
                     peer_stats.stats_or_default_mut(topic_hash.clone(), &self.params)
                 {

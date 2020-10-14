@@ -29,7 +29,7 @@ use std::{collections::HashMap, fmt};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CacheEntry {
     mid: MessageId,
-    topics: Vec<TopicHash>,
+    topic: Option<TopicHash>,
 }
 
 /// MessageCache struct holding history of messages.
@@ -71,7 +71,7 @@ impl<T> MessageCache<T> {
         debug!("Put message {:?} in mcache", message_id);
         let cache_entry = CacheEntry {
             mid: message_id.clone(),
-            topics: msg.topics.clone(),
+            topic: msg.topic.clone(),
         };
 
         let seen_message = self.msgs.insert(message_id.clone(), msg);
@@ -126,7 +126,7 @@ impl<T> MessageCache<T> {
                 let mut found_entries: Vec<MessageId> = entries
                     .iter()
                     .filter_map(|entry| {
-                        if entry.topics.iter().any(|t| t == topic) {
+                        if entry.topic.iter().any(|t| t == topic) {
                             let mid = &entry.mid;
                             // Only gossip validated messages
                             if let Some(true) = self.msgs.get(mid).map(|msg| msg.validated) {
@@ -202,7 +202,7 @@ mod tests {
             source,
             data,
             sequence_number,
-            topics,
+            topic: topics.get(0).cloned(),
             signature: None,
             key: None,
             validated: false,
