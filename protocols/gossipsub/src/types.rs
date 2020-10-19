@@ -101,7 +101,7 @@ pub struct GenericGossipsubMessage<T> {
     pub sequence_number: Option<u64>,
 
     /// The topic this message belongs to
-    pub topic: Option<TopicHash>,
+    pub topic: TopicHash,
 
     /// The signature of the message if it's signed.
     pub signature: Option<Vec<u8>>,
@@ -275,7 +275,7 @@ impl Into<rpc_proto::Rpc> for GossipsubRpc {
                 from: message.source.map(|m| m.into_bytes()),
                 data: Some(message.data),
                 seqno: message.sequence_number.map(|s| s.to_be_bytes().to_vec()),
-                topic: message.topic.map(TopicHash::into_string),
+                topic: TopicHash::into_string(message.topic),
                 signature: message.signature,
                 key: message.key,
             };

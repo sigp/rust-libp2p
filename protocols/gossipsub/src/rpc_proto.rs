@@ -20,7 +20,7 @@ mod test {
             from: Some(PeerId::random().as_bytes().to_vec()),
             data: Some(rand::thread_rng().gen::<[u8; 32]>().to_vec()),
             seqno: Some(rand::thread_rng().gen::<[u8; 8]>().to_vec()),
-            topic: Some(topic1.clone().into_string()),
+            topic: topic1.clone().into_string(),
             signature: Some(rand::thread_rng().gen::<[u8; 32]>().to_vec()),
             key: Some(rand::thread_rng().gen::<[u8; 32]>().to_vec()),
         };
@@ -51,10 +51,10 @@ mod test {
         old_message2.encode(&mut old_message2b).unwrap();
 
         let new_message = super::Message::decode(&old_message1b[..]).unwrap();
-        assert_eq!(new_message.topic, Some(topic1.clone().into_string()));
+        assert_eq!(new_message.topic, topic1.clone().into_string());
 
         let new_message = super::Message::decode(&old_message2b[..]).unwrap();
-        assert_eq!(new_message.topic, Some(topic2.clone().into_string()));
+        assert_eq!(new_message.topic, topic2.clone().into_string());
 
         let old_message = compat_proto::Message::decode(&new_message1b[..]).unwrap();
         assert_eq!(old_message.topic_ids, vec![topic1.into_string()]);

@@ -552,21 +552,19 @@ where
             !self.config.flood_publish() && self.forward_msg(message.clone(), None)?;
 
         let mut recipient_peers = HashSet::new();
-        for topic_hash in &message.topic {
-            if let Some(set) = self.topic_peers.get(&topic_hash) {
-                if self.config.flood_publish() {
-                    // Forward to all peers above score and all explicit peers
-                    recipient_peers.extend(
-                        set.iter()
-                            .filter(|p| {
-                                self.explicit_peers.contains(*p)
-                                    || !self.score_below_threshold(*p, |ts| ts.publish_threshold).0
-                            })
-                            .map(|p| p.clone()),
-                    );
-                    continue;
-                }
-
+        let topic_hash = &message.topic;
+        if let Some(set) = self.topic_peers.get(&topic_hash) {
+            if self.config.flood_publish() {
+                // Forward to all peers above score and all explicit peers
+                recipient_peers.extend(
+                    set.iter()
+                        .filter(|p| {
+                            self.explicit_peers.contains(*p)
+                                || !self.score_below_threshold(*p, |ts| ts.publish_threshold).0
+                        })
+                        .map(|p| p.clone()),
+                );
+            } else {
                 // Explicit peers
                 for peer in &self.explicit_peers {
                     if set.contains(peer) {
@@ -1510,12 +1508,7 @@ where
         self.mcache.put(msg.clone());
 
         // Dispatch the message to the user if we are subscribed to any of the topics
-        if msg
-            .topic
-            .as_ref()
-            .map(|t| self.mesh.contains_key(&t))
-            .unwrap_or(false)
-        {
+        if self.mesh.contains_key(&msg.topic) {
             debug!("Sending received message to user");
             self.events.push_back(NetworkBehaviourAction::GenerateEvent(
                 GenericGossipsubEvent::Message {
@@ -2260,15 +2253,12 @@ where
         let mut recipient_peers = HashSet::new();
 
         // add mesh peers
-        for topic in &message.topic {
-            // mesh
-            if let Some(mesh_peers) = self.mesh.get(&topic) {
-                for peer_id in mesh_peers {
-                    if Some(peer_id) != propagation_source
-                        && Some(peer_id) != message.source.as_ref()
-                    {
-                        recipient_peers.insert(peer_id.clone());
-                    }
+        let topic = &message.topic;
+        // mesh
+        if let Some(mesh_peers) = self.mesh.get(&topic) {
+            for peer_id in mesh_peers {
+                if Some(peer_id) != propagation_source && Some(peer_id) != message.source.as_ref() {
+                    recipient_peers.insert(peer_id.clone());
                 }
             }
         }
@@ -2278,11 +2268,7 @@ where
             if let Some(topics) = self.peer_topics.get(p) {
                 if Some(p) != propagation_source
                     && Some(p) != message.source.as_ref()
-                    && message
-                        .topic
-                        .as_ref()
-                        .map(|t| topics.contains(t))
-                        .unwrap_or(false)
+                    && topics.contains(&message.topic)
                 {
                     recipient_peers.insert(p.clone());
                 }
@@ -2331,7 +2317,7 @@ where
                         from: Some(author.clone().into_bytes()),
                         data: Some(data.clone().into()),
                         seqno: Some(sequence_number.to_be_bytes().to_vec()),
-                        topic: Some(topic.clone().into_string()),
+                        topic: topic.clone().into_string(),
                         signature: None,
                         key: None,
                     };
@@ -2353,7 +2339,7 @@ where
                     // To be interoperable with the go-implementation this is treated as a 64-bit
                     // big-endian uint.
                     sequence_number: Some(sequence_number),
-                    topic: Some(topic),
+                    topic,
                     signature,
                     key: inline_key.clone(),
                     validated: true, // all published messages are valid
@@ -2366,7 +2352,7 @@ where
                     // To be interoperable with the go-implementation this is treated as a 64-bit
                     // big-endian uint.
                     sequence_number: Some(rand::random()),
-                    topic: Some(topic),
+                    topic,
                     signature: None,
                     key: None,
                     validated: true, // all published messages are valid
@@ -2379,7 +2365,7 @@ where
                     // To be interoperable with the go-implementation this is treated as a 64-bit
                     // big-endian uint.
                     sequence_number: Some(rand::random()),
-                    topic: Some(topic),
+                    topic,
                     signature: None,
                     key: None,
                     validated: true, // all published messages are valid
@@ -2392,7 +2378,7 @@ where
                     // To be interoperable with the go-implementation this is treated as a 64-bit
                     // big-endian uint.
                     sequence_number: None,
-                    topic: Some(topic),
+                    topic,
                     signature: None,
                     key: None,
                     validated: true, // all published messages are valid
@@ -3130,7 +3116,7 @@ mod local_test {
             source: Some(PeerId::random()),
             data: vec![0; 100],
             sequence_number: None,
-            topic: None,
+            topic: TopicHash::from_raw("test_topic"),
             signature: None,
             key: None,
             validated: false,

@@ -334,7 +334,7 @@ impl Decoder for GossipsubCodec {
                     source: None, // don't bother inform the application
                     data: message.data.unwrap_or_default(),
                     sequence_number: None, // don't inform the application
-                    topic: message.topic.map(TopicHash::from_raw),
+                    topic: TopicHash::from_raw(message.topic),
                     signature: None, // don't inform the application
                     key: message.key,
                     validated: false,
@@ -354,7 +354,7 @@ impl Decoder for GossipsubCodec {
                     source: None, // don't bother inform the application
                     data: message.data.unwrap_or_default(),
                     sequence_number: None, // don't inform the application
-                    topic: message.topic.map(TopicHash::from_raw),
+                    topic: TopicHash::from_raw(message.topic),
                     signature: None, // don't inform the application
                     key: message.key,
                     validated: false,
@@ -379,7 +379,7 @@ impl Decoder for GossipsubCodec {
                             source: None, // don't bother inform the application
                             data: message.data.unwrap_or_default(),
                             sequence_number: None, // don't inform the application
-                            topic: message.topic.map(TopicHash::from_raw),
+                            topic: TopicHash::from_raw(message.topic),
                             signature: message.signature, // don't inform the application
                             key: message.key,
                             validated: false,
@@ -398,7 +398,7 @@ impl Decoder for GossipsubCodec {
                         source: None, // don't bother inform the application
                         data: message.data.unwrap_or_default(),
                         sequence_number: None, // don't inform the application
-                        topic: message.topic.map(TopicHash::from_raw),
+                        topic: TopicHash::from_raw(message.topic),
                         signature: message.signature, // don't inform the application
                         key: message.key,
                         validated: false,
@@ -424,7 +424,7 @@ impl Decoder for GossipsubCodec {
                                     source: None, // don't bother inform the application
                                     data: message.data.unwrap_or_default(),
                                     sequence_number,
-                                    topic: message.topic.map(TopicHash::from_raw),
+                                    topic: TopicHash::from_raw(message.topic),
                                     signature: message.signature, // don't inform the application
                                     key: message.key,
                                     validated: false,
@@ -448,7 +448,7 @@ impl Decoder for GossipsubCodec {
                 source,
                 data: message.data.unwrap_or_default(),
                 sequence_number,
-                topic: message.topic.map(TopicHash::from_raw),
+                topic: TopicHash::from_raw(message.topic),
                 signature: message.signature,
                 key: message.key,
                 validated: false,
