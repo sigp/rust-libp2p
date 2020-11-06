@@ -118,7 +118,7 @@ pub struct GenericGossipsubConfig<T> {
 
     /// When set to `true`, prevents automatic forwarding of all received messages. This setting
     /// allows a user to validate the messages before propagating them to their peers. If set to
-    /// true, the user must manually call [crate::Gossipsub::report_message_validation_result()] on the behaviour to forward message
+    /// true, the user must manually call [crate::GenericGossipsub::report_message_validation_result()] on the behaviour to forward message
     /// once validated (default is `false`).
     validate_messages: bool,
 
