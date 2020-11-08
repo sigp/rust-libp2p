@@ -28,7 +28,7 @@ use std::collections::{
 use std::time::Duration;
 use wasm_timer::Instant;
 
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 struct HeartbeatIndex(usize);
 
 /// Stores backoffs in an efficient manner.
@@ -100,7 +100,7 @@ impl BackoffStorage {
                         s.remove(&pair);
                     }
                     let index = insert_into_backoffs_by_heartbeat(
-                        self.heartbeat_index.clone(),
+                        self.heartbeat_index,
                         &mut self.backoffs_by_heartbeat,
                         &self.heartbeat_interval,
                         self.backoff_slack,
@@ -110,7 +110,7 @@ impl BackoffStorage {
             }
             Entry::Vacant(v) => {
                 let index = insert_into_backoffs_by_heartbeat(
-                    self.heartbeat_index.clone(),
+                    self.heartbeat_index,
                     &mut self.backoffs_by_heartbeat,
                     &self.heartbeat_interval,
                     self.backoff_slack,
