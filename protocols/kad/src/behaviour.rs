@@ -24,13 +24,7 @@ mod test;
 
 use crate::K_VALUE;
 use crate::addresses::Addresses;
-use crate::handler::{
-    KademliaHandlerProto,
-    KademliaHandlerConfig,
-    KademliaRequestId,
-    KademliaHandlerEvent,
-    KademliaHandlerIn
-};
+use crate::handler::{KademliaHandler, KademliaHandlerConfig, KademliaRequestId, KademliaHandlerEvent, KademliaHandlerIn};
 use crate::jobs::*;
 use crate::kbucket::{self, KBucketsTable, NodeStatus};
 use crate::protocol::{KademliaProtocolConfig, KadConnectionType, KadPeer};
@@ -44,6 +38,7 @@ use libp2p_swarm::{
     NetworkBehaviourAction,
     NotifyHandler,
     PollParameters,
+    ProtocolsHandler
 };
 use log::{info, debug, warn};
 use smallvec::SmallVec;
@@ -1433,11 +1428,11 @@ where
     for<'a> TStore: RecordStore<'a>,
     TStore: Send + 'static,
 {
-    type ProtocolsHandler = KademliaHandlerProto<QueryId>;
+    type ProtocolsHandler = KademliaHandler<QueryId>;
     type OutEvent = KademliaEvent;
 
     fn new_handler(&mut self) -> Self::ProtocolsHandler {
-        KademliaHandlerProto::new(KademliaHandlerConfig {
+        KademliaHandler::new(KademliaHandlerConfig {
             protocol_config: self.protocol_config.clone(),
             allow_listening: true,
             idle_timeout: self.connection_idle_timeout,
@@ -1467,11 +1462,17 @@ where
         peer_addrs
     }
 
-    fn inject_connection_established(&mut self, _: &PeerId, _: &ConnectionId, _: &ConnectedPoint) {
-        // When a connection is established, we don't know yet whether the
-        // remote supports the configured protocol name. Only once a connection
-        // handler reports [`KademliaHandlerEvent::ProtocolConfirmed`] do we
-        // update the local routing table.
+    fn inject_connection_established(&mut self, peer: &PeerId, _: &ConnectionId, endpoint: &ConnectedPoint) {
+        // The remote's address can only be put into the routing table,
+        // and thus shared with other nodes, if the local node is the dialer,
+        // since the remote address on an inbound connection is specific to
+        // that connection (e.g. typically the TCP port numbers).
+        let address = match endpoint {
+            ConnectedPoint::Dialer { address } => Some(address.clone()),
+            ConnectedPoint::Listener { .. } => None,
+        };
+
+        self.connection_updated(peer.clone(), address, NodeStatus::Connected);
     }
 
     fn inject_connected(&mut self, peer: &PeerId) {
@@ -1605,19 +1606,6 @@ where
         event: KademliaHandlerEvent<QueryId>
     ) {
         match event {
-            KademliaHandlerEvent::ProtocolConfirmed { endpoint } => {
-                debug_assert!(self.connected_peers.contains(&source));
-                // The remote's address can only be put into the routing table,
-                // and thus shared with other nodes, if the local node is the dialer,
-                // since the remote address on an inbound connection may be specific
-                // to that connection (e.g. typically the TCP port numbers).
-                let address = match endpoint {
-                    ConnectedPoint::Dialer { address } => Some(address.clone()),
-                    ConnectedPoint::Listener { .. } => None,
-                };
-                self.connection_updated(source, address, NodeStatus::Connected);
-            }
-
             KademliaHandlerEvent::FindNodeReq { key, request_id } => {
                 let closer_peers = self.find_closest(&kbucket::Key::new(key), &source);
                 self.queued_events.push_back(NetworkBehaviourAction::NotifyHandler {
@@ -1816,7 +1804,7 @@ where
 
     fn poll(&mut self, cx: &mut Context<'_>, parameters: &mut impl PollParameters) -> Poll<
         NetworkBehaviourAction<
-            KademliaHandlerIn<QueryId>,
+            <KademliaHandler<QueryId> as ProtocolsHandler>::InEvent,
             Self::OutEvent,
         >,
     > {
