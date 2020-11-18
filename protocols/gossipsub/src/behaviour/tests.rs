@@ -20,6 +20,8 @@
 
 // collection of tests for the gossipsub network behaviour
 
+// mxinden: Impressive test coverage!
+
 mod tests {
     use byteorder::{BigEndian, ByteOrder};
     use std::thread::sleep;
@@ -1648,8 +1650,8 @@ mod tests {
         );
     }
 
-    #[test]
     // Tests the mesh maintenance addition
+    #[test]
     fn test_mesh_addition() {
         let config = GossipsubConfig::default();
 
@@ -1682,8 +1684,8 @@ mod tests {
         assert_eq!(gs.mesh.get(&topics[0]).unwrap().len(), config.mesh_n());
     }
 
-    #[test]
     // Tests the mesh maintenance subtraction
+    #[test]
     fn test_mesh_subtraction() {
         let config = GossipsubConfig::default();
 
@@ -4890,7 +4892,6 @@ mod tests {
                 address as *mut Pointers
             }};
         }
-
         #[derive(Clone, Default)]
         struct MessageData(pub Vec<u8>);
 

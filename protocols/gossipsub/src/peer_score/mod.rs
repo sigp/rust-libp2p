@@ -21,6 +21,9 @@
 //!
 //! Manages and stores the Scoring logic of a particular peer on the gossipsub behaviour.
 
+// mxinden: We have moved away from using `mod.rs` files in the rust-libp2p codebase. Please move
+// this file one directory up and rename it to `peer_score.rs`.
+
 use crate::time_cache::TimeCache;
 use crate::{MessageId, TopicHash};
 use libp2p_core::PeerId;

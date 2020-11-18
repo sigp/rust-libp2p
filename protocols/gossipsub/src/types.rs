@@ -72,11 +72,15 @@ macro_rules! declare_message_id_type {
 // A type for gossipsub message ids.
 declare_message_id_type!(MessageId, "MessageId");
 
+// mxinden: Do I understand correctly that a `FastMessageId` is used to reduce cost of hashing given
+// that it does not need to fulfill the same guarantees as MessageId? Is there a benchmark for a
+// sample fast message id hasher?
+//
 // A type for gossipsub fast messsage ids, not to confuse with "real" message ids.
 declare_message_id_type!(FastMessageId, "FastMessageId");
 
-#[derive(Debug, Clone, PartialEq)]
 /// Describes the types of peers that can exist in the gossipsub context.
+#[derive(Debug, Clone, PartialEq)]
 pub enum PeerKind {
     /// A gossipsub 1.1 peer.
     Gossipsubv1_1,

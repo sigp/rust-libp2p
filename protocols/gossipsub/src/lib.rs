@@ -41,7 +41,7 @@
 //! implementations, due to undefined elements in the current specification.
 //!
 //! - **Topics** -  In gossipsub, topics configurable by the `hash_topics` configuration parameter.
-//! Topics are of type `TopicHash`. The current go implementation uses raw utf-8 strings, and this
+//! Topics are of type [`TopicHash`]. The current go implementation uses raw utf-8 strings, and this
 //! is default configuration in rust-libp2p. Topics can be hashed (SHA256 hashed then base64
 //! encoded) by setting the `hash_topics` configuration parameter to true.
 //!
@@ -53,6 +53,8 @@
 //!
 //! # Using Gossipsub
 //!
+// mxinden: I think it will be hard to keep this part of the documentation in sync. Is the
+// duplication really necessary, or would the link suffice?
 //! ## GossipsubConfig
 //!
 //! The [`GenericGossipsubConfig`] struct specifies various network performance/tuning configuration
@@ -98,6 +100,7 @@
 //!
 //! An example of initialising a gossipsub compatible swarm:
 //!
+// mxinden: Why ignore the doc example? This would be a great way to keep it up-to-date.
 //! ```ignore
 //! #extern crate libp2p;
 //! #extern crate futures;
@@ -110,6 +113,8 @@
 //! let local_pub_key = local_key.public();
 //!
 //! // Set up an encrypted TCP Transport over the Mplex and Yamux protocols
+// mxinden: I suggest using the memory transport to not depend on any assumptions of the executing
+// machine.
 //! let transport = libp2p::build_development_transport(local_key);
 //!
 //! // Create a Floodsub/Gossipsub topic
@@ -130,7 +135,7 @@
 //!     )
 //! };
 //!
-//! // Listen on all interfaces and whatever port the OS assigns
+//! // Listen on all interfaces and whatever port the OS assigns.
 //! let addr = libp2p::Swarm::listen_on(&mut swarm, "/ip4/0.0.0.0/tcp/0".parse().unwrap()).unwrap();
 //! println!("Listening on {:?}", addr);
 //! ```

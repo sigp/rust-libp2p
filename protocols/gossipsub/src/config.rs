@@ -48,6 +48,9 @@ pub enum ValidationMode {
     None,
 }
 
+// mxinden: How is this /more/ generic than any other struct with a generic type parameter? Wouldn't
+// [`GenericGossipsubConfig`] suffice?
+//
 /// Configuration parameters that define the performance of the gossipsub network.
 #[derive(Clone)]
 pub struct GenericGossipsubConfig<T> {
@@ -76,6 +79,7 @@ pub struct GenericGossipsubConfig<T> {
     mesh_n_high: usize,
 
     /// Affects how peers are selected when pruning a mesh due to over subscription.
+    //
     //  At least `retain_scores` of the retained peers will be high-scoring, while the remainder are
     //  chosen randomly (D_score in the spec, default is 4).
     retain_scores: usize,
@@ -274,6 +278,7 @@ impl<T> GenericGossipsubConfig<T> {
     }
 
     /// Affects how peers are selected when pruning a mesh due to over subscription.
+    //
     //  At least `retain_scores` of the retained peers will be high-scoring, while the remainder are
     //  chosen randomly (D_score in the spec, default is 4).
     pub fn retain_scores(&self) -> usize {
@@ -287,6 +292,7 @@ impl<T> GenericGossipsubConfig<T> {
     }
 
     /// Affects how many peers we will emit gossip to at each heartbeat.
+    ///
     /// We will send gossip to `gossip_factor * (total number of non-mesh peers)`, or
     /// `gossip_lazy`, whichever is greater. The default is 0.25.
     pub fn gossip_factor(&self) -> f64 {
@@ -423,6 +429,8 @@ impl<T> GenericGossipsubConfig<T> {
         self.flood_publish
     }
 
+    // mxinden: Why // instead of ///?
+    //
     // If a GRAFT comes before `graft_flood_threshold` has elapsed since the last PRUNE,
     // then there is an extra score penalty applied to the peer through P7.
     pub fn graft_flood_threshold(&self) -> Duration {
@@ -436,6 +444,8 @@ impl<T> GenericGossipsubConfig<T> {
         self.mesh_outbound_min
     }
 
+    // mxinden: Why // instead of ///?
+    //
     // Number of heartbeat ticks that specifcy the interval in which opportunistic grafting is
     // applied. Every `opportunistic_graft_ticks` we will attempt to select some high-scoring mesh
     // peers to replace lower-scoring ones, if the median score of our mesh peers falls below a
@@ -445,6 +455,8 @@ impl<T> GenericGossipsubConfig<T> {
         self.opportunistic_graft_ticks
     }
 
+    // mxinden: Why // instead of ///?
+    //
     // Controls how many times we will allow a peer to request the same message id through IWANT
     // gossip before we start ignoring them. This is designed to prevent peers from spamming us
     // with requests and wasting our resources. The default is 3.
@@ -492,7 +504,7 @@ impl<T> GenericGossipsubConfig<T> {
 
 impl<T: Clone> Default for GenericGossipsubConfig<T> {
     fn default() -> Self {
-        //use GossipsubConfigBuilder to also validate defaults
+        // use GossipsubConfigBuilder to also validate defaults
         GenericGossipsubConfigBuilder::new()
             .build()
             .expect("Default config parameters should be valid parameters")
@@ -504,6 +516,9 @@ pub struct GenericGossipsubConfigBuilder<T> {
     config: GenericGossipsubConfig<T>,
 }
 
+// mxinden: Is this really needed? Do we already have to fear breaking the API at such an early
+// stage?
+//
 //for backwards compatibility
 pub type GossipsubConfigBuilder = GenericGossipsubConfigBuilder<Vec<u8>>;
 
@@ -522,6 +537,8 @@ impl<T> From<GenericGossipsubConfig<T>> for GenericGossipsubConfigBuilder<T> {
 }
 
 impl<T: Clone> GenericGossipsubConfigBuilder<T> {
+    // mxinden: Why not implement [`Default`]?
+    //
     // set default values
     pub fn new() -> Self {
         GenericGossipsubConfigBuilder {
@@ -616,6 +633,7 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
     }
 
     /// Affects how peers are selected when pruning a mesh due to over subscription.
+    //
     //  At least `retain_scores` of the retained peers will be high-scoring, while the remainder are
     //  chosen randomly (D_score in the spec, default is 4).
     pub fn retain_scores(&mut self, retain_scores: usize) -> &mut Self {
@@ -631,6 +649,7 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
     }
 
     /// Affects how many peers we will emit gossip to at each heartbeat.
+    ///
     /// We will send gossip to `gossip_factor * (total number of non-mesh peers)`, or
     /// `gossip_lazy`, whichever is greater. The default is 0.25.
     pub fn gossip_factor(&mut self, gossip_factor: f64) -> &mut Self {
@@ -700,8 +719,8 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
     /// addressing, where this function may be set to `hash(message)`. This would prevent messages
     /// of the same content from being duplicated.
     ///
-    /// The function takes a `GenericGossipsubMessage` as input and outputs a String to be interpreted as
-    /// the message id.
+    /// The function takes a [`GenericGossipsubMessage`] as input and outputs a String to be
+    /// interpreted as the message id.
     pub fn message_id_fn(
         &mut self,
         id_fn: fn(&GenericGossipsubMessage<T>) -> MessageId,
@@ -712,12 +731,12 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
 
     /// A user-defined optional function that computes fast ids from raw messages. This can be used
     /// to avoid possibly expensive transformations from `RawGossipsubMessage` to
-    /// `GenericGossipsubMessage<T>` for duplicates. Two semantically different messages must always
+    /// [`GenericGossipsubMessage<T>`] for duplicates. Two semantically different messages must always
     /// have different fast message ids, but it is allowed that two semantically identical messages
     /// have different fast message ids as long as the message_id_fn produces the same id for them.
     ///
-    /// The function takes a `RawGossipsubMessage` as input and outputs a String to be
-    /// interpreted as the fast message id. Default is None.
+    /// The function takes a [`RawGossipsubMessage`] as input and outputs a String to be interpreted
+    /// as the fast message id. Default is None.
     pub fn fast_message_id_fn(
         &mut self,
         fast_id_fn: fn(&RawGossipsubMessage) -> FastMessageId,
@@ -734,6 +753,7 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
     }
 
     /// Controls the number of peers to include in prune Peer eXchange.
+    ///
     /// When we prune a peer that's eligible for PX (has a good score, etc), we will try to
     /// send them signed peer records for up to `prune_peers` other peers that we
     /// know of. It is recommended that this value is larger than `mesh_n_high` so that the pruned
@@ -773,6 +793,8 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
         self
     }
 
+    // mxinden: Why // instead of ///?
+    //
     // If a GRAFT comes before `graft_flood_threshold` has elapsed since the last PRUNE,
     // then there is an extra score penalty applied to the peer through P7.
     pub fn graft_flood_threshold(&mut self, graft_flood_threshold: Duration) -> &mut Self {
@@ -788,6 +810,8 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
         self
     }
 
+    // mxinden: Why // instead of ///?
+    //
     // Number of heartbeat ticks that specifcy the interval in which opportunistic grafting is
     // applied. Every `opportunistic_graft_ticks` we will attempt to select some high-scoring mesh
     // peers to replace lower-scoring ones, if the median score of our mesh peers falls below a
@@ -798,6 +822,8 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
         self
     }
 
+    // mxinden: Why // instead of ///?
+    //
     // Controls how many times we will allow a peer to request the same message id through IWANT
     // gossip before we start ignoring them. This is designed to prevent peers from spamming us
     // with requests and wasting our resources.
@@ -837,6 +863,7 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
         self
     }
 
+    // mxinden: Missing doc comment on pub function.
     pub fn iwant_followup_time(&mut self, iwant_followup_time: Duration) -> &mut Self {
         self.config.iwant_followup_time = iwant_followup_time;
         self
@@ -848,6 +875,7 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
         self
     }
 
+    // mxinden: Missing doc comment on pub function.
     pub fn published_message_ids_cache_time(
         &mut self,
         published_message_ids_cache_time: Duration,

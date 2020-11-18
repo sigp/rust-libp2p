@@ -114,10 +114,13 @@ impl MessageAuthenticity {
     }
 }
 
+// mxinden: Wouldn't [`GossipsubEvent`] suffice? How is this /more/ generic than other structs with
+// generic type parameters?
+//
 /// Event that can be emitted by the gossipsub behaviour.
 #[derive(Debug)]
 pub enum GenericGossipsubEvent<T: AsRef<[u8]>> {
-    /// A message has been received.    
+    /// A message has been received.
     Message {
         /// The peer that forwarded us this message.
         propagation_source: PeerId,
@@ -199,6 +202,8 @@ impl From<MessageAuthenticity> for PublishConfig {
 type GossipsubNetworkBehaviourAction<T> =
     NetworkBehaviourAction<Arc<rpc_proto::Rpc>, GenericGossipsubEvent<T>>;
 
+// mxinden: Again, why prefix `Generic` here? Do we follow this pattern anywhere else?
+//
 /// Network behaviour that handles the gossipsub protocol.
 ///
 /// NOTE: Initialisation requires a [`MessageAuthenticity`] and [`GenericGossipsubConfig`] instance. If message signing is
@@ -231,6 +236,9 @@ pub struct GenericGossipsub<T: AsRef<[u8]>, Filter: TopicSubscriptionFilter> {
     /// A map of all connected peers to their subscribed topics.
     peer_topics: HashMap<PeerId, BTreeSet<TopicHash>>,
 
+    // mxinden: What makes a peer explicit? That it always stays in the mesh and that the local node
+    // gossips all messages to it? Woudl you mind extending the docs here?
+    //
     /// A set of all explicit peers.
     explicit_peers: HashSet<PeerId>,
 
@@ -274,12 +282,16 @@ pub struct GenericGossipsub<T: AsRef<[u8]>, Filter: TopicSubscriptionFilter> {
     /// promises.
     peer_score: Option<(PeerScore, PeerScoreThresholds, Interval, GossipPromises)>,
 
+    // mxinden: Would be nice to be consistent with the naming scheme of `count_iasked`.
+    //
     /// Counts the number of `IHAVE` received from each peer since the last heartbeat.
     count_peer_have: HashMap<PeerId, usize>,
 
     /// Counts the number of `IWANT` that we sent the each peer since the last heartbeat.
     count_iasked: HashMap<PeerId, usize>,
 
+    // mxinden: Do I understand that this is for anonymous or random author messages only? If so,
+    // can you add a comment?
     /// short term cache for published messsage ids
     published_message_ids: DuplicateCache<MessageId>,
 
@@ -289,6 +301,9 @@ pub struct GenericGossipsub<T: AsRef<[u8]>, Filter: TopicSubscriptionFilter> {
     subscription_filter: Filter,
 }
 
+// mxinden: I am fine breaking backwards compatibility at such an early stage. Can you elaborate why
+// this is so important?
+//
 // for backwards compatibility
 pub type Gossipsub = GenericGossipsub<Vec<u8>, AllowAllSubscriptionFilter>;
 
@@ -405,7 +420,8 @@ where
 
     /// Subscribe to a topic.
     ///
-    /// Returns true if the subscription worked. Returns false if we were already subscribed.
+    /// Returns [`Ok(true)`] if the subscription worked. Returns [`Ok(false)`] if we were already
+    /// subscribed.
     pub fn subscribe<H: Hasher>(&mut self, topic: &Topic<H>) -> Result<bool, SubscriptionError> {
         debug!("Subscribing to topic: {}", topic);
         let topic_hash = topic.hash();
@@ -449,7 +465,7 @@ where
 
     /// Unsubscribes from a topic.
     ///
-    /// Returns true if we were subscribed to this topic.
+    /// Returns [`Ok(true)`] if we were subscribed to this topic.
     pub fn unsubscribe<H: Hasher>(&mut self, topic: &Topic<H>) -> Result<bool, PublishError> {
         debug!("Unsubscribing from topic: {}", topic);
         let topic_hash = topic.hash();
@@ -516,6 +532,10 @@ where
             // possible to have a message that exceeds the RPC limit and is not caught here. A
             // warning log will be emitted in this case.
             return Err(PublishError::MessageTooLarge);
+
+            // mxinden: In case the message is still too large, how about emitting an event
+            // returning the message instead of silently dropping it? Haven't thought this fully
+            // through yet.
         }
 
         // Add published message to the duplicate cache.
@@ -631,21 +651,22 @@ where
         Ok(msg_id)
     }
 
-    /// This function should be called when `config.validate_messages()` is `true` after the
-    /// message got validated by the caller. Messages are stored in the
-    /// ['Memcache'] and validation is expected to be fast enough that the messages should still
-    /// exist in the cache. There are three possible validation outcomes and the outcome is given
-    /// in acceptance.
+    /// This function should be called when `config.validate_messages()` is `true` after the message
+    /// got validated by the caller. Messages are stored in the ['Memcache'] and validation is
+    /// expected to be fast enough that the messages should still exist in the cache. There are
+    /// three possible validation outcomes and the outcome is given in acceptance.
     ///
-    /// If acceptance = Accept the message will get propagated to the network. The
-    /// `propagation_source` parameter indicates who the message was received by and will not
-    ///  be forwarded back to that peer.
+    /// If acceptance = [`MessageAcceptance::Accept`] the message will get propagated to the
+    /// network. The `propagation_source` parameter indicates who the message was received by and
+    /// will not be forwarded back to that peer.
     ///
-    /// If acceptance = Reject the message will be deleted from the memcache and the P₄ penalty
-    /// will be applied to the `propagation_source`.
+    /// If acceptance = [`MessageAcceptance::Reject`] the message will be deleted from the memcache
+    /// and the P₄ penalty will be applied to the `propagation_source`.
     ///
-    /// If acceptance = Ignore the message will be deleted from the memcache but no P₄ penalty
-    /// will be applied.
+    // mxinden: I must be missing something. Where is this penalty applied?
+    //
+    /// If acceptance = [`MessageAcceptance::Ignore`] the message will be deleted from the memcache
+    /// but no P₄ penalty will be applied.
     ///
     /// This function will return true if the message was found in the cache and false if was not
     /// in the cache anymore.
@@ -712,7 +733,7 @@ where
         }
     }
 
-    /// Removes a blacklisted peer if it has previously been blacklisted.
+    /// Removes a peer from the blacklist if it has previously been blacklisted.
     pub fn remove_blacklisted_peer(&mut self, peer_id: &PeerId) {
         if self.blacklisted_peers.remove(peer_id) {
             debug!("Peer has been removed from the blacklist: {}", peer_id);
@@ -1327,7 +1348,7 @@ where
                     if below_threshold {
                         debug!(
                             "PRUNE: ignoring PX from peer {:?} with insufficient score \
-                        [score ={} topic = {}]",
+                             [score ={} topic = {}]",
                             peer_id, score, topic_hash
                         );
                         continue;
@@ -1351,7 +1372,9 @@ where
     fn px_connect(&mut self, mut px: Vec<PeerInfo>) {
         let n = self.config.prune_peers();
         // Ignore peerInfo with no ID
-        //TODO: Once signed records are spec'd: Can we use peerInfo without any IDs if they have a signed peer record?
+        //
+        //TODO: Once signed records are spec'd: Can we use peerInfo without any IDs if they have a
+        // signed peer record?
         px = px.into_iter().filter(|p| p.peer_id.is_some()).collect();
         if px.len() > n {
             // only use at most prune_peers many random peers
@@ -1361,8 +1384,8 @@ where
         }
 
         for p in px {
-            // TODO: Once signed records are spec'd: extract signed peer record if given and handle it, see
-            // https://github.com/libp2p/specs/pull/217
+            // TODO: Once signed records are spec'd: extract signed peer record if given and handle
+            // it, see https://github.com/libp2p/specs/pull/217
             if let Some(peer_id) = p.peer_id {
                 // mark as px peer
                 self.px_peers.insert(peer_id.clone());
@@ -1453,7 +1476,8 @@ where
         true
     }
 
-    /// Handles a newly received GossipsubMessage.
+    /// Handles a newly received [`RawGossipsubMessage`].
+    ///
     /// Forwards the message to all peers in the mesh.
     fn handle_received_message(&mut self, msg: RawGossipsubMessage, propagation_source: &PeerId) {
         let fast_message_id = self.config.fast_message_id(&msg);
@@ -1477,7 +1501,7 @@ where
 
         // Add the message to the duplicate caches and memcache.
         if let Some(fast_message_id) = fast_message_id {
-            //add id to cache
+            // add id to cache
             self.fast_messsage_id_cache
                 .entry(fast_message_id)
                 .or_insert_with(|| msg.message_id().clone());
@@ -1497,8 +1521,8 @@ where
             msg.message_id()
         );
 
-        // Tells score that message arrived (but is maybe not fully validated yet)
-        // Consider message as delivered for gossip promises
+        // Tells score that message arrived (but is maybe not fully validated yet).
+        // Consider message as delivered for gossip promises.
         if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
             peer_score.validate_message(propagation_source, &msg);
             gossip_promises.message_delivered(msg.message_id());
@@ -1770,7 +1794,7 @@ where
                     if score(p) < 0.0 {
                         debug!(
                             "HEARTBEAT: Prune peer {:?} with negative score [score = {}, topic = \
-                    {}]",
+                             {}]",
                             p,
                             score(p),
                             topic_hash
@@ -2240,6 +2264,7 @@ where
     }
 
     /// Helper function which forwards a message to mesh\[topic\] peers.
+    ///
     /// Returns true if at least one peer was messaged.
     fn forward_msg(
         &mut self,
@@ -2303,7 +2328,7 @@ where
         }
     }
 
-    /// Constructs a `GenericGossipsubMessage` performing message signing if required.
+    /// Constructs a [`GenericGossipsubMessage`] performing message signing if required.
     pub(crate) fn build_message(
         &self,
         topic: TopicHash,
@@ -2629,6 +2654,7 @@ where
     }
 }
 
+// mxinden: You can call `ConnectedPoint::get_remote_address` directly.
 fn get_remote_addr(endpoint: &ConnectedPoint) -> &Multiaddr {
     match endpoint {
         ConnectedPoint::Dialer { address } => address,
@@ -2804,6 +2830,9 @@ where
 
         // Add the IP to the peer scoring system
         if let Some((peer_score, ..)) = &mut self.peer_score {
+            // mxinden: The connection might run via a relay (see relay circuit spec). In that case
+            // all nodes using the same relay would have the same IP address. Is scoring based on
+            // the IP address a good idea in such scenario?
             if let Some(ip) = get_ip_addr(get_remote_addr(endpoint)) {
                 peer_score.add_ip(&peer_id, ip);
             } else {

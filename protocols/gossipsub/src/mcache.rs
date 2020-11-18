@@ -39,6 +39,8 @@ pub struct MessageCache<T> {
     /// For every message and peer the number of times this peer asked for the message
     iwant_counts: HashMap<MessageId, HashMap<PeerId, u32>>,
     history: Vec<Vec<CacheEntry>>,
+    // mxinden: Do I understand correctly that this is the amount of heartbeats one would gossip
+    // about? Would you mind documenting this property?
     gossip: usize,
 }
 
@@ -83,6 +85,9 @@ impl<T> MessageCache<T> {
     }
 
     /// Get a message with `message_id`
+    //
+    // mxinden: Do I see correctly that this is only used in tests? Why not tag it with
+    // `#[cfg(test)]` then instead of allowing dead code?
     #[allow(dead_code)]
     pub fn get(&self, message_id: &MessageId) -> Option<&GossipsubMessageWithId<T>> {
         self.msgs.get(message_id)
@@ -109,7 +114,7 @@ impl<T> MessageCache<T> {
         })
     }
 
-    /// Gets and validates a message with `message_id`.
+    /// Gets a message with [`MessageId`] and tags it as validated.
     pub fn validate(&mut self, message_id: &MessageId) -> Option<&GossipsubMessageWithId<T>> {
         self.msgs.get_mut(message_id).map(|message| {
             message.validated = true;
@@ -117,6 +122,7 @@ impl<T> MessageCache<T> {
         })
     }
 
+    // mxinden: What is a `Gossipid`? Should this not be [`MessageId`]?
     /// Get a list of GossipIds for a given topic
     pub fn get_gossip_ids(&self, topic: &TopicHash) -> Vec<MessageId> {
         self.history[..self.gossip]
@@ -147,7 +153,7 @@ impl<T> MessageCache<T> {
     }
 
     /// Shift the history array down one and delete messages associated with the
-    /// last entry
+    /// last entry.
     pub fn shift(&mut self) {
         for entry in self.history.pop().expect("history is always > 1") {
             if let Some(msg) = self.msgs.remove(&entry.mid) {
@@ -155,8 +161,9 @@ impl<T> MessageCache<T> {
                     // If GossipsubConfig::validate_messages is true, the implementing
                     // application has to ensure that Gossipsub::validate_message gets called for
                     // each received message within the cache timeout time."
-                    debug!("The message with id {} got removed from the cache without being validated.",
-                    &entry.mid
+                    debug!(
+                        "The message with id {} got removed from the cache without being validated.",
+                        &entry.mid
                     );
                 }
             }
