@@ -62,28 +62,6 @@
 //!
 //! [`GenericGossipsubConfig`]: struct.GenericGossipsubConfig.html
 //!
-//! - `protocol_id` - The protocol id that this implementation will accept connections on.
-//! - `history_length` - The number of heartbeats which past messages are kept in cache (default: 5).
-//! - `history_gossip` - The number of past heartbeats that the node will send gossip metadata
-//! about (default: 3).
-//! - `mesh_n` - The target number of peers store in the local mesh network.
-//! (default: 6).
-//! - `mesh_n_low` - The minimum number of peers in the local mesh network before.
-//! trying to add more peers to the mesh from the connected peer pool (default: 4).
-//! - `mesh_n_high` - The maximum number of peers in the local mesh network before removing peers to
-//! reach `mesh_n` peers (default: 12).
-//! - `gossip_lazy` - The number of peers that the local node will gossip to during a heartbeat (default: `mesh_n` = 6).
-//! - `heartbeat_initial_delay - The initial time delay before starting the first heartbeat (default: 5 seconds).
-//! - `heartbeat_interval` - The time between each heartbeat (default: 1 second).
-//! - `fanout_ttl` - The fanout time to live time period. The timeout required before removing peers from the fanout
-//! for a given topic (default: 1 minute).
-//! - `max_transmit_size` - This sets the maximum transmission size for total gossipsub messages on the network.
-//! - `hash_topics` - Whether to hash the topics using base64(SHA256(topic)) or to leave as plain utf-8 strings.
-//! - `manual_propagation` - Whether gossipsub should immediately forward received messages on the
-//! network. For applications requiring message validation, this should be set to false, then the
-//! application should call `propagate_message(message_id, propagation_source)` once validated, to
-//! propagate the message to peers.
-//!
 //! This struct implements the `Default` trait and can be initialised via
 //! `GenericGossipsubConfig::default()`.
 //!

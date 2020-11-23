@@ -39,8 +39,9 @@ pub struct MessageCache<T> {
     /// For every message and peer the number of times this peer asked for the message
     iwant_counts: HashMap<MessageId, HashMap<PeerId, u32>>,
     history: Vec<Vec<CacheEntry>>,
-    // mxinden: Do I understand correctly that this is the amount of heartbeats one would gossip
-    // about? Would you mind documenting this property?
+    /// The number of indices in the cache history used for gossipping. That means that a message
+    /// won't get gossipped anymore when shift got called `gossip` many times after inserting the
+    /// message in the cache.
     gossip: usize,
 }
 
@@ -85,10 +86,7 @@ impl<T> MessageCache<T> {
     }
 
     /// Get a message with `message_id`
-    //
-    // mxinden: Do I see correctly that this is only used in tests? Why not tag it with
-    // `#[cfg(test)]` then instead of allowing dead code?
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn get(&self, message_id: &MessageId) -> Option<&GossipsubMessageWithId<T>> {
         self.msgs.get(message_id)
     }

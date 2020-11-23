@@ -561,7 +561,7 @@ mod tests {
         // - Insert message into gs.mcache and gs.received
 
         //turn off flood publish to test old behaviour
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .flood_publish(false)
             .build()
             .unwrap();
@@ -631,7 +631,7 @@ mod tests {
         // - Insert message into gs.mcache and gs.received
 
         //turn off flood publish to test fanout behaviour
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .flood_publish(false)
             .build()
             .unwrap();
@@ -844,7 +844,7 @@ mod tests {
     /// Test Gossipsub.get_random_peers() function
     fn test_get_random_peers() {
         // generate a default GossipsubConfig
-        let gs_config = GossipsubConfigBuilder::new()
+        let gs_config = GossipsubConfigBuilder::default()
             .validation_mode(ValidationMode::Anonymous)
             .build()
             .unwrap();
@@ -1291,7 +1291,7 @@ mod tests {
 
     #[test]
     fn test_explicit_peer_reconnects() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .check_explicit_peers_ticks(2)
             .build()
             .unwrap();
@@ -1857,7 +1857,7 @@ mod tests {
 
     #[test]
     fn test_do_not_graft_within_backoff_period() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .backoff_slack(1)
             .heartbeat_interval(Duration::from_millis(100))
             .build()
@@ -1913,7 +1913,7 @@ mod tests {
     #[test]
     fn test_do_not_graft_within_default_backoff_period_after_receiving_prune_without_backoff() {
         //set default backoff period to 1 second
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .prune_backoff(Duration::from_millis(90))
             .backoff_slack(1)
             .heartbeat_interval(Duration::from_millis(100))
@@ -2138,7 +2138,7 @@ mod tests {
         //use an extreme case to catch errors with high probability
         let m = 50;
         let n = 2 * m;
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .mesh_n_high(n)
             .mesh_n(n)
             .mesh_n_low(n)
@@ -2352,7 +2352,7 @@ mod tests {
 
     #[test]
     fn test_only_send_nonnegative_scoring_peers_in_px() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .prune_peers(16)
             .do_px()
             .build()
@@ -2617,7 +2617,7 @@ mod tests {
 
     #[test]
     fn test_do_not_publish_to_peer_below_publish_threshold() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .flood_publish(false)
             .build()
             .unwrap();
@@ -2859,7 +2859,7 @@ mod tests {
 
     #[test]
     fn test_ignore_px_from_peers_below_accept_px_threshold() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .prune_peers(16)
             .build()
             .unwrap();
@@ -2935,7 +2935,7 @@ mod tests {
 
     #[test]
     fn test_keep_best_scoring_peers_on_oversubscription() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .mesh_n_low(15)
             .mesh_n(30)
             .mesh_n_high(60)
@@ -3261,7 +3261,7 @@ mod tests {
 
     #[test]
     fn test_scoring_p3b() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .prune_backoff(Duration::from_millis(100))
             .build()
             .unwrap();
@@ -3358,7 +3358,7 @@ mod tests {
 
     #[test]
     fn test_scoring_p4_valid_message() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .validate_messages()
             .build()
             .unwrap();
@@ -3414,7 +3414,7 @@ mod tests {
 
     #[test]
     fn test_scoring_p4_invalid_signature() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .validate_messages()
             .build()
             .unwrap();
@@ -3472,7 +3472,7 @@ mod tests {
 
     #[test]
     fn test_scoring_p4_message_from_self() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .validate_messages()
             .build()
             .unwrap();
@@ -3522,7 +3522,7 @@ mod tests {
 
     #[test]
     fn test_scoring_p4_ignored_message() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .validate_messages()
             .build()
             .unwrap();
@@ -3578,7 +3578,7 @@ mod tests {
 
     #[test]
     fn test_scoring_p4_application_invalidated_message() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .validate_messages()
             .build()
             .unwrap();
@@ -3637,7 +3637,7 @@ mod tests {
 
     #[test]
     fn test_scoring_p4_application_invalid_message_from_two_peers() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .validate_messages()
             .build()
             .unwrap();
@@ -3704,7 +3704,7 @@ mod tests {
 
     #[test]
     fn test_scoring_p4_three_application_invalid_messages() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .validate_messages()
             .build()
             .unwrap();
@@ -3780,7 +3780,7 @@ mod tests {
 
     #[test]
     fn test_scoring_p4_decay() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .validate_messages()
             .build()
             .unwrap();
@@ -3986,7 +3986,7 @@ mod tests {
 
     #[test]
     fn test_scoring_p7_grafts_before_backoff() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .prune_backoff(Duration::from_millis(200))
             .graft_flood_threshold(Duration::from_millis(100))
             .build()
@@ -4056,7 +4056,7 @@ mod tests {
 
     #[test]
     fn test_opportunistic_grafting() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .mesh_n_low(3)
             .mesh_n(5)
             .mesh_n_high(7)
@@ -4215,7 +4215,7 @@ mod tests {
 
     #[test]
     fn test_ignore_too_many_ihaves() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .max_ihave_messages(10)
             .build()
             .unwrap();
@@ -4301,7 +4301,7 @@ mod tests {
 
     #[test]
     fn test_ignore_too_many_messages_in_ihave() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .max_ihave_messages(10)
             .max_ihave_length(10)
             .build()
@@ -4394,7 +4394,7 @@ mod tests {
 
     #[test]
     fn test_limit_number_of_message_ids_inside_ihave() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .max_ihave_messages(10)
             .max_ihave_length(100)
             .build()
@@ -4475,7 +4475,7 @@ mod tests {
 
     #[test]
     fn test_iwant_penalties() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .iwant_followup_time(Duration::from_secs(4))
             .build()
             .unwrap();
@@ -4584,7 +4584,7 @@ mod tests {
 
     #[test]
     fn test_publish_to_floodsub_peers_without_flood_publish() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .flood_publish(false)
             .build()
             .unwrap();
@@ -4640,7 +4640,7 @@ mod tests {
 
     #[test]
     fn test_do_not_use_floodsub_in_fanout() {
-        let config = GossipsubConfigBuilder::new()
+        let config = GossipsubConfigBuilder::default()
             .flood_publish(false)
             .build()
             .unwrap();
@@ -4942,7 +4942,7 @@ mod tests {
             }
             id
         };
-        let config = GenericGossipsubConfigBuilder::new()
+        let config = GenericGossipsubConfigBuilder::default()
             .message_id_fn(message_id_fn)
             .fast_message_id_fn(fast_message_id_fn)
             .build()

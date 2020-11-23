@@ -290,9 +290,8 @@ pub struct GenericGossipsub<T: AsRef<[u8]>, Filter: TopicSubscriptionFilter> {
     /// Counts the number of `IWANT` that we sent the each peer since the last heartbeat.
     count_iasked: HashMap<PeerId, usize>,
 
-    // mxinden: Do I understand that this is for anonymous or random author messages only? If so,
-    // can you add a comment?
-    /// short term cache for published messsage ids
+    /// Short term cache for published messsage ids. This is used for penalizing peers sending
+    /// our own messages back if the messages are anonymous or use a random author.
     published_message_ids: DuplicateCache<MessageId>,
 
     /// short term cache for fast message ids mapping them to the real message ids
@@ -2654,14 +2653,6 @@ where
     }
 }
 
-// mxinden: You can call `ConnectedPoint::get_remote_address` directly.
-fn get_remote_addr(endpoint: &ConnectedPoint) -> &Multiaddr {
-    match endpoint {
-        ConnectedPoint::Dialer { address } => address,
-        ConnectedPoint::Listener { send_back_addr, .. } => send_back_addr,
-    }
-}
-
 fn get_ip_addr(addr: &Multiaddr) -> Option<IpAddr> {
     addr.iter().find_map(|p| match p {
         Ip4(addr) => Some(IpAddr::V4(addr)),
@@ -2833,7 +2824,7 @@ where
             // mxinden: The connection might run via a relay (see relay circuit spec). In that case
             // all nodes using the same relay would have the same IP address. Is scoring based on
             // the IP address a good idea in such scenario?
-            if let Some(ip) = get_ip_addr(get_remote_addr(endpoint)) {
+            if let Some(ip) = get_ip_addr(endpoint.get_remote_address()) {
                 peer_score.add_ip(&peer_id, ip);
             } else {
                 trace!(
@@ -2853,7 +2844,7 @@ where
     ) {
         // Remove IP from peer scoring system
         if let Some((peer_score, ..)) = &mut self.peer_score {
-            if let Some(ip) = get_ip_addr(get_remote_addr(endpoint)) {
+            if let Some(ip) = get_ip_addr(endpoint.get_remote_address()) {
                 peer_score.remove_ip(peer, &ip);
             } else {
                 trace!(
@@ -2874,7 +2865,7 @@ where
     ) {
         // Exchange IP in peer scoring system
         if let Some((peer_score, ..)) = &mut self.peer_score {
-            if let Some(ip) = get_ip_addr(get_remote_addr(endpoint_old)) {
+            if let Some(ip) = get_ip_addr(endpoint_old.get_remote_address()) {
                 peer_score.remove_ip(peer, &ip);
             } else {
                 trace!(
@@ -2883,7 +2874,7 @@ where
                     endpoint_old
                 )
             }
-            if let Some(ip) = get_ip_addr(get_remote_addr(endpoint_new)) {
+            if let Some(ip) = get_ip_addr(endpoint_new.get_remote_address()) {
                 peer_score.add_ip(&peer, ip);
             } else {
                 trace!(
@@ -3199,7 +3190,7 @@ mod local_test {
     /// Tests RPC message fragmentation
     fn test_message_fragmentation_deterministic() {
         let max_transmit_size = 500;
-        let config = crate::GenericGossipsubConfigBuilder::new()
+        let config = crate::GenericGossipsubConfigBuilder::default()
             .max_transmit_size(max_transmit_size)
             .validation_mode(ValidationMode::Permissive)
             .build()
@@ -3247,7 +3238,7 @@ mod local_test {
     fn test_message_fragmentation() {
         fn prop(rpc: GossipsubRpc) {
             let max_transmit_size = 500;
-            let config = crate::GenericGossipsubConfigBuilder::new()
+            let config = crate::GenericGossipsubConfigBuilder::default()
                 .max_transmit_size(max_transmit_size)
                 .validation_mode(ValidationMode::Permissive)
                 .build()

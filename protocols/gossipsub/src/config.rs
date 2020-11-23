@@ -79,9 +79,9 @@ pub struct GenericGossipsubConfig<T> {
     mesh_n_high: usize,
 
     /// Affects how peers are selected when pruning a mesh due to over subscription.
-    //
-    //  At least `retain_scores` of the retained peers will be high-scoring, while the remainder are
-    //  chosen randomly (D_score in the spec, default is 4).
+    ///
+    /// At least `retain_scores` of the retained peers will be high-scoring, while the remainder are
+    /// chosen randomly (D_score in the spec, default is 4).
     retain_scores: usize,
 
     /// Minimum number of peers to emit gossip to during a heartbeat (D_lazy in the spec,
@@ -187,9 +187,9 @@ pub struct GenericGossipsubConfig<T> {
     /// good enough score. The default is true.
     flood_publish: bool,
 
-    // If a GRAFT comes before `graft_flood_threshold` has elapsed since the last PRUNE,
-    // then there is an extra score penalty applied to the peer through P7. The default is 10
-    // seconds.
+    /// If a GRAFT comes before `graft_flood_threshold` has elapsed since the last PRUNE,
+    /// then there is an extra score penalty applied to the peer through P7. The default is 10
+    /// seconds.
     graft_flood_threshold: Duration,
 
     /// Minimum number of outbound peers in the mesh network before adding more (D_out in the spec).
@@ -197,11 +197,11 @@ pub struct GenericGossipsubConfig<T> {
     /// The default is 2.
     mesh_outbound_min: usize,
 
-    // Number of heartbeat ticks that specifcy the interval in which opportunistic grafting is
-    // applied. Every `opportunistic_graft_ticks` we will attempt to select some high-scoring mesh
-    // peers to replace lower-scoring ones, if the median score of our mesh peers falls below a
-    // threshold (see https://godoc.org/github.com/libp2p/go-libp2p-pubsub#PeerScoreThresholds).
-    // The default is 60.
+    /// Number of heartbeat ticks that specifcy the interval in which opportunistic grafting is
+    /// applied. Every `opportunistic_graft_ticks` we will attempt to select some high-scoring mesh
+    /// peers to replace lower-scoring ones, if the median score of our mesh peers falls below a
+    /// threshold (see https://godoc.org/github.com/libp2p/go-libp2p-pubsub#PeerScoreThresholds).
+    /// The default is 60.
     opportunistic_graft_ticks: u64,
 
     /// The maximum number of new peers to graft to during opportunistic grafting. The default is 2.
@@ -429,10 +429,8 @@ impl<T> GenericGossipsubConfig<T> {
         self.flood_publish
     }
 
-    // mxinden: Why // instead of ///?
-    //
-    // If a GRAFT comes before `graft_flood_threshold` has elapsed since the last PRUNE,
-    // then there is an extra score penalty applied to the peer through P7.
+    /// If a GRAFT comes before `graft_flood_threshold` has elapsed since the last PRUNE,
+    /// then there is an extra score penalty applied to the peer through P7.
     pub fn graft_flood_threshold(&self) -> Duration {
         self.graft_flood_threshold
     }
@@ -444,22 +442,18 @@ impl<T> GenericGossipsubConfig<T> {
         self.mesh_outbound_min
     }
 
-    // mxinden: Why // instead of ///?
-    //
-    // Number of heartbeat ticks that specifcy the interval in which opportunistic grafting is
-    // applied. Every `opportunistic_graft_ticks` we will attempt to select some high-scoring mesh
-    // peers to replace lower-scoring ones, if the median score of our mesh peers falls below a
-    // threshold (see https://godoc.org/github.com/libp2p/go-libp2p-pubsub#PeerScoreThresholds).
-    // The default is 60.
+    /// Number of heartbeat ticks that specifcy the interval in which opportunistic grafting is
+    /// applied. Every `opportunistic_graft_ticks` we will attempt to select some high-scoring mesh
+    /// peers to replace lower-scoring ones, if the median score of our mesh peers falls below a
+    /// threshold (see https://godoc.org/github.com/libp2p/go-libp2p-pubsub#PeerScoreThresholds).
+    /// The default is 60.
     pub fn opportunistic_graft_ticks(&self) -> u64 {
         self.opportunistic_graft_ticks
     }
 
-    // mxinden: Why // instead of ///?
-    //
-    // Controls how many times we will allow a peer to request the same message id through IWANT
-    // gossip before we start ignoring them. This is designed to prevent peers from spamming us
-    // with requests and wasting our resources. The default is 3.
+    /// Controls how many times we will allow a peer to request the same message id through IWANT
+    /// gossip before we start ignoring them. This is designed to prevent peers from spamming us
+    /// with requests and wasting our resources. The default is 3.
     pub fn gossip_retransimission(&self) -> u32 {
         self.gossip_retransimission
     }
@@ -505,7 +499,7 @@ impl<T> GenericGossipsubConfig<T> {
 impl<T: Clone> Default for GenericGossipsubConfig<T> {
     fn default() -> Self {
         // use GossipsubConfigBuilder to also validate defaults
-        GenericGossipsubConfigBuilder::new()
+        GenericGossipsubConfigBuilder::default()
             .build()
             .expect("Default config parameters should be valid parameters")
     }
@@ -524,23 +518,6 @@ pub type GossipsubConfigBuilder = GenericGossipsubConfigBuilder<Vec<u8>>;
 
 impl<T: Clone> Default for GenericGossipsubConfigBuilder<T> {
     fn default() -> Self {
-        GenericGossipsubConfigBuilder {
-            config: GenericGossipsubConfig::default(),
-        }
-    }
-}
-
-impl<T> From<GenericGossipsubConfig<T>> for GenericGossipsubConfigBuilder<T> {
-    fn from(config: GenericGossipsubConfig<T>) -> Self {
-        GenericGossipsubConfigBuilder { config }
-    }
-}
-
-impl<T: Clone> GenericGossipsubConfigBuilder<T> {
-    // mxinden: Why not implement [`Default`]?
-    //
-    // set default values
-    pub fn new() -> Self {
         GenericGossipsubConfigBuilder {
             config: GenericGossipsubConfig {
                 protocol_id_prefix: Cow::Borrowed("meshsub"),
@@ -594,7 +571,15 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
             },
         }
     }
+}
 
+impl<T> From<GenericGossipsubConfig<T>> for GenericGossipsubConfigBuilder<T> {
+    fn from(config: GenericGossipsubConfig<T>) -> Self {
+        GenericGossipsubConfigBuilder { config }
+    }
+}
+
+impl<T: Clone> GenericGossipsubConfigBuilder<T> {
     /// The protocol id to negotiate this protocol (default is `/meshsub/1.0.0`).
     pub fn protocol_id_prefix(&mut self, protocol_id: impl Into<Cow<'static, str>>) -> &mut Self {
         self.config.protocol_id_prefix = protocol_id.into();
@@ -633,9 +618,9 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
     }
 
     /// Affects how peers are selected when pruning a mesh due to over subscription.
-    //
-    //  At least `retain_scores` of the retained peers will be high-scoring, while the remainder are
-    //  chosen randomly (D_score in the spec, default is 4).
+    ///
+    /// At least `retain_scores` of the retained peers will be high-scoring, while the remainder are
+    /// chosen randomly (D_score in the spec, default is 4).
     pub fn retain_scores(&mut self, retain_scores: usize) -> &mut Self {
         self.config.retain_scores = retain_scores;
         self
@@ -793,10 +778,8 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
         self
     }
 
-    // mxinden: Why // instead of ///?
-    //
-    // If a GRAFT comes before `graft_flood_threshold` has elapsed since the last PRUNE,
-    // then there is an extra score penalty applied to the peer through P7.
+    /// If a GRAFT comes before `graft_flood_threshold` has elapsed since the last PRUNE,
+    /// then there is an extra score penalty applied to the peer through P7.
     pub fn graft_flood_threshold(&mut self, graft_flood_threshold: Duration) -> &mut Self {
         self.config.graft_flood_threshold = graft_flood_threshold;
         self
@@ -810,23 +793,19 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
         self
     }
 
-    // mxinden: Why // instead of ///?
-    //
-    // Number of heartbeat ticks that specifcy the interval in which opportunistic grafting is
-    // applied. Every `opportunistic_graft_ticks` we will attempt to select some high-scoring mesh
-    // peers to replace lower-scoring ones, if the median score of our mesh peers falls below a
-    // threshold (see https://godoc.org/github.com/libp2p/go-libp2p-pubsub#PeerScoreThresholds).
-    // The default is 60.
+    /// Number of heartbeat ticks that specifcy the interval in which opportunistic grafting is
+    /// applied. Every `opportunistic_graft_ticks` we will attempt to select some high-scoring mesh
+    /// peers to replace lower-scoring ones, if the median score of our mesh peers falls below a
+    /// threshold (see https://godoc.org/github.com/libp2p/go-libp2p-pubsub#PeerScoreThresholds).
+    /// The default is 60.
     pub fn opportunistic_graft_ticks(&mut self, opportunistic_graft_ticks: u64) -> &mut Self {
         self.config.opportunistic_graft_ticks = opportunistic_graft_ticks;
         self
     }
 
-    // mxinden: Why // instead of ///?
-    //
-    // Controls how many times we will allow a peer to request the same message id through IWANT
-    // gossip before we start ignoring them. This is designed to prevent peers from spamming us
-    // with requests and wasting our resources.
+    /// Controls how many times we will allow a peer to request the same message id through IWANT
+    /// gossip before we start ignoring them. This is designed to prevent peers from spamming us
+    /// with requests and wasting our resources.
     pub fn gossip_retransimission(&mut self, gossip_retransimission: u32) -> &mut Self {
         self.config.gossip_retransimission = gossip_retransimission;
         self
@@ -863,7 +842,9 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
         self
     }
 
-    // mxinden: Missing doc comment on pub function.
+    /// Time to wait for a message requested through IWANT following an IHAVE advertisement.
+    /// If the message is not received within this window, a broken promise is declared and
+    /// the router may apply behavioural penalties. The default is 3 seconds.
     pub fn iwant_followup_time(&mut self, iwant_followup_time: Duration) -> &mut Self {
         self.config.iwant_followup_time = iwant_followup_time;
         self
@@ -875,7 +856,7 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
         self
     }
 
-    // mxinden: Missing doc comment on pub function.
+    /// Published message ids time cache duration. The default is 10 seconds.
     pub fn published_message_ids_cache_time(
         &mut self,
         published_message_ids_cache_time: Duration,
@@ -963,7 +944,7 @@ mod test {
 
     #[test]
     fn create_thing() {
-        let builder = GossipsubConfigBuilder::new()
+        let builder = GossipsubConfigBuilder::default()
             .protocol_id_prefix("purple")
             .build()
             .unwrap();
