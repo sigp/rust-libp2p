@@ -47,7 +47,7 @@ use libp2p_swarm::{
 };
 
 use crate::backoff::BackoffStorage;
-use crate::config::{GenericGossipsubConfig, ValidationMode};
+use crate::config::{Config, ValidationMode};
 use crate::error::{PublishError, SubscriptionError};
 use crate::gossip_promises::GossipPromises;
 use crate::handler::{GossipsubHandler, HandlerEvent};
@@ -114,12 +114,9 @@ impl MessageAuthenticity {
     }
 }
 
-// mxinden: Wouldn't [`GossipsubEvent`] suffice? How is this /more/ generic than other structs with
-// generic type parameters?
-//
 /// Event that can be emitted by the gossipsub behaviour.
 #[derive(Debug)]
-pub enum GenericGossipsubEvent<T: AsRef<[u8]>> {
+pub enum Event<T: AsRef<[u8]>> {
     /// A message has been received.
     Message {
         /// The peer that forwarded us this message.
@@ -145,8 +142,8 @@ pub enum GenericGossipsubEvent<T: AsRef<[u8]>> {
         topic: TopicHash,
     },
 }
-//for backwards compatibility
-pub type GossipsubEvent = GenericGossipsubEvent<Vec<u8>>;
+// For general use cases
+pub type GossipsubEvent = Event<Vec<u8>>;
 
 /// A data structure for storing configuration for publishing messages. See [`MessageAuthenticity`]
 /// for further details.
@@ -199,11 +196,8 @@ impl From<MessageAuthenticity> for PublishConfig {
     }
 }
 
-type GossipsubNetworkBehaviourAction<T> =
-    NetworkBehaviourAction<Arc<rpc_proto::Rpc>, GenericGossipsubEvent<T>>;
+type GossipsubNetworkBehaviourAction<T> = NetworkBehaviourAction<Arc<rpc_proto::Rpc>, Event<T>>;
 
-// mxinden: Again, why prefix `Generic` here? Do we follow this pattern anywhere else?
-//
 /// Network behaviour that handles the gossipsub protocol.
 ///
 /// NOTE: Initialisation requires a [`MessageAuthenticity`] and [`GenericGossipsubConfig`] instance. If message signing is
@@ -211,7 +205,7 @@ type GossipsubNetworkBehaviourAction<T> =
 /// accept unsigned messages.
 pub struct GenericGossipsub<T: AsRef<[u8]>, Filter: TopicSubscriptionFilter> {
     /// Configuration providing gossipsub performance parameters.
-    config: GenericGossipsubConfig<T>,
+    config: Config<T>,
 
     /// Events that need to be yielded to the outside when polling.
     events: VecDeque<GossipsubNetworkBehaviourAction<T>>,
@@ -236,10 +230,8 @@ pub struct GenericGossipsub<T: AsRef<[u8]>, Filter: TopicSubscriptionFilter> {
     /// A map of all connected peers to their subscribed topics.
     peer_topics: HashMap<PeerId, BTreeSet<TopicHash>>,
 
-    // mxinden: What makes a peer explicit? That it always stays in the mesh and that the local node
-    // gossips all messages to it? Woudl you mind extending the docs here?
-    //
-    /// A set of all explicit peers.
+    /// A set of all explicit peers. These are peers that remain connected and we unconditionally
+    /// forward messages to, outside of the scoring system.
     explicit_peers: HashSet<PeerId>,
 
     /// A list of peers that have been blacklisted by the user.
@@ -282,28 +274,24 @@ pub struct GenericGossipsub<T: AsRef<[u8]>, Filter: TopicSubscriptionFilter> {
     /// promises.
     peer_score: Option<(PeerScore, PeerScoreThresholds, Interval, GossipPromises)>,
 
-    // mxinden: Would be nice to be consistent with the naming scheme of `count_iasked`.
-    //
     /// Counts the number of `IHAVE` received from each peer since the last heartbeat.
-    count_peer_have: HashMap<PeerId, usize>,
+    count_received_ihave: HashMap<PeerId, usize>,
 
     /// Counts the number of `IWANT` that we sent the each peer since the last heartbeat.
-    count_iasked: HashMap<PeerId, usize>,
+    count_sent_iwant: HashMap<PeerId, usize>,
 
     /// Short term cache for published messsage ids. This is used for penalizing peers sending
     /// our own messages back if the messages are anonymous or use a random author.
     published_message_ids: DuplicateCache<MessageId>,
 
-    /// short term cache for fast message ids mapping them to the real message ids
+    /// Short term cache for fast message ids mapping them to the real message ids
     fast_messsage_id_cache: TimeCache<FastMessageId, MessageId>,
 
+    /// The filter used to handle message subscriptions.
     subscription_filter: Filter,
 }
 
-// mxinden: I am fine breaking backwards compatibility at such an early stage. Can you elaborate why
-// this is so important?
-//
-// for backwards compatibility
+// For general use and convenience.
 pub type Gossipsub = GenericGossipsub<Vec<u8>, AllowAllSubscriptionFilter>;
 
 impl<T, F> GenericGossipsub<T, F>
@@ -312,10 +300,7 @@ where
     F: TopicSubscriptionFilter + Default,
 {
     /// Creates a `GenericGossipsub` struct given a set of parameters specified via a `GenericGossipsubConfig`.
-    pub fn new(
-        privacy: MessageAuthenticity,
-        config: GenericGossipsubConfig<T>,
-    ) -> Result<Self, &'static str> {
+    pub fn new(privacy: MessageAuthenticity, config: Config<T>) -> Result<Self, &'static str> {
         Self::new_with_subscription_filter(privacy, config, F::default())
     }
 }
@@ -328,7 +313,7 @@ where
     /// Creates a `GenericGossipsub` struct given a set of parameters specified via a `GenericGossipsubConfig`.
     pub fn new_with_subscription_filter(
         privacy: MessageAuthenticity,
-        config: GenericGossipsubConfig<T>,
+        config: Config<T>,
         subscription_filter: F,
     ) -> Result<Self, &'static str> {
         // Set up the router given the configuration settings.
@@ -366,8 +351,8 @@ where
             px_peers: HashSet::new(),
             outbound_peers: HashSet::new(),
             peer_score: None,
-            count_peer_have: HashMap::new(),
-            count_iasked: HashMap::new(),
+            count_received_ihave: HashMap::new(),
+            count_sent_iwant: HashMap::new(),
             peer_protocols: HashMap::new(),
             published_message_ids: DuplicateCache::new(config.published_message_ids_cache_time()),
             config,
@@ -531,10 +516,6 @@ where
             // possible to have a message that exceeds the RPC limit and is not caught here. A
             // warning log will be emitted in this case.
             return Err(PublishError::MessageTooLarge);
-
-            // mxinden: In case the message is still too large, how about emitting an event
-            // returning the message instead of silently dropping it? Haven't thought this fully
-            // through yet.
         }
 
         // Add published message to the duplicate cache.
@@ -661,8 +642,6 @@ where
     ///
     /// If acceptance = [`MessageAcceptance::Reject`] the message will be deleted from the memcache
     /// and the P₄ penalty will be applied to the `propagation_source`.
-    ///
-    // mxinden: I must be missing something. Where is this penalty applied?
     //
     /// If acceptance = [`MessageAcceptance::Ignore`] the message will be deleted from the memcache
     /// but no P₄ penalty will be applied.
@@ -1011,7 +990,10 @@ where
         }
 
         // IHAVE flood protection
-        let peer_have = self.count_peer_have.entry(peer_id.clone()).or_insert(0);
+        let peer_have = self
+            .count_received_ihave
+            .entry(peer_id.clone())
+            .or_insert(0);
         *peer_have += 1;
         if *peer_have > self.config.max_ihave_messages() {
             debug!(
@@ -1022,7 +1004,7 @@ where
             return;
         }
 
-        if let Some(iasked) = self.count_iasked.get(peer_id) {
+        if let Some(iasked) = self.count_sent_iwant.get(peer_id) {
             if *iasked >= self.config.max_ihave_length() {
                 debug!(
                     "IHAVE: peer {} has already advertised too many messages ({}); ignoring",
@@ -1056,7 +1038,7 @@ where
         }
 
         if !iwant_ids.is_empty() {
-            let iasked = self.count_iasked.entry(peer_id.clone()).or_insert(0);
+            let iasked = self.count_sent_iwant.entry(peer_id.clone()).or_insert(0);
             let mut iask = iwant_ids.len();
             if *iasked + iask > self.config.max_ihave_length() {
                 iask = self.config.max_ihave_length().saturating_sub(*iasked);
@@ -1533,13 +1515,12 @@ where
         // Dispatch the message to the user if we are subscribed to any of the topics
         if self.mesh.contains_key(&msg.topic) {
             debug!("Sending received message to user");
-            self.events.push_back(NetworkBehaviourAction::GenerateEvent(
-                GenericGossipsubEvent::Message {
+            self.events
+                .push_back(NetworkBehaviourAction::GenerateEvent(Event::Message {
                     propagation_source: propagation_source.clone(),
                     message_id: msg.message_id().clone(),
                     message: msg.clone(),
-                },
-            ));
+                }));
         } else {
             debug!(
                 "Received message on a topic we are not subscribed to: {:?}",
@@ -1668,7 +1649,7 @@ where
                     }
                     // generates a subscription event to be polled
                     application_event.push(NetworkBehaviourAction::GenerateEvent(
-                        GenericGossipsubEvent::Subscribed {
+                        Event::Subscribed {
                             peer_id: propagation_source.clone(),
                             topic: subscription.topic_hash.clone(),
                         },
@@ -1688,7 +1669,7 @@ where
                         .push((propagation_source.clone(), subscription.topic_hash.clone()));
                     // generate an unsubscribe event to be polled
                     application_event.push(NetworkBehaviourAction::GenerateEvent(
-                        GenericGossipsubEvent::Unsubscribed {
+                        Event::Unsubscribed {
                             peer_id: propagation_source.clone(),
                             topic: subscription.topic_hash.clone(),
                         },
@@ -1754,8 +1735,8 @@ where
         self.backoffs.heartbeat();
 
         // clean up ihave counters
-        self.count_iasked.clear();
-        self.count_peer_have.clear();
+        self.count_sent_iwant.clear();
+        self.count_received_ihave.clear();
 
         // apply iwant penalties
         self.apply_iwant_penalties();
@@ -2115,7 +2096,7 @@ where
     fn emit_gossip(&mut self) {
         let mut rng = thread_rng();
         for (topic_hash, peers) in self.mesh.iter().chain(self.fanout.iter()) {
-            let mut message_ids = self.mcache.get_gossip_ids(&topic_hash);
+            let mut message_ids = self.mcache.get_gossip_message_ids(&topic_hash);
             if message_ids.is_empty() {
                 return;
             }
@@ -2667,7 +2648,7 @@ where
     F: Send + 'static + TopicSubscriptionFilter,
 {
     type ProtocolsHandler = GossipsubHandler;
-    type OutEvent = GenericGossipsubEvent<T>;
+    type OutEvent = Event<T>;
 
     fn new_handler(&mut self) -> Self::ProtocolsHandler {
         GossipsubHandler::new(
@@ -2821,9 +2802,6 @@ where
 
         // Add the IP to the peer scoring system
         if let Some((peer_score, ..)) = &mut self.peer_score {
-            // mxinden: The connection might run via a relay (see relay circuit spec). In that case
-            // all nodes using the same relay would have the same IP address. Is scoring based on
-            // the IP address a good idea in such scenario?
             if let Some(ip) = get_ip_addr(endpoint.get_remote_address()) {
                 peer_score.add_ip(&peer_id, ip);
             } else {
@@ -3190,7 +3168,7 @@ mod local_test {
     /// Tests RPC message fragmentation
     fn test_message_fragmentation_deterministic() {
         let max_transmit_size = 500;
-        let config = crate::GenericGossipsubConfigBuilder::default()
+        let config = crate::ConfigBuilder::default()
             .max_transmit_size(max_transmit_size)
             .validation_mode(ValidationMode::Permissive)
             .build()
@@ -3238,7 +3216,7 @@ mod local_test {
     fn test_message_fragmentation() {
         fn prop(rpc: GossipsubRpc) {
             let max_transmit_size = 500;
-            let config = crate::GenericGossipsubConfigBuilder::default()
+            let config = crate::ConfigBuilder::default()
                 .max_transmit_size(max_transmit_size)
                 .validation_mode(ValidationMode::Permissive)
                 .build()

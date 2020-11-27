@@ -18,9 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-// collection of tests for the gossipsub network behaviour
-
-// mxinden: Impressive test coverage!
+// Collection of tests for the gossipsub network behaviour
 
 mod tests {
     use byteorder::{BigEndian, ByteOrder};
@@ -31,7 +29,7 @@ mod tests {
     use rand::Rng;
 
     use crate::{
-        GenericGossipsubConfigBuilder, GossipsubConfig, GossipsubConfigBuilder, GossipsubMessage,
+        ConfigBuilder, GossipsubConfig, GossipsubConfigBuilder, GossipsubMessage,
         IdentTopic as Topic, TopicScoreParams,
     };
 
@@ -54,7 +52,7 @@ mod tests {
         peer_no: usize,
         topics: Vec<String>,
         to_subscribe: bool,
-        gs_config: GenericGossipsubConfig<T>,
+        gs_config: Config<T>,
         explicit: usize,
         outbound: usize,
         scoring: Option<(PeerScoreParams, PeerScoreThresholds)>,
@@ -4942,7 +4940,7 @@ mod tests {
             }
             id
         };
-        let config = GenericGossipsubConfigBuilder::default()
+        let config = ConfigBuilder::default()
             .message_id_fn(message_id_fn)
             .fast_message_id_fn(fast_message_id_fn)
             .build()

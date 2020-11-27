@@ -48,12 +48,12 @@ pub enum ValidationMode {
     None,
 }
 
-// mxinden: How is this /more/ generic than any other struct with a generic type parameter? Wouldn't
-// [`GenericGossipsubConfig`] suffice?
-//
+// For general use cases.
+pub type GossipsubConfig = Config<Vec<u8>>;
+
 /// Configuration parameters that define the performance of the gossipsub network.
 #[derive(Clone)]
-pub struct GenericGossipsubConfig<T> {
+pub struct Config<T> {
     /// The protocol id prefix to negotiate this protocol. The protocol id is of the form
     /// `/<prefix>/<supported-versions>`. As gossipsub supports version 1.0 and 1.1, there are two
     /// protocol id's supported.
@@ -146,6 +146,10 @@ pub struct GenericGossipsubConfig<T> {
     /// have different fast message ids, but it is allowed that two semantically identical messages
     /// have different fast message ids as long as the message_id_fn produces the same id for them.
     ///
+    /// On high intensive networks with lots of messages, where the message_id is based on the result of
+    /// decompressed traffic, it is beneficial to specify a `fast-message-id` that can identify and
+    /// filter duplicates quickly without performing the overhead of decompression.
+    ///
     /// The function takes a `RawGossipsubMessage` as input and outputs a String to be
     /// interpreted as the fast message id. Default is None.
     fast_message_id_fn: Option<fn(&RawGossipsubMessage) -> FastMessageId>,
@@ -235,10 +239,7 @@ pub struct GenericGossipsubConfig<T> {
     published_message_ids_cache_time: Duration,
 }
 
-// For backwards compatibility
-pub type GossipsubConfig = GenericGossipsubConfig<Vec<u8>>;
-
-impl<T> GenericGossipsubConfig<T> {
+impl<T> Config<T> {
     // All the getters
 
     /// The protocol id prefix to negotiate this protocol. The protocol id is of the form
@@ -496,30 +497,27 @@ impl<T> GenericGossipsubConfig<T> {
     }
 }
 
-impl<T: Clone> Default for GenericGossipsubConfig<T> {
+impl<T: Clone> Default for Config<T> {
     fn default() -> Self {
-        // use GossipsubConfigBuilder to also validate defaults
-        GenericGossipsubConfigBuilder::default()
+        // use ConfigBuilder to also validate defaults
+        ConfigBuilder::default()
             .build()
             .expect("Default config parameters should be valid parameters")
     }
 }
 
 /// The builder struct for constructing a gossipsub configuration.
-pub struct GenericGossipsubConfigBuilder<T> {
-    config: GenericGossipsubConfig<T>,
+pub struct ConfigBuilder<T> {
+    config: Config<T>,
 }
 
-// mxinden: Is this really needed? Do we already have to fear breaking the API at such an early
-// stage?
-//
-//for backwards compatibility
-pub type GossipsubConfigBuilder = GenericGossipsubConfigBuilder<Vec<u8>>;
+// For general use cases.
+pub type GossipsubConfigBuilder = ConfigBuilder<Vec<u8>>;
 
-impl<T: Clone> Default for GenericGossipsubConfigBuilder<T> {
+impl<T: Clone> Default for ConfigBuilder<T> {
     fn default() -> Self {
-        GenericGossipsubConfigBuilder {
-            config: GenericGossipsubConfig {
+        ConfigBuilder {
+            config: Config {
                 protocol_id_prefix: Cow::Borrowed("meshsub"),
                 history_length: 5,
                 history_gossip: 3,
@@ -573,13 +571,13 @@ impl<T: Clone> Default for GenericGossipsubConfigBuilder<T> {
     }
 }
 
-impl<T> From<GenericGossipsubConfig<T>> for GenericGossipsubConfigBuilder<T> {
-    fn from(config: GenericGossipsubConfig<T>) -> Self {
-        GenericGossipsubConfigBuilder { config }
+impl<T> From<Config<T>> for ConfigBuilder<T> {
+    fn from(config: Config<T>) -> Self {
+        ConfigBuilder { config }
     }
 }
 
-impl<T: Clone> GenericGossipsubConfigBuilder<T> {
+impl<T: Clone> ConfigBuilder<T> {
     /// The protocol id to negotiate this protocol (default is `/meshsub/1.0.0`).
     pub fn protocol_id_prefix(&mut self, protocol_id: impl Into<Cow<'static, str>>) -> &mut Self {
         self.config.protocol_id_prefix = protocol_id.into();
@@ -866,7 +864,7 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
     }
 
     /// Constructs a `GenericGossipsubConfig` from the given configuration and validates the settings.
-    pub fn build(&self) -> Result<GenericGossipsubConfig<T>, &str> {
+    pub fn build(&self) -> Result<Config<T>, &str> {
         // check all constraints on config
 
         if self.config.max_transmit_size < 100 {
@@ -897,7 +895,7 @@ impl<T: Clone> GenericGossipsubConfigBuilder<T> {
     }
 }
 
-impl<T> std::fmt::Debug for GenericGossipsubConfig<T> {
+impl<T> std::fmt::Debug for Config<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut builder = f.debug_struct("GossipsubConfig");
         let _ = builder.field("protocol_id_prefix", &self.protocol_id_prefix);

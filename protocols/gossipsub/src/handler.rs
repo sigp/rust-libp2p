@@ -37,7 +37,11 @@ use std::{
     io,
     pin::Pin,
     task::{Context, Poll},
+    time::{Duration, Instant},
 };
+
+/// The initial time (in seconds) we set the keep alive for protocol negotiations to occur.
+const INITIAL_KEEP_ALIVE: u64 = 30;
 
 /// The event emitted by the Handler. This informs the behaviour of various events created
 /// by the handler.
@@ -99,8 +103,6 @@ pub struct GossipsubHandler {
     /// If the peer doesn't support the gossipsub protocol we do not immediately disconnect.
     /// Rather, we disable the handler and prevent any incoming or outgoing substreams from being
     /// established.
-    //
-    // mxinden: Why do this?
     ///
     /// This value is set to true to indicate the peer doesn't support gossipsub.
     protocol_unsupported: bool,
@@ -167,11 +169,7 @@ impl GossipsubHandler {
             peer_kind_sent: false,
             protocol_unsupported: false,
             upgrade_errors: VecDeque::new(),
-            // mxinden: In the case where another NetworkBehaviour requests a connection to a remote
-            // peer, there will also be a GossipSubHandler created for that same connection. Do I
-            // see correctly that the GossipSubHandler would keep that connection alive for ever
-            // even though gossipsub is not interested in the connection?
-            keep_alive: KeepAlive::Yes,
+            keep_alive: KeepAlive::Until(Instant::now() + Duration::from_secs(INITIAL_KEEP_ALIVE)),
         }
     }
 }

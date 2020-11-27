@@ -91,7 +91,7 @@ impl<T> MessageCache<T> {
         self.msgs.get(message_id)
     }
 
-    ///increases the iwant count for the given message by one and returns the message together
+    /// Increases the iwant count for the given message by one and returns the message together
     /// with the iwant if the message exists.
     pub fn get_with_iwant_counts(
         &mut self,
@@ -120,9 +120,8 @@ impl<T> MessageCache<T> {
         })
     }
 
-    // mxinden: What is a `Gossipid`? Should this not be [`MessageId`]?
-    /// Get a list of GossipIds for a given topic
-    pub fn get_gossip_ids(&self, topic: &TopicHash) -> Vec<MessageId> {
+    /// Get a list of `MessageIds` for a given topic.
+    pub fn get_gossip_message_ids(&self, topic: &TopicHash) -> Vec<MessageId> {
         self.history[..self.gossip]
             .iter()
             .fold(vec![], |mut current_entries, entries| {
@@ -207,7 +206,7 @@ mod tests {
             source,
             data,
             sequence_number,
-            topic: topic,
+            topic,
             signature: None,
             key: None,
             validated: false,

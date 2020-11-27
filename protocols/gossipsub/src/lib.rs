@@ -53,68 +53,72 @@
 //!
 //! # Using Gossipsub
 //!
-// mxinden: I think it will be hard to keep this part of the documentation in sync. Is the
-// duplication really necessary, or would the link suffice?
 //! ## GossipsubConfig
 //!
-//! The [`GenericGossipsubConfig`] struct specifies various network performance/tuning configuration
+//! The [`Config`] struct specifies various network performance/tuning configuration
 //! parameters. Specifically it specifies:
 //!
-//! [`GenericGossipsubConfig`]: struct.GenericGossipsubConfig.html
+//! [`Config`]: struct.Config.html
 //!
 //! This struct implements the `Default` trait and can be initialised via
-//! `GenericGossipsubConfig::default()`.
+//! `Config::default()`.
 //!
 //!
 //! ## Gossipsub
 //!
 //! The [`GenericGossipsub`] struct implements the `NetworkBehaviour` trait allowing it to act as the
 //! routing behaviour in a `Swarm`. This struct requires an instance of `PeerId` and
-//! [`GenericGossipsubConfig`].
+//! [`Config`].
 //!
-//! [`GenericGossipsub`]: struct.Gossipsub.html
+//! [`GenericGossipsub`]: struct.GenericGossipsub.html
 
 //! ## Example
 //!
 //! An example of initialising a gossipsub compatible swarm:
 //!
-// mxinden: Why ignore the doc example? This would be a great way to keep it up-to-date.
-//! ```ignore
-//! #extern crate libp2p;
-//! #extern crate futures;
-//! #extern crate tokio;
-//! #use libp2p::gossipsub::GossipsubEvent;
-//! #use libp2p::{identity, gossipsub,
-//! #    tokio_codec::{FramedRead, LinesCodec},
-//! #};
-//! let local_key = identity::Keypair::generate_ed25519();
-//! let local_pub_key = local_key.public();
+//! ```
+//! use libp2p_gossipsub::GossipsubEvent;
+//! use libp2p_core::{identity::Keypair,transport::{Transport, MemoryTransport}, Multiaddr};
+//! use libp2p_gossipsub::MessageAuthenticity;
+//! let local_key = Keypair::generate_ed25519();
+//! let local_peer_id = libp2p_core::PeerId::from(local_key.public());
 //!
-//! // Set up an encrypted TCP Transport over the Mplex and Yamux protocols
-// mxinden: I suggest using the memory transport to not depend on any assumptions of the executing
-// machine.
-//! let transport = libp2p::build_development_transport(local_key);
+//! // Set up an encrypted TCP Transport over the Mplex
+//! // This is test transport (memory).
+//! let noise_keys = libp2p_noise::Keypair::<libp2p_noise::X25519Spec>::new().into_authentic(&local_key).unwrap();
+//! let transport = MemoryTransport::default()
+//!            .upgrade(libp2p_core::upgrade::Version::V1)
+//!            .authenticate(libp2p_noise::NoiseConfig::xx(noise_keys).into_authenticated())
+//!            .multiplex(libp2p_mplex::MplexConfig::new())
+//!            .boxed();
 //!
-//! // Create a Floodsub/Gossipsub topic
-//! let topic = libp2p::floodsub::TopicBuilder::new("example").build();
+//! // Create a Gossipsub topic
+//! let topic = libp2p_gossipsub::IdentTopic::new("example");
+//!
+//! // Set the message authenticity - How we expect to publish messages
+//! // Here we expect the publisher to sign the message with their key.
+//! let message_authenticity = MessageAuthenticity::Signed(local_key);
 //!
 //! // Create a Swarm to manage peers and events
 //! let mut swarm = {
 //!     // set default parameters for gossipsub
-//!     let gossipsub_config = gossipsub::GossipsubConfig::default();
+//!     let gossipsub_config = libp2p_gossipsub::GossipsubConfig::default();
 //!     // build a gossipsub network behaviour
 //!     let mut gossipsub =
-//!         gossipsub::Gossipsub::new(local_pub_key.clone().into_peer_id(), gossipsub_config);
-//!     gossipsub.subscribe(topic.clone());
-//!     libp2p::Swarm::new(
+//!         libp2p_gossipsub::Gossipsub::new(message_authenticity, gossipsub_config).unwrap();
+//!     // subscribe to the topic
+//!     gossipsub.subscribe(&topic);
+//!     // create the swarm
+//!     libp2p_swarm::Swarm::new(
 //!         transport,
 //!         gossipsub,
-//!         libp2p::core::topology::MemoryTopology::empty(local_pub_key),
+//!         local_peer_id,
 //!     )
 //! };
 //!
-//! // Listen on all interfaces and whatever port the OS assigns.
-//! let addr = libp2p::Swarm::listen_on(&mut swarm, "/ip4/0.0.0.0/tcp/0".parse().unwrap()).unwrap();
+//! // Listen on a memory transport.
+//! let memory: Multiaddr = libp2p_core::multiaddr::Protocol::Memory(10).into();
+//! let addr = libp2p_swarm::Swarm::listen_on(&mut swarm, memory).unwrap();
 //! println!("Listening on {:?}", addr);
 //! ```
 
@@ -140,11 +144,10 @@ extern crate derive_builder;
 mod rpc_proto;
 
 pub use self::behaviour::{
-    GenericGossipsub, GenericGossipsubEvent, Gossipsub, GossipsubEvent, MessageAuthenticity,
+    Event, GenericGossipsub, Gossipsub, GossipsubEvent, MessageAuthenticity,
 };
 pub use self::config::{
-    GenericGossipsubConfig, GenericGossipsubConfigBuilder, GossipsubConfig, GossipsubConfigBuilder,
-    ValidationMode,
+    Config, ConfigBuilder, GossipsubConfig, GossipsubConfigBuilder, ValidationMode,
 };
 pub use self::peer_score::{
     score_parameter_decay, score_parameter_decay_with_base, PeerScoreParams, PeerScoreThresholds,
