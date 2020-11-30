@@ -37,8 +37,9 @@ use std::{
     io,
     pin::Pin,
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
+use wasm_timer::Instant;
 
 /// The initial time (in seconds) we set the keep alive for protocol negotiations to occur.
 const INITIAL_KEEP_ALIVE: u64 = 30;

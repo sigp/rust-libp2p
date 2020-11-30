@@ -75,7 +75,7 @@ mod tests;
 /// Without signing, a number of privacy preserving modes can be selected.
 ///
 /// NOTE: The default validation settings are to require signatures. The [`ValidationMode`]
-/// should be updated in the [`GenericGossipsubConfig`] to allow for unsigned messages.
+/// should be updated in the [`Config`] to allow for unsigned messages.
 #[derive(Clone)]
 pub enum MessageAuthenticity {
     /// Message signing is enabled. The author will be the owner of the key and the sequence number
@@ -96,7 +96,7 @@ pub enum MessageAuthenticity {
     /// The author of the message and the sequence numbers are excluded from the message.
     ///
     /// NOTE: Excluding these fields may make these messages invalid by other nodes who
-    /// enforce validation of these fields. See [`ValidationMode`] in the `GenericGossipsubConfig`
+    /// enforce validation of these fields. See [`ValidationMode`] in the `Config`
     /// for how to customise this for rust-libp2p gossipsub.  A custom `message_id`
     /// function will need to be set to prevent all messages from a peer being filtered
     /// as duplicates.
@@ -200,7 +200,7 @@ type GossipsubNetworkBehaviourAction<T> = NetworkBehaviourAction<Arc<rpc_proto::
 
 /// Network behaviour that handles the gossipsub protocol.
 ///
-/// NOTE: Initialisation requires a [`MessageAuthenticity`] and [`GenericGossipsubConfig`] instance. If message signing is
+/// NOTE: Initialisation requires a [`MessageAuthenticity`] and [`Config`] instance. If message signing is
 /// disabled, the [`ValidationMode`] in the config should be adjusted to an appropriate level to
 /// accept unsigned messages.
 pub struct GenericGossipsub<T: AsRef<[u8]>, Filter: TopicSubscriptionFilter> {
@@ -310,7 +310,7 @@ where
     T: Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
     F: TopicSubscriptionFilter,
 {
-    /// Creates a `GenericGossipsub` struct given a set of parameters specified via a `GenericGossipsubConfig`.
+    /// Creates a `GenericGossipsub` struct given a set of parameters specified via a `Config`.
     pub fn new_with_subscription_filter(
         privacy: MessageAuthenticity,
         config: Config<T>,
