@@ -955,7 +955,7 @@ where
         }
     }
 
-    /// Determines if a peer's score is below a given [`PeerScoreThreshold`] chosen via the
+    /// Determines if a peer's score is below a given `PeerScoreThreshold` chosen via the
     /// `threshold` parameter.
     fn score_below_threshold(
         &self,
