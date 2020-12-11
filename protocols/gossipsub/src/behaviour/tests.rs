@@ -29,7 +29,7 @@ mod tests {
     use rand::Rng;
 
     use crate::{
-        ConfigBuilder, GossipsubConfig, GossipsubConfigBuilder, GossipsubMessage,
+        GossipsubConfig, GossipsubConfigBuilder, GossipsubConfigBuilder, GossipsubMessage,
         IdentTopic as Topic, TopicScoreParams,
     };
 
@@ -52,7 +52,7 @@ mod tests {
         peer_no: usize,
         topics: Vec<String>,
         to_subscribe: bool,
-        gs_config: Config<T>,
+        gs_config: GossipsubConfig<T>,
         explicit: usize,
         outbound: usize,
         scoring: Option<(PeerScoreParams, PeerScoreThresholds)>,
@@ -64,10 +64,10 @@ mod tests {
         T: Send + 'static + Default + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
-        pub fn create_network(self) -> (GenericGossipsub<T, F>, Vec<PeerId>, Vec<TopicHash>) {
+        pub fn create_network(self) -> (Gossipsub<T, F>, Vec<PeerId>, Vec<TopicHash>) {
             let keypair = libp2p_core::identity::Keypair::generate_secp256k1();
             // create a gossipsub struct
-            let mut gs: GenericGossipsub<T, F> = GenericGossipsub::new_with_subscription_filter(
+            let mut gs: Gossipsub<T, F> = Gossipsub::new_with_subscription_filter(
                 MessageAuthenticity::Signed(keypair),
                 self.gs_config,
                 self.subscription_filter,
@@ -114,7 +114,7 @@ mod tests {
         T: Send + 'static + Default + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
-        pub fn create_network(&self) -> (GenericGossipsub<T, F>, Vec<PeerId>, Vec<TopicHash>) {
+        pub fn create_network(&self) -> (Gossipsub<T, F>, Vec<PeerId>, Vec<TopicHash>) {
             self.build().unwrap().create_network()
         }
     }
@@ -141,7 +141,7 @@ mod tests {
     // helper functions for testing
 
     fn add_peer<T, F>(
-        gs: &mut GenericGossipsub<T, F>,
+        gs: &mut Gossipsub<T, F>,
         topic_hashes: &Vec<TopicHash>,
         outbound: bool,
         explicit: bool,
@@ -154,7 +154,7 @@ mod tests {
     }
 
     fn add_peer_with_addr<T, F>(
-        gs: &mut GenericGossipsub<T, F>,
+        gs: &mut Gossipsub<T, F>,
         topic_hashes: &Vec<TopicHash>,
         outbound: bool,
         explicit: bool,
@@ -175,7 +175,7 @@ mod tests {
     }
 
     fn add_peer_with_addr_and_kind<T, F>(
-        gs: &mut GenericGossipsub<T, F>,
+        gs: &mut Gossipsub<T, F>,
         topic_hashes: &Vec<TopicHash>,
         outbound: bool,
         explicit: bool,
@@ -200,7 +200,7 @@ mod tests {
                 }
             },
         );
-        <GenericGossipsub<T, F> as NetworkBehaviour>::inject_connected(gs, &peer);
+        <Gossipsub<T, F> as NetworkBehaviour>::inject_connected(gs, &peer);
         if let Some(kind) = kind {
             gs.inject_event(
                 peer.clone(),
@@ -4924,7 +4924,7 @@ mod tests {
             }};
         }
 
-        let message_id_fn = |m: &GenericGossipsubMessage<MessageData>| -> MessageId {
+        let message_id_fn = |m: &GossipsubMessage<MessageData>| -> MessageId {
             let (mut id, mut counters_pointer): (MessageId, *mut Pointers) =
                 get_counters_and_hash!(&m.data.0);
             unsafe {
@@ -4940,7 +4940,7 @@ mod tests {
             }
             id
         };
-        let config = ConfigBuilder::default()
+        let config = GossipsubConfigBuilder::default()
             .message_id_fn(message_id_fn)
             .fast_message_id_fn(fast_message_id_fn)
             .build()

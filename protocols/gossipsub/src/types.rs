@@ -95,7 +95,7 @@ pub enum PeerKind {
 
 /// A message received by the gossipsub system.
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct GenericGossipsubMessage<T> {
+pub struct GossipsubMessage<T = DataWithId<Vec<u8>>> {
     /// Id of the peer that published this message.
     pub source: Option<PeerId>,
 
@@ -111,15 +111,15 @@ pub struct GenericGossipsubMessage<T> {
     /// The signature of the message if it's signed.
     pub signature: Option<Vec<u8>>,
 
-    /// The public key of the message if it is signed and the source `PeerId` cannot be inlined.
+    /// The public key of the message if it is signed and the source [`PeerId`] cannot be inlined.
     pub key: Option<Vec<u8>>,
 
     /// Flag indicating if this message has been validated by the application or not.
     pub validated: bool,
 }
 
-impl<T> GenericGossipsubMessage<T> {
-    pub fn from<S: Into<T>>(m: GenericGossipsubMessage<S>) -> Self {
+impl<T> GossipsubMessage<T> {
+    pub fn from<S: Into<T>>(m: GossipsubMessage<S>) -> Self {
         Self {
             source: m.source,
             data: m.data.into(),
@@ -132,7 +132,7 @@ impl<T> GenericGossipsubMessage<T> {
     }
 }
 
-pub type RawGossipsubMessage = GenericGossipsubMessage<Vec<u8>>;
+pub type RawGossipsubMessage = GossipsubMessage<Vec<u8>>;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct DataWithId<T> {
@@ -152,10 +152,10 @@ impl<T: AsRef<[u8]>> AsRef<[u8]> for DataWithId<T> {
     }
 }
 
-pub type GossipsubMessageWithId<T> = GenericGossipsubMessage<DataWithId<T>>;
+pub type GossipsubMessageWithId<T> = GossipsubMessage<DataWithId<T>>;
 
 impl<T> GossipsubMessageWithId<T> {
-    pub fn new(m: GenericGossipsubMessage<T>, id: MessageId) -> Self {
+    pub fn new(m: GossipsubMessage<T>, id: MessageId) -> Self {
         Self {
             source: m.source,
             data: DataWithId { id, data: m.data },
@@ -176,10 +176,7 @@ impl<T> GossipsubMessageWithId<T> {
     }
 }
 
-// for backwards compatibility
-pub type GossipsubMessage = GossipsubMessageWithId<Vec<u8>>;
-
-impl<T: Debug + AsRef<[u8]>> fmt::Debug for GenericGossipsubMessage<T> {
+impl<T: Debug + AsRef<[u8]>> fmt::Debug for GossipsubMessage<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GossipsubMessage")
             .field(

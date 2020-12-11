@@ -49,7 +49,7 @@ pub(crate) struct PeerScore {
     peer_stats: HashMap<PeerId, PeerStats>,
     /// Tracking peers per IP.
     peer_ips: HashMap<IpAddr, HashSet<PeerId>>,
-    /// Message delivery tracking. This is a time-cache of `DeliveryRecord`s.
+    /// Message delivery tracking. This is a time-cache of [`DeliveryRecord`]s.
     deliveries: TimeCache<MessageId, DeliveryRecord>,
     /// callback for monitoring message delivery times
     message_delivery_time_callback: Option<fn(&PeerId, &TopicHash, f64)>,
@@ -141,7 +141,7 @@ enum MeshStatus {
 }
 
 impl MeshStatus {
-    /// Initialises a new `Active` mesh status.
+    /// Initialises a new [`Active`] mesh status.
     pub fn new_active() -> Self {
         MeshStatus::Active {
             graft_time: Instant::now(),
@@ -193,7 +193,7 @@ impl Default for DeliveryRecord {
 }
 
 impl PeerScore {
-    /// Creates a new `PeerScore` using a given set of peer scoring parameters.
+    /// Creates a new [`PeerScore`] using a given set of peer scoring parameters.
     #[allow(dead_code)]
     pub fn new(params: PeerScoreParams) -> Self {
         Self::new_with_message_delivery_time_callback(params, None)
@@ -421,7 +421,7 @@ impl PeerScore {
         });
     }
 
-    /// Adds a connected peer to `PeerScore`, initialising with empty ips (ips get added later
+    /// Adds a connected peer to [`PeerScore`], initialising with empty ips (ips get added later
     /// through add_ip.
     pub fn add_peer(&mut self, peer_id: PeerId) {
         let peer_stats = self.peer_stats.entry(peer_id).or_default();

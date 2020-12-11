@@ -47,7 +47,7 @@ use libp2p_swarm::{
 };
 
 use crate::backoff::BackoffStorage;
-use crate::config::{Config, ValidationMode};
+use crate::config::{GossipsubConfig, ValidationMode};
 use crate::error::{PublishError, SubscriptionError};
 use crate::gossip_promises::GossipPromises;
 use crate::handler::{GossipsubHandler, HandlerEvent};
@@ -58,7 +58,7 @@ use crate::subscription_filter::{AllowAllSubscriptionFilter, TopicSubscriptionFi
 use crate::time_cache::{DuplicateCache, TimeCache};
 use crate::topic::{Hasher, Topic, TopicHash};
 use crate::types::{
-    FastMessageId, GenericGossipsubMessage, GossipsubControlAction, GossipsubMessageWithId,
+    FastMessageId, GossipsubControlAction, GossipsubMessage, GossipsubMessageWithId,
     GossipsubSubscription, GossipsubSubscriptionAction, MessageAcceptance, MessageId, PeerInfo,
     RawGossipsubMessage,
 };
@@ -75,7 +75,7 @@ mod tests;
 /// Without signing, a number of privacy preserving modes can be selected.
 ///
 /// NOTE: The default validation settings are to require signatures. The [`ValidationMode`]
-/// should be updated in the [`Config`] to allow for unsigned messages.
+/// should be updated in the [`GossipsubConfig`] to allow for unsigned messages.
 #[derive(Clone)]
 pub enum MessageAuthenticity {
     /// Message signing is enabled. The author will be the owner of the key and the sequence number
@@ -83,12 +83,12 @@ pub enum MessageAuthenticity {
     Signed(Keypair),
     /// Message signing is disabled.
     ///
-    /// The specified `PeerId` will be used as the author of all published messages. The sequence
+    /// The specified [`PeerId`] will be used as the author of all published messages. The sequence
     /// number will be randomized.
     Author(PeerId),
     /// Message signing is disabled.
     ///
-    /// A random `PeerId` will be used when publishing each message. The sequence number will be
+    /// A random [`PeerId`] will be used when publishing each message. The sequence number will be
     /// randomized.
     RandomAuthor,
     /// Message signing is disabled.
@@ -96,7 +96,7 @@ pub enum MessageAuthenticity {
     /// The author of the message and the sequence numbers are excluded from the message.
     ///
     /// NOTE: Excluding these fields may make these messages invalid by other nodes who
-    /// enforce validation of these fields. See [`ValidationMode`] in the `Config`
+    /// enforce validation of these fields. See [`ValidationMode`] in the [`GossipsubConfig`]
     /// for how to customise this for rust-libp2p gossipsub.  A custom `message_id`
     /// function will need to be set to prevent all messages from a peer being filtered
     /// as duplicates.
@@ -116,12 +116,12 @@ impl MessageAuthenticity {
 
 /// Event that can be emitted by the gossipsub behaviour.
 #[derive(Debug)]
-pub enum Event<T: AsRef<[u8]>> {
+pub enum GossipsubEvent<T: AsRef<[u8]> = Vec<u8>> {
     /// A message has been received.
     Message {
         /// The peer that forwarded us this message.
         propagation_source: PeerId,
-        /// The `MessageId` of the message. This should be referenced by the application when
+        /// The [`MessageId`] of the message. This should be referenced by the application when
         /// validating a message (if required).
         message_id: MessageId,
         /// The message itself.
@@ -142,8 +142,6 @@ pub enum Event<T: AsRef<[u8]>> {
         topic: TopicHash,
     },
 }
-// For general use cases
-pub type GossipsubEvent = Event<Vec<u8>>;
 
 /// A data structure for storing configuration for publishing messages. See [`MessageAuthenticity`]
 /// for further details.
@@ -196,16 +194,20 @@ impl From<MessageAuthenticity> for PublishConfig {
     }
 }
 
-type GossipsubNetworkBehaviourAction<T> = NetworkBehaviourAction<Arc<rpc_proto::Rpc>, Event<T>>;
+type GossipsubNetworkBehaviourAction<T> =
+    NetworkBehaviourAction<Arc<rpc_proto::Rpc>, GossipsubEvent<T>>;
 
 /// Network behaviour that handles the gossipsub protocol.
 ///
-/// NOTE: Initialisation requires a [`MessageAuthenticity`] and [`Config`] instance. If message signing is
-/// disabled, the [`ValidationMode`] in the config should be adjusted to an appropriate level to
-/// accept unsigned messages.
-pub struct GenericGossipsub<T: AsRef<[u8]>, Filter: TopicSubscriptionFilter> {
+/// NOTE: Initialisation requires a [`MessageAuthenticity`] and [`GossipsubConfig`] instance. If
+/// message signing is disabled, the [`ValidationMode`] in the config should be adjusted to an
+/// appropriate level to accept unsigned messages.
+pub struct Gossipsub<
+    T: AsRef<[u8]> = Vec<u8>,
+    Filter: TopicSubscriptionFilter = AllowAllSubscriptionFilter,
+> {
     /// Configuration providing gossipsub performance parameters.
-    config: Config<T>,
+    config: GossipsubConfig<T>,
 
     /// Events that need to be yielded to the outside when polling.
     events: VecDeque<GossipsubNetworkBehaviourAction<T>>,
@@ -291,29 +293,31 @@ pub struct GenericGossipsub<T: AsRef<[u8]>, Filter: TopicSubscriptionFilter> {
     subscription_filter: Filter,
 }
 
-// For general use and convenience.
-pub type Gossipsub = GenericGossipsub<Vec<u8>, AllowAllSubscriptionFilter>;
-
-impl<T, F> GenericGossipsub<T, F>
+impl<T, F> Gossipsub<T, F>
 where
     T: Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
     F: TopicSubscriptionFilter + Default,
 {
-    /// Creates a `GenericGossipsub` struct given a set of parameters specified via a `GenericGossipsubConfig`.
-    pub fn new(privacy: MessageAuthenticity, config: Config<T>) -> Result<Self, &'static str> {
+    /// Creates a [`Gossipsub`] struct given a set of parameters specified via a
+    /// [`GossipsubConfig`].
+    pub fn new(
+        privacy: MessageAuthenticity,
+        config: GossipsubConfig<T>,
+    ) -> Result<Self, &'static str> {
         Self::new_with_subscription_filter(privacy, config, F::default())
     }
 }
 
-impl<T, F> GenericGossipsub<T, F>
+impl<T, F> Gossipsub<T, F>
 where
     T: Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
     F: TopicSubscriptionFilter,
 {
-    /// Creates a `GenericGossipsub` struct given a set of parameters specified via a `Config`.
+    /// Creates a [`Gossipsub`] struct given a set of parameters specified via a
+    /// [`GossipsubConfig`].
     pub fn new_with_subscription_filter(
         privacy: MessageAuthenticity,
-        config: Config<T>,
+        config: GossipsubConfig<T>,
         subscription_filter: F,
     ) -> Result<Self, &'static str> {
         // Set up the router given the configuration settings.
@@ -324,7 +328,7 @@ where
 
         // Set up message publishing parameters.
 
-        Ok(GenericGossipsub {
+        Ok(Gossipsub {
             events: VecDeque::new(),
             control_pool: HashMap::new(),
             publish_config: privacy.into(),
@@ -631,10 +635,10 @@ where
         Ok(msg_id)
     }
 
-    /// This function should be called when `config.validate_messages()` is `true` after the message
-    /// got validated by the caller. Messages are stored in the ['Memcache'] and validation is
-    /// expected to be fast enough that the messages should still exist in the cache. There are
-    /// three possible validation outcomes and the outcome is given in acceptance.
+    /// This function should be called when [`GossipsubConfig::validate_messages()`] is `true` after
+    /// the message got validated by the caller. Messages are stored in the ['Memcache'] and
+    /// validation is expected to be fast enough that the messages should still exist in the cache.
+    /// There are three possible validation outcomes and the outcome is given in acceptance.
     ///
     /// If acceptance = [`MessageAcceptance::Accept`] the message will get propagated to the
     /// network. The `propagation_source` parameter indicates who the message was received by and
@@ -752,7 +756,7 @@ where
 
     /// Sets scoring parameters for a topic.
     ///
-    /// The `with_peer_score()` must first be called to initialise peer scoring.
+    /// The [`Self::with_peer_score()`] must first be called to initialise peer scoring.
     pub fn set_topic_params<H: Hasher>(
         &mut self,
         topic: Topic<H>,
@@ -951,7 +955,7 @@ where
         }
     }
 
-    /// Determines if a peer's score is below a given `PeerScoreThreshold` chosen via the
+    /// Determines if a peer's score is below a given [`PeerScoreThreshold`] chosen via the
     /// `threshold` parameter.
     fn score_below_threshold(
         &self,
@@ -1472,7 +1476,7 @@ where
                 return;
             }
         }
-        let msg = GenericGossipsubMessage::from(msg);
+        let msg = GossipsubMessage::from(msg);
         let msg_id = self.config.message_id(&msg);
         let mut msg = GossipsubMessageWithId::new(msg, msg_id);
 
@@ -1515,12 +1519,13 @@ where
         // Dispatch the message to the user if we are subscribed to any of the topics
         if self.mesh.contains_key(&msg.topic) {
             debug!("Sending received message to user");
-            self.events
-                .push_back(NetworkBehaviourAction::GenerateEvent(Event::Message {
+            self.events.push_back(NetworkBehaviourAction::GenerateEvent(
+                GossipsubEvent::Message {
                     propagation_source: propagation_source.clone(),
                     message_id: msg.message_id().clone(),
                     message: msg.clone(),
-                }));
+                },
+            ));
         } else {
             debug!(
                 "Received message on a topic we are not subscribed to: {:?}",
@@ -1649,7 +1654,7 @@ where
                     }
                     // generates a subscription event to be polled
                     application_event.push(NetworkBehaviourAction::GenerateEvent(
-                        Event::Subscribed {
+                        GossipsubEvent::Subscribed {
                             peer_id: propagation_source.clone(),
                             topic: subscription.topic_hash.clone(),
                         },
@@ -1669,7 +1674,7 @@ where
                         .push((propagation_source.clone(), subscription.topic_hash.clone()));
                     // generate an unsubscribe event to be polled
                     application_event.push(NetworkBehaviourAction::GenerateEvent(
-                        Event::Unsubscribed {
+                        GossipsubEvent::Unsubscribed {
                             peer_id: propagation_source.clone(),
                             topic: subscription.topic_hash.clone(),
                         },
@@ -2308,12 +2313,12 @@ where
         }
     }
 
-    /// Constructs a [`GenericGossipsubMessage`] performing message signing if required.
+    /// Constructs a [`GossipsubMessage`] performing message signing if required.
     pub(crate) fn build_message(
         &self,
         topic: TopicHash,
         data: T,
-    ) -> Result<GenericGossipsubMessage<T>, SigningError> {
+    ) -> Result<GossipsubMessage<T>, SigningError> {
         match &self.publish_config {
             PublishConfig::Signing {
                 ref keypair,
@@ -2344,7 +2349,7 @@ where
                     Some(keypair.sign(&signature_bytes)?)
                 };
 
-                Ok(GenericGossipsubMessage {
+                Ok(GossipsubMessage {
                     source: Some(author.clone()),
                     data,
                     // To be interoperable with the go-implementation this is treated as a 64-bit
@@ -2357,7 +2362,7 @@ where
                 })
             }
             PublishConfig::Author(peer_id) => {
-                Ok(GenericGossipsubMessage {
+                Ok(GossipsubMessage {
                     source: Some(peer_id.clone()),
                     data,
                     // To be interoperable with the go-implementation this is treated as a 64-bit
@@ -2370,7 +2375,7 @@ where
                 })
             }
             PublishConfig::RandomAuthor => {
-                Ok(GenericGossipsubMessage {
+                Ok(GossipsubMessage {
                     source: Some(PeerId::random()),
                     data,
                     // To be interoperable with the go-implementation this is treated as a 64-bit
@@ -2383,7 +2388,7 @@ where
                 })
             }
             PublishConfig::Anonymous => {
-                Ok(GenericGossipsubMessage {
+                Ok(GossipsubMessage {
                     source: None,
                     data,
                     // To be interoperable with the go-implementation this is treated as a 64-bit
@@ -2642,13 +2647,13 @@ fn get_ip_addr(addr: &Multiaddr) -> Option<IpAddr> {
     })
 }
 
-impl<T, F> NetworkBehaviour for GenericGossipsub<T, F>
+impl<T, F> NetworkBehaviour for Gossipsub<T, F>
 where
     T: Send + 'static + Clone + Into<Vec<u8>> + From<Vec<u8>> + AsRef<[u8]>,
     F: Send + 'static + TopicSubscriptionFilter,
 {
     type ProtocolsHandler = GossipsubHandler;
-    type OutEvent = Event<T>;
+    type OutEvent = GossipsubEvent<T>;
 
     fn new_handler(&mut self) -> Self::ProtocolsHandler {
         GossipsubHandler::new(
@@ -2926,7 +2931,7 @@ where
                             peer_score.reject_message(&propagation_source, &message, reason);
                             gossip_promises.reject_message(msg_id, &reason);
                         } else {
-                            let message = GenericGossipsubMessage::from(message);
+                            let message = GossipsubMessage::from(message);
                             let id = self.config.message_id(&message);
                             let message = GossipsubMessageWithId::new(message, id);
                             peer_score.reject_message(&propagation_source, &message, reason);
@@ -3072,7 +3077,7 @@ fn validate_config(
     Ok(())
 }
 
-impl<T: Debug + AsRef<[u8]>, F: TopicSubscriptionFilter> fmt::Debug for GenericGossipsub<T, F> {
+impl<T: Debug + AsRef<[u8]>, F: TopicSubscriptionFilter> fmt::Debug for Gossipsub<T, F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Gossipsub")
             .field("config", &self.config)
@@ -3168,7 +3173,7 @@ mod local_test {
     /// Tests RPC message fragmentation
     fn test_message_fragmentation_deterministic() {
         let max_transmit_size = 500;
-        let config = crate::ConfigBuilder::default()
+        let config = crate::GossipsubConfigBuilder::default()
             .max_transmit_size(max_transmit_size)
             .validation_mode(ValidationMode::Permissive)
             .build()
@@ -3216,7 +3221,7 @@ mod local_test {
     fn test_message_fragmentation() {
         fn prop(rpc: GossipsubRpc) {
             let max_transmit_size = 500;
-            let config = crate::ConfigBuilder::default()
+            let config = crate::GossipsubConfigBuilder::default()
                 .max_transmit_size(max_transmit_size)
                 .validation_mode(ValidationMode::Permissive)
                 .build()

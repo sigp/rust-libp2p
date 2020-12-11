@@ -124,7 +124,7 @@ impl<T> MessageCache<T> {
         })
     }
 
-    /// Get a list of `MessageIds` for a given topic.
+    /// Get a list of [`MessageId`]s for a given topic.
     pub fn get_gossip_message_ids(&self, topic: &TopicHash) -> Vec<MessageId> {
         self.history[..self.gossip]
             .iter()

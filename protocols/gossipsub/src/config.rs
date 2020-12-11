@@ -23,17 +23,18 @@ use std::time::Duration;
 
 use libp2p_core::PeerId;
 
-use crate::types::{FastMessageId, GenericGossipsubMessage, MessageId};
+use crate::types::{FastMessageId, GossipsubMessage, MessageId};
 use crate::RawGossipsubMessage;
 
 /// The types of message validation that can be employed by gossipsub.
 #[derive(Debug, Clone)]
 pub enum ValidationMode {
-    /// This is the default setting. This requires the message author to be a valid `PeerId` and to
+    /// This is the default setting. This requires the message author to be a valid [`PeerId`] and to
     /// be present as well as the sequence number. All messages must have valid signatures.
     ///
-    /// NOTE: This setting will reject messages from nodes using `PrivacyMode::Anonymous` and
-    /// all messages that do not have signatures.
+    /// NOTE: This setting will reject messages from nodes using
+    /// [`crate::behaviour::MessageAuthenticity::Anonymous`] and all messages that do not have
+    /// signatures.
     Strict,
     /// This setting permits messages that have no author, sequence number or signature. If any of
     /// these fields exist in the message these are validated.
@@ -48,12 +49,9 @@ pub enum ValidationMode {
     None,
 }
 
-// For general use cases.
-pub type GossipsubConfig = Config<Vec<u8>>;
-
 /// Configuration parameters that define the performance of the gossipsub network.
 #[derive(Clone)]
-pub struct Config<T> {
+pub struct GossipsubConfig<T = Vec<u8>> {
     /// The protocol id prefix to negotiate this protocol. The protocol id is of the form
     /// `/<prefix>/<supported-versions>`. As gossipsub supports version 1.0 and 1.1, there are two
     /// protocol id's supported.
@@ -122,8 +120,8 @@ pub struct Config<T> {
 
     /// When set to `true`, prevents automatic forwarding of all received messages. This setting
     /// allows a user to validate the messages before propagating them to their peers. If set to
-    /// true, the user must manually call [crate::GenericGossipsub::report_message_validation_result()] on the behaviour to forward message
-    /// once validated (default is `false`).
+    /// true, the user must manually call [crate::Gossipsub::report_message_validation_result()]
+    /// on the behaviour to forward message once validated (default is `false`).
     validate_messages: bool,
 
     /// Determines the level of validation used when receiving messages. See [`ValidationMode`]
@@ -136,21 +134,21 @@ pub struct Config<T> {
     /// addressing, where this function may be set to `hash(message)`. This would prevent messages
     /// of the same content from being duplicated.
     ///
-    /// The function takes a `GenericGossipsubMessage` as input and outputs a String to be
+    /// The function takes a [`GossipsubMessage`] as input and outputs a String to be
     /// interpreted as the message id.
-    message_id_fn: fn(&GenericGossipsubMessage<T>) -> MessageId,
+    message_id_fn: fn(&GossipsubMessage<T>) -> MessageId,
 
     /// A user-defined optional function that computes fast ids from raw messages. This can be used
-    /// to avoid possibly expensive transformations from `RawGossipsubMessage` to
-    /// `GenericGossipsubMessage<T>` for duplicates. Two semantically different messages must always
+    /// to avoid possibly expensive transformations from [`RawGossipsubMessage`] to
+    /// [`GossipsubMessage`] for duplicates. Two semantically different messages must always
     /// have different fast message ids, but it is allowed that two semantically identical messages
     /// have different fast message ids as long as the message_id_fn produces the same id for them.
     ///
-    /// On high intensive networks with lots of messages, where the message_id is based on the result of
-    /// decompressed traffic, it is beneficial to specify a `fast-message-id` that can identify and
-    /// filter duplicates quickly without performing the overhead of decompression.
+    /// On high intensive networks with lots of messages, where the message_id is based on the
+    /// result of decompressed traffic, it is beneficial to specify a `fast-message-id` that can
+    /// identify and filter duplicates quickly without performing the overhead of decompression.
     ///
-    /// The function takes a `RawGossipsubMessage` as input and outputs a String to be
+    /// The function takes a [`RawGossipsubMessage`] as input and outputs a String to be
     /// interpreted as the fast message id. Default is None.
     fast_message_id_fn: Option<fn(&RawGossipsubMessage) -> FastMessageId>,
 
@@ -239,7 +237,7 @@ pub struct Config<T> {
     published_message_ids_cache_time: Duration,
 }
 
-impl<T> Config<T> {
+impl<T> GossipsubConfig<T> {
     // All the getters
 
     /// The protocol id prefix to negotiate this protocol. The protocol id is of the form
@@ -279,9 +277,9 @@ impl<T> Config<T> {
     }
 
     /// Affects how peers are selected when pruning a mesh due to over subscription.
-    //
-    //  At least `retain_scores` of the retained peers will be high-scoring, while the remainder are
-    //  chosen randomly (D_score in the spec, default is 4).
+    ///
+    ///  At least `retain_scores` of the retained peers will be high-scoring, while the remainder are
+    ///  chosen randomly (D_score in the spec, default is 4).
     pub fn retain_scores(&self) -> usize {
         self.retain_scores
     }
@@ -341,10 +339,9 @@ impl<T> Config<T> {
 
     /// When set to `true`, prevents automatic forwarding of all received messages. This setting
     /// allows a user to validate the messages before propagating them to their peers. If set to
-    /// true, the user must manually call `validate_message()` on the behaviour to forward message
-    /// once validated (default is `false`). Furthermore, the application may optionally call
-    /// `invalidate_message()` on the behaviour to remove the message from the memcache. The
-    /// default is false.
+    /// true, the user must manually call [`crate::Gossipsub::report_message_validation_result()`]
+    /// on the behaviour to forward message once validated (default is `false`).
+    /// The default is `false`.
     pub fn validate_messages(&self) -> bool {
         self.validate_messages
     }
@@ -361,19 +358,19 @@ impl<T> Config<T> {
     /// addressing, where this function may be set to `hash(message)`. This would prevent messages
     /// of the same content from being duplicated.
     ///
-    /// The function takes a `GenericGossipsubMessage` as input and outputs a String to be interpreted as
+    /// The function takes a [`GossipsubMessage`] as input and outputs a String to be interpreted as
     /// the message id.
-    pub fn message_id(&self, message: &GenericGossipsubMessage<T>) -> MessageId {
+    pub fn message_id(&self, message: &GossipsubMessage<T>) -> MessageId {
         (self.message_id_fn)(message)
     }
 
     /// A user-defined optional function that computes fast ids from raw messages. This can be used
-    /// to avoid possibly expensive transformations from `RawGossipsubMessage` to
-    /// `GenericGossipsubMessage<T>` for duplicates. Two semantically different messages must always
+    /// to avoid possibly expensive transformations from [`RawGossipsubMessage`] to
+    /// [`GossipsubMessage`] for duplicates. Two semantically different messages must always
     /// have different fast message ids, but it is allowed that two semantically identical messages
     /// have different fast message ids as long as the message_id_fn produces the same id for them.
     ///
-    /// The function takes a `RawGossipsubMessage` as input and outputs a String to be
+    /// The function takes a [`RawGossipsubMessage`] as input and outputs a String to be
     /// interpreted as the fast message id. Default is None.
     pub fn fast_message_id(&self, message: &RawGossipsubMessage) -> Option<FastMessageId> {
         self.fast_message_id_fn
@@ -497,27 +494,24 @@ impl<T> Config<T> {
     }
 }
 
-impl<T: Clone> Default for Config<T> {
+impl<T: Clone> Default for GossipsubConfig<T> {
     fn default() -> Self {
         // use ConfigBuilder to also validate defaults
-        ConfigBuilder::default()
+        GossipsubConfigBuilder::default()
             .build()
             .expect("Default config parameters should be valid parameters")
     }
 }
 
 /// The builder struct for constructing a gossipsub configuration.
-pub struct ConfigBuilder<T> {
-    config: Config<T>,
+pub struct GossipsubConfigBuilder<T = Vec<u8>> {
+    config: GossipsubConfig<T>,
 }
 
-// For general use cases.
-pub type GossipsubConfigBuilder = ConfigBuilder<Vec<u8>>;
-
-impl<T: Clone> Default for ConfigBuilder<T> {
+impl<T: Clone> Default for GossipsubConfigBuilder<T> {
     fn default() -> Self {
-        ConfigBuilder {
-            config: Config {
+        GossipsubConfigBuilder {
+            config: GossipsubConfig {
                 protocol_id_prefix: Cow::Borrowed("meshsub"),
                 history_length: 5,
                 history_gossip: 3,
@@ -571,13 +565,13 @@ impl<T: Clone> Default for ConfigBuilder<T> {
     }
 }
 
-impl<T> From<Config<T>> for ConfigBuilder<T> {
-    fn from(config: Config<T>) -> Self {
-        ConfigBuilder { config }
+impl<T> From<GossipsubConfig<T>> for GossipsubConfigBuilder<T> {
+    fn from(config: GossipsubConfig<T>) -> Self {
+        GossipsubConfigBuilder { config }
     }
 }
 
-impl<T: Clone> ConfigBuilder<T> {
+impl<T: Clone> GossipsubConfigBuilder<T> {
     /// The protocol id to negotiate this protocol (default is `/meshsub/1.0.0`).
     pub fn protocol_id_prefix(&mut self, protocol_id: impl Into<Cow<'static, str>>) -> &mut Self {
         self.config.protocol_id_prefix = protocol_id.into();
@@ -617,7 +611,7 @@ impl<T: Clone> ConfigBuilder<T> {
 
     /// Affects how peers are selected when pruning a mesh due to over subscription.
     ///
-    /// At least `retain_scores` of the retained peers will be high-scoring, while the remainder are
+    /// At least [`Self::retain_scores`] of the retained peers will be high-scoring, while the remainder are
     /// chosen randomly (D_score in the spec, default is 4).
     pub fn retain_scores(&mut self, retain_scores: usize) -> &mut Self {
         self.config.retain_scores = retain_scores;
@@ -682,8 +676,8 @@ impl<T: Clone> ConfigBuilder<T> {
 
     /// When set, prevents automatic forwarding of all received messages. This setting
     /// allows a user to validate the messages before propagating them to their peers. If set,
-    /// the user must manually call `validate_message()` on the behaviour to forward a message
-    /// once validated.
+    /// the user must manually call [`crate::Gossipsub::report_message_validation_result()`] on the
+    /// behaviour to forward a message once validated.
     pub fn validate_messages(&mut self) -> &mut Self {
         self.config.validate_messages = true;
         self
@@ -702,19 +696,16 @@ impl<T: Clone> ConfigBuilder<T> {
     /// addressing, where this function may be set to `hash(message)`. This would prevent messages
     /// of the same content from being duplicated.
     ///
-    /// The function takes a [`GenericGossipsubMessage`] as input and outputs a String to be
+    /// The function takes a [`GossipsubMessage`] as input and outputs a String to be
     /// interpreted as the message id.
-    pub fn message_id_fn(
-        &mut self,
-        id_fn: fn(&GenericGossipsubMessage<T>) -> MessageId,
-    ) -> &mut Self {
+    pub fn message_id_fn(&mut self, id_fn: fn(&GossipsubMessage<T>) -> MessageId) -> &mut Self {
         self.config.message_id_fn = id_fn;
         self
     }
 
     /// A user-defined optional function that computes fast ids from raw messages. This can be used
-    /// to avoid possibly expensive transformations from `RawGossipsubMessage` to
-    /// [`GenericGossipsubMessage<T>`] for duplicates. Two semantically different messages must always
+    /// to avoid possibly expensive transformations from [`RawGossipsubMessage`] to
+    /// [`GossipsubMessage`] for duplicates. Two semantically different messages must always
     /// have different fast message ids, but it is allowed that two semantically identical messages
     /// have different fast message ids as long as the message_id_fn produces the same id for them.
     ///
@@ -738,9 +729,9 @@ impl<T: Clone> ConfigBuilder<T> {
     /// Controls the number of peers to include in prune Peer eXchange.
     ///
     /// When we prune a peer that's eligible for PX (has a good score, etc), we will try to
-    /// send them signed peer records for up to `prune_peers` other peers that we
-    /// know of. It is recommended that this value is larger than `mesh_n_high` so that the pruned
-    /// peer can reliably form a full mesh. The default is 16.
+    /// send them signed peer records for up to [`Self::prune_peers] other peers that we
+    /// know of. It is recommended that this value is larger than [`Self::mesh_n_high`] so that the
+    /// pruned peer can reliably form a full mesh. The default is 16.
     pub fn prune_peers(&mut self, prune_peers: usize) -> &mut Self {
         self.config.prune_peers = prune_peers;
         self
@@ -748,9 +739,9 @@ impl<T: Clone> ConfigBuilder<T> {
 
     /// Controls the backoff time for pruned peers. This is how long
     /// a peer must wait before attempting to graft into our mesh again after being pruned.
-    /// When pruning a peer, we send them our value of `prune_backoff` so they know
+    /// When pruning a peer, we send them our value of [`Self::prune_backoff`] so they know
     /// the minimum time to wait. Peers running older versions may not send a backoff time,
-    /// so if we receive a prune message without one, we will wait at least `prune_backoff`
+    /// so if we receive a prune message without one, we will wait at least [`Self::prune_backoff`]
     /// before attempting to re-graft. The default is one minute.
     pub fn prune_backoff(&mut self, prune_backoff: Duration) -> &mut Self {
         self.config.prune_backoff = prune_backoff;
@@ -863,8 +854,8 @@ impl<T: Clone> ConfigBuilder<T> {
         self
     }
 
-    /// Constructs a `GenericGossipsubConfig` from the given configuration and validates the settings.
-    pub fn build(&self) -> Result<Config<T>, &str> {
+    /// Constructs a [`GossipsubConfig`] from the given configuration and validates the settings.
+    pub fn build(&self) -> Result<GossipsubConfig<T>, &str> {
         // check all constraints on config
 
         if self.config.max_transmit_size < 100 {
@@ -895,7 +886,7 @@ impl<T: Clone> ConfigBuilder<T> {
     }
 }
 
-impl<T> std::fmt::Debug for Config<T> {
+impl<T> std::fmt::Debug for GossipsubConfig<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut builder = f.debug_struct("GossipsubConfig");
         let _ = builder.field("protocol_id_prefix", &self.protocol_id_prefix);
