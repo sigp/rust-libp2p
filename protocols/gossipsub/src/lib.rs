@@ -104,7 +104,7 @@
 //!     // set default parameters for gossipsub
 //!     let gossipsub_config = libp2p_gossipsub::GossipsubConfig::default();
 //!     // build a gossipsub network behaviour
-//!     let mut gossipsub =
+//!     let mut gossipsub: libp2p_gossipsub::Gossipsub =
 //!         libp2p_gossipsub::Gossipsub::new(message_authenticity, gossipsub_config).unwrap();
 //!     // subscribe to the topic
 //!     gossipsub.subscribe(&topic);
