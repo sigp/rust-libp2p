@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .build()
             .expect("Valid config");
         // build a gossipsub network behaviour
-        let mut gossipsub =
+        let mut gossipsub: gossipsub::Gossipsub =
             gossipsub::Gossipsub::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
                 .expect("Correct configuration");
 
