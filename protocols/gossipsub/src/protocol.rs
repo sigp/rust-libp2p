@@ -566,7 +566,7 @@ mod tests {
 
             // generate an arbitrary GossipsubMessage using the behaviour signing functionality
             let config = GossipsubConfig::default();
-            let gs = Gossipsub::new(
+            let gs: Gossipsub = Gossipsub::new(
                 crate::MessageAuthenticity::Signed(keypair.0.clone()),
                 config,
             )

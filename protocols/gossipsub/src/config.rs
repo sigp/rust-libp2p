@@ -933,7 +933,7 @@ mod test {
 
     #[test]
     fn create_thing() {
-        let builder = GossipsubConfigBuilder::default()
+        let builder: GossipsubConfig = GossipsubConfigBuilder::default()
             .protocol_id_prefix("purple")
             .build()
             .unwrap();
