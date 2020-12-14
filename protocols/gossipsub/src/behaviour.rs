@@ -366,6 +366,14 @@ where
         self.mesh.keys()
     }
 
+    /// Lists all connected peers subscribed to a topic.
+    pub fn topic_peers(&self, topic_hash: &TopicHash) -> impl Iterator<Item = &PeerId> {
+        self.topic_peers
+            .get(topic_hash)
+            .into_iter()
+            .flat_map(|p| p.iter())
+    }
+
     /// Lists all mesh peers for a certain topic hash.
     pub fn mesh_peers(&self, topic_hash: &TopicHash) -> impl Iterator<Item = &PeerId> {
         self.mesh
