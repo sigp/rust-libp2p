@@ -457,6 +457,10 @@ impl PeerScore {
                         if *mesh_time > topic_params.mesh_message_deliveries_activation {
                             topic_stats.mesh_message_deliveries_active = true;
                         }
+                    } else {
+                        //decay mesh_promises_broken_relative for non-mesh peers
+                        topic_stats.mesh_promises_broken_relative *=
+                            topic_params.mesh_promise_decay;
                     }
                 }
             }
