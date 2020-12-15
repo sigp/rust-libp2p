@@ -144,6 +144,7 @@ mod config;
 mod gossip_promises;
 mod handler;
 mod mcache;
+mod mesh_promises;
 mod peer_score;
 pub mod subscription_filter;
 pub mod time_cache;

@@ -23,7 +23,7 @@ use std::{
     collections::HashSet,
     collections::VecDeque,
     collections::{BTreeSet, HashMap},
-    fmt,
+    fmt, iter,
     iter::FromIterator,
     net::IpAddr,
     sync::Arc,
@@ -34,7 +34,7 @@ use std::{
 use futures::StreamExt;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
-use rand::{seq::SliceRandom, thread_rng};
+use rand::{seq::SliceRandom, thread_rng, Rng};
 use wasm_timer::{Instant, Interval};
 
 use libp2p_core::{
@@ -117,7 +117,7 @@ impl MessageAuthenticity {
 /// Event that can be emitted by the gossipsub behaviour.
 #[derive(Debug)]
 pub enum GenericGossipsubEvent<T: AsRef<[u8]>> {
-    /// A message has been received.    
+    /// A message has been received.
     Message {
         /// The peer that forwarded us this message.
         propagation_source: PeerId,
@@ -199,6 +199,8 @@ impl From<MessageAuthenticity> for PublishConfig {
 type GossipsubNetworkBehaviourAction<T> =
     NetworkBehaviourAction<Arc<rpc_proto::Rpc>, GenericGossipsubEvent<T>>;
 
+type PeerScoringData = (PeerScore, PeerScoreThresholds, Interval, GossipPromises);
+
 /// Network behaviour that handles the gossipsub protocol.
 ///
 /// NOTE: Initialisation requires a [`MessageAuthenticity`] and [`GenericGossipsubConfig`] instance. If message signing is
@@ -272,7 +274,7 @@ pub struct GenericGossipsub<T: AsRef<[u8]>, Filter: TopicSubscriptionFilter> {
 
     /// Stores optional peer score data together with thresholds, decay interval and gossip
     /// promises.
-    peer_score: Option<(PeerScore, PeerScoreThresholds, Interval, GossipPromises)>,
+    peer_score: Option<PeerScoringData>,
 
     /// Counts the number of `IHAVE` received from each peer since the last heartbeat.
     count_peer_have: HashMap<PeerId, usize>,
@@ -544,7 +546,7 @@ where
 
         // If we are not flood publishing forward the message to mesh peers.
         let mesh_peers_sent =
-            !self.config.flood_publish() && self.forward_msg(message.clone(), None)?;
+            !self.config.flood_publish() && self.forward_msg(message.clone(), None, false)?;
 
         let mut recipient_peers = HashSet::new();
         let topic_hash = &message.topic;
@@ -669,7 +671,7 @@ where
                         return Ok(false);
                     }
                 };
-                self.forward_msg(message, Some(propagation_source))?;
+                self.forward_or_track_promise(message, Some(propagation_source))?;
                 return Ok(true);
             }
             MessageAcceptance::Reject => RejectReason::ValidationFailed,
@@ -963,7 +965,7 @@ where
     }
 
     fn score_below_threshold_from_scores(
-        peer_score: &Option<(PeerScore, PeerScoreThresholds, Interval, GossipPromises)>,
+        peer_score: &Option<PeerScoringData>,
         peer_id: &PeerId,
         threshold: impl Fn(&PeerScoreThresholds) -> f64,
     ) -> (bool, f64) {
@@ -1059,7 +1061,7 @@ where
             *iasked += iask;
 
             let message_ids = iwant_ids_vec.into_iter().cloned().collect::<Vec<_>>();
-            if let Some((_, _, _, gossip_promises)) = &mut self.peer_score {
+            if let Some((_, _, _, gossip_promises, ..)) = &mut self.peer_score {
                 gossip_promises.add_promise(
                     peer_id.clone(),
                     &message_ids,
@@ -1395,7 +1397,7 @@ where
                 "Rejecting message from blacklisted peer: {}",
                 propagation_source
             );
-            if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
+            if let Some((peer_score, _, _, gossip_promises, ..)) = &mut self.peer_score {
                 peer_score.reject_message(propagation_source, &msg, RejectReason::BlackListedPeer);
                 gossip_promises.reject_message(msg.message_id(), &RejectReason::BlackListedPeer);
             }
@@ -1409,7 +1411,7 @@ where
                     "Rejecting message from peer {} because of blacklisted source: {}",
                     propagation_source, source
                 );
-                if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
+                if let Some((peer_score, _, _, gossip_promises, ..)) = &mut self.peer_score {
                     peer_score.reject_message(
                         propagation_source,
                         &msg,
@@ -1443,7 +1445,7 @@ where
                 msg.message_id(),
                 propagation_source
             );
-            if let Some((peer_score, _, _, gossip_promises)) = &mut self.peer_score {
+            if let Some((peer_score, _, _, gossip_promises, ..)) = &mut self.peer_score {
                 peer_score.reject_message(propagation_source, &msg, RejectReason::SelfOrigin);
                 gossip_promises.reject_message(msg.message_id(), &RejectReason::SelfOrigin);
             }
@@ -1499,7 +1501,7 @@ where
 
         // Tells score that message arrived (but is maybe not fully validated yet)
         // Consider message as delivered for gossip promises
-        if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
+        if let Some((peer_score, _, _, gossip_promises)) = &mut self.peer_score {
             peer_score.validate_message(propagation_source, &msg);
             gossip_promises.message_delivered(msg.message_id());
         }
@@ -1528,11 +1530,23 @@ where
         // forward the message to mesh peers, if no validation is required
         if !self.config.validate_messages() {
             let msg_id = msg.message_id().clone();
-            if self.forward_msg(msg, Some(propagation_source)).is_err() {
+            if self
+                .forward_or_track_promise(msg, Some(propagation_source))
+                .is_err()
+            {
                 error!("Failed to forward message. Too large");
             }
             debug!("Completed message handling for message: {:?}", msg_id);
         }
+    }
+
+    fn forward_or_track_promise(
+        &mut self,
+        message: GossipsubMessageWithId<T>,
+        propagation_source: Option<&PeerId>,
+    ) -> Result<(), PublishError> {
+        self.forward_msg(message, propagation_source, true)
+            .map(|_| ())
     }
 
     /// Handles received subscriptions.
@@ -1710,7 +1724,7 @@ where
 
     /// Applies penalties to peers that did not respond to our IWANT requests.
     fn apply_iwant_penalties(&mut self) {
-        if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
+        if let Some((peer_score, _, _, gossip_promises, ..)) = &mut self.peer_score {
             for (peer, count) in gossip_promises.get_broken_promises() {
                 peer_score.add_penalty(&peer, count);
             }
@@ -1736,6 +1750,31 @@ where
 
         // apply iwant penalties
         self.apply_iwant_penalties();
+
+        // look for broken mesh promises
+        if let Some((peer_score, ..)) = &mut self.peer_score {
+            let promises = peer_score.report_broken_promises();
+            for (message_id, peer_id) in promises {
+                if let Some(message) = self.mcache.get(&message_id).cloned() {
+                    //forward message to peer_id
+                    if self
+                        .forward_message_to(message, iter::once(&peer_id))
+                        .is_err()
+                    {
+                        error!(
+                            "Failed to forward message {} to peer {}",
+                            message_id, peer_id
+                        );
+                    }
+                } else {
+                    warn!(
+                        "Dropped message {} from mcache before we could forward it to peer {}, \
+                           after peer broke promise",
+                        message_id, peer_id
+                    );
+                }
+            }
+        }
 
         // check connections to explicit peers
         if self.heartbeat_ticks % self.config.check_explicit_peers_ticks() == 0 {
@@ -1910,7 +1949,7 @@ where
                 && peers.len() > 1
                 && self.peer_score.is_some()
             {
-                if let Some((_, thresholds, _, _)) = &self.peer_score {
+                if let Some((_, thresholds, ..)) = &self.peer_score {
                     // Opportunistic grafting works as follows: we check the median score of peers
                     // in the mesh; if this score is below the opportunisticGraftThreshold, we
                     // select a few peers at random with score over the median.
@@ -1989,7 +2028,7 @@ where
         for (topic_hash, peers) in self.fanout.iter_mut() {
             let mut to_remove_peers = Vec::new();
             let publish_threshold = match &self.peer_score {
-                Some((_, thresholds, _, _)) => thresholds.publish_threshold,
+                Some((_, thresholds, ..)) => thresholds.publish_threshold,
                 _ => 0.0,
             };
             for peer in peers.iter() {
@@ -2245,26 +2284,48 @@ where
         &mut self,
         message: GossipsubMessageWithId<T>,
         propagation_source: Option<&PeerId>,
+        try_random_mesh_promise: bool,
     ) -> Result<bool, PublishError> {
-        let msg_id = message.message_id();
-
         // message is fully validated inform peer_score
-        if let Some((peer_score, ..)) = &mut self.peer_score {
+        let mut peer_score = self.peer_score.as_mut().map(|(peer_score, ..)| peer_score);
+        if let Some(peer_score) = &mut peer_score {
             if let Some(peer) = propagation_source {
                 peer_score.deliver_message(peer, &message);
             }
         }
 
-        debug!("Forwarding message: {:?}", msg_id);
+        debug!("Forwarding message: {:?}", message.message_id());
         let mut recipient_peers = HashSet::new();
 
         // add mesh peers
         let topic = &message.topic;
+        let mesh_promise_probability = if try_random_mesh_promise {
+            peer_score
+                .as_ref()
+                .map(|peer_score| peer_score.get_mesh_promise_probability(topic))
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
         // mesh
         if let Some(mesh_peers) = self.mesh.get(&topic) {
             for peer_id in mesh_peers {
                 if Some(peer_id) != propagation_source && Some(peer_id) != message.source.as_ref() {
-                    recipient_peers.insert(peer_id.clone());
+                    if mesh_promise_probability > 0.0
+                        && !self.explicit_peers.contains(peer_id)
+                        && thread_rng().gen_bool(mesh_promise_probability)
+                    {
+                        //don't send to this peer, we use the message as a promise
+                        peer_score.as_mut().map(|peer_score| {
+                            peer_score.add_promise(
+                                topic,
+                                message.message_id().clone(),
+                                peer_id.clone(),
+                            )
+                        });
+                    } else {
+                        recipient_peers.insert(peer_id.clone());
+                    }
                 }
             }
         }
@@ -2283,24 +2344,37 @@ where
 
         // forward the message to peers
         if !recipient_peers.is_empty() {
-            let event = Arc::new(
-                GossipsubRpc {
-                    subscriptions: Vec::new(),
-                    messages: vec![RawGossipsubMessage::from(message.clone())],
-                    control_msgs: Vec::new(),
-                }
-                .into_protobuf(),
-            );
-
-            for peer in recipient_peers.iter() {
-                debug!("Sending message: {:?} to peer {:?}", msg_id, peer);
-                self.send_message(peer.clone(), event.clone())?;
-            }
+            self.forward_message_to(message, recipient_peers.iter())?;
             debug!("Completed forwarding message");
             Ok(true)
         } else {
             Ok(false)
         }
+    }
+
+    fn forward_message_to<'a, I>(
+        &mut self,
+        message: GossipsubMessageWithId<T>,
+        peers: I,
+    ) -> Result<(), PublishError>
+    where
+        I: Iterator<Item = &'a PeerId>,
+    {
+        let id = message.message_id().clone();
+        let event = Arc::new(
+            GossipsubRpc {
+                subscriptions: Vec::new(),
+                messages: vec![RawGossipsubMessage::from(message)],
+                control_msgs: Vec::new(),
+            }
+            .into_protobuf(),
+        );
+
+        for peer in peers {
+            debug!("Sending message: {:?} to peer {:?}", id, peer);
+            self.send_message(peer.clone(), event.clone())?;
+        }
+        Ok(())
     }
 
     /// Constructs a `GenericGossipsubMessage` performing message signing if required.
@@ -2915,7 +2989,7 @@ where
                 }
 
                 // Handle any invalid messages from this peer
-                if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
+                if let Some((peer_score, _, _, gossip_promises, ..)) = &mut self.peer_score {
                     for (message, validation_error) in invalid_messages {
                         let reason = RejectReason::ValidationError(validation_error);
                         let fast_message_id_cache = &self.fast_messsage_id_cache;
@@ -3030,7 +3104,7 @@ where
         }
 
         // update scores
-        if let Some((peer_score, _, interval, _)) = &mut self.peer_score {
+        if let Some((peer_score, _, interval, ..)) = &mut self.peer_score {
             while let Poll::Ready(Some(())) = interval.poll_next_unpin(cx) {
                 peer_score.refresh_scores();
             }

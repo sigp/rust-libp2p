@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 
 mod params;
 use crate::error::ValidationError;
+use crate::mesh_promises::{MeshPromise, MeshPromises};
 use crate::types::GossipsubMessageWithId;
 pub use params::{
     score_parameter_decay, score_parameter_decay_with_base, PeerScoreParams, PeerScoreThresholds,
@@ -43,6 +44,8 @@ mod tests;
 /// The number of seconds delivery messages are stored in the cache.
 const TIME_CACHE_DURATION: u64 = 120;
 
+pub(crate) type MeshPromiseData = HashMap<TopicHash, MeshPromises>;
+
 pub(crate) struct PeerScore {
     params: PeerScoreParams,
     /// The score parameters.
@@ -53,6 +56,8 @@ pub(crate) struct PeerScore {
     deliveries: TimeCache<MessageId, DeliveryRecord>,
     /// callback for monitoring message delivery times
     message_delivery_time_callback: Option<fn(&PeerId, &TopicHash, f64)>,
+    /// Tracking mesh promises
+    mesh_promise_data: MeshPromiseData,
 }
 
 /// General statistics for a given gossipsub peer.
@@ -120,6 +125,9 @@ struct TopicStats {
     mesh_failure_penalty: f64,
     /// Invalid message counter.
     invalid_message_deliveries: f64,
+    /// Mesh promises
+    mesh_promises_broken_relative: f64,
+    mesh_promises_total: f64,
 }
 
 impl TopicStats {
@@ -159,6 +167,8 @@ impl Default for TopicStats {
             mesh_message_deliveries: Default::default(),
             mesh_failure_penalty: Default::default(),
             invalid_message_deliveries: Default::default(),
+            mesh_promises_broken_relative: 0.0,
+            mesh_promises_total: 0.0,
         }
     }
 }
@@ -209,6 +219,7 @@ impl PeerScore {
             peer_ips: HashMap::new(),
             deliveries: TimeCache::new(Duration::from_secs(TIME_CACHE_DURATION)),
             message_delivery_time_callback: callback,
+            mesh_promise_data: MeshPromiseData::default(),
         }
     }
 
@@ -285,6 +296,16 @@ impl PeerScore {
                     topic_stats.invalid_message_deliveries * topic_stats.invalid_message_deliveries;
                 topic_score += p4 * topic_params.invalid_message_deliveries_weight;
 
+                // P8: mesh promises
+                if topic_stats.mesh_promises_broken_relative
+                    > topic_params.mesh_promise_relative_threshold
+                {
+                    let excess = topic_stats.mesh_promises_broken_relative
+                        - topic_params.mesh_promise_relative_threshold;
+                    let p8 = excess * excess;
+                    topic_score += p8 * topic_params.mesh_promise_weight;
+                }
+
                 // update score, mixing with topic weight
                 score += topic_score * topic_params.topic_weight;
             }
@@ -354,6 +375,26 @@ impl PeerScore {
         }
     }
 
+    pub fn report_broken_promises(&mut self) -> Vec<MeshPromise> {
+        //report broken promises
+        let mut broken_promises = Vec::new();
+        for (topic, promises) in &mut self.mesh_promise_data {
+            for (message_id, peer_id) in promises.extract_broken_promises() {
+                let rel = Self::report_mesh_promise(&mut self.peer_stats, &peer_id, topic, false);
+                if let Some(topic_params) = self.params.topics.get(topic) {
+                    if rel >= topic_params.mesh_message_deliveries_threshold {
+                        debug!(
+                            "Broken mesh promise for peer {} and message {} in topic {}",
+                            peer_id, message_id, topic
+                        );
+                    }
+                }
+                broken_promises.push((message_id, peer_id));
+            }
+        }
+        broken_promises
+    }
+
     pub fn refresh_scores(&mut self) {
         let now = Instant::now();
         let params_ref = &self.params;
@@ -398,6 +439,14 @@ impl PeerScore {
                     if topic_stats.invalid_message_deliveries < params_ref.decay_to_zero {
                         topic_stats.invalid_message_deliveries = 0.0;
                     }
+
+                    if topic_stats.mesh_promises_total >= topic_params.mesh_promise_min_total {
+                        topic_stats.mesh_promises_total *= topic_params.mesh_promise_decay;
+                        if topic_stats.mesh_promises_total < topic_params.mesh_promise_min_total {
+                            topic_stats.mesh_promises_total = topic_params.mesh_promise_min_total;
+                        }
+                    }
+
                     // update mesh time and activate mesh message delivery parameter if need be
                     if let MeshStatus::Active {
                         ref mut mesh_time,
@@ -551,6 +600,12 @@ impl PeerScore {
     }
 
     pub fn validate_message<T>(&mut self, _from: &PeerId, _msg: &GossipsubMessageWithId<T>) {
+        //resolve mesh promise
+        if let Some(mesh_promises) = self.mesh_promise_data.get_mut(&_msg.topic) {
+            if mesh_promises.resolve_promise(_msg.message_id(), _from) {
+                Self::report_mesh_promise(&mut self.peer_stats, _from, &_msg.topic, true);
+            }
+        }
         // adds an empty record with the message id
         self.deliveries
             .entry(_msg.message_id().clone())
@@ -718,6 +773,7 @@ impl PeerScore {
             Occupied(mut entry) => {
                 let first_message_deliveries_cap = params.first_message_deliveries_cap;
                 let mesh_message_delivieries_cap = params.mesh_message_deliveries_cap;
+                let mesh_promise_window = params.mesh_promise_window;
                 let old_params = entry.insert(params);
 
                 if old_params.first_message_deliveries_cap > first_message_deliveries_cap {
@@ -737,6 +793,17 @@ impl PeerScore {
                                 tstats.mesh_message_deliveries = mesh_message_delivieries_cap;
                             }
                         }
+                    }
+                }
+
+                // check if mesh promises window changed
+                //
+                // Note: If mesh promise window decreases this might only take effect after the old
+                //       promise window is over since the MeshPromises' ordered list assumes that
+                //       expire times come in ordered.
+                if old_params.mesh_promise_window != mesh_promise_window {
+                    if let Some(promises) = self.mesh_promise_data.get_mut(&topic_hash) {
+                        promises.window = mesh_promise_window;
                     }
                 }
             }
@@ -873,6 +940,57 @@ impl PeerScore {
             .get(peer)
             .and_then(|s| s.topics.get(topic))
             .map(|t| t.mesh_message_deliveries)
+    }
+
+    fn report_mesh_promise(
+        peer_stats: &mut HashMap<PeerId, PeerStats>,
+        peer: &PeerId,
+        topic: &TopicHash,
+        satisfied: bool,
+    ) -> f64 {
+        if let Some(topic_stats) = peer_stats
+            .get_mut(peer)
+            .and_then(|s| s.topics.get_mut(topic))
+        {
+            let mut broken_promises_total =
+                topic_stats.mesh_promises_broken_relative * topic_stats.mesh_promises_total;
+            if !satisfied {
+                broken_promises_total += 1.0;
+            }
+            topic_stats.mesh_promises_total += 1.0;
+            topic_stats.mesh_promises_broken_relative =
+                broken_promises_total / topic_stats.mesh_promises_total;
+            topic_stats.mesh_promises_broken_relative
+        } else {
+            0.0
+        }
+    }
+
+    pub(crate) fn get_mesh_promise_probability(&self, topic: &TopicHash) -> f64 {
+        self.params
+            .topics
+            .get(topic)
+            .map(|p| p.mesh_promise_probability)
+            .unwrap_or(0.0)
+    }
+
+    pub(crate) fn add_promise(
+        &mut self,
+        topic: &TopicHash,
+        message_id: MessageId,
+        peer_id: PeerId,
+    ) {
+        use hash_map::Entry::*;
+        match self.mesh_promise_data.entry(topic.clone()) {
+            Occupied(mut entry) => entry.get_mut().add_promise(message_id, peer_id),
+            Vacant(entry) => {
+                if let Some(topic_params) = self.params.topics.get(topic) {
+                    entry
+                        .insert(MeshPromises::new(topic_params.mesh_promise_window))
+                        .add_promise(message_id, peer_id)
+                }
+            }
+        }
     }
 }
 

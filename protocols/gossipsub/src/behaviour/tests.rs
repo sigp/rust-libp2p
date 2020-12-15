@@ -4053,6 +4053,104 @@ mod tests {
     }
 
     #[test]
+    fn test_scoring_p8_penalties_for_copycat() {
+        let config = GossipsubConfig::default();
+        let mut peer_score_params = PeerScoreParams::default();
+        let topic = Topic::new("test");
+        let topic_hash = topic.hash();
+        let mut topic_params = TopicScoreParams::default();
+        topic_params.time_in_mesh_weight = 0.0; //deactivate time in mesh
+        topic_params.first_message_deliveries_weight = 0.0; //deactivate first time deliveries
+        topic_params.mesh_message_deliveries_weight = 0.0; //deactivate mesh message deliveries
+        topic_params.mesh_promise_weight = -2.0;
+        topic_params.mesh_promise_window = Duration::from_secs(1);
+        topic_params.mesh_promise_probability = 0.1;
+        topic_params.mesh_promise_decay = 0.9;
+        topic_params.mesh_promise_min_total = 3.0;
+        topic_params.mesh_promise_relative_threshold = 0.5;
+        topic_params.topic_weight = 0.7;
+        peer_score_params
+            .topics
+            .insert(topic_hash.clone(), topic_params.clone());
+        let peer_score_thresholds = PeerScoreThresholds::default();
+
+        //build mesh with two peers
+        let (mut gs, peers, topics) = inject_nodes1()
+            .peer_no(2)
+            .topics(vec!["test".into()])
+            .to_subscribe(true)
+            .gs_config(config.clone())
+            .explicit(0)
+            .outbound(0)
+            .scoring(Some((peer_score_params, peer_score_thresholds)))
+            .create_network();
+
+        let mut seq = 0;
+
+        let mut copied = Vec::new();
+        fn deliver_message(
+            gs: &mut Gossipsub,
+            index: usize,
+            msg: RawGossipsubMessage,
+            peers: &[PeerId],
+            copied: &mut Vec<RawGossipsubMessage>,
+        ) {
+            gs.handle_received_message(msg.clone(), &peers[index]);
+            //check if message got forwarded to peers[0]
+            if gs.events.drain(..).any(|e| match e {
+                GossipsubNetworkBehaviourAction::NotifyHandler { peer_id, .. } => {
+                    &peer_id == &peers[0]
+                }
+                _ => false,
+            }) && index != 0
+            {
+                copied.push(msg.clone());
+                deliver_message(gs, 0, msg, peers, copied);
+            }
+        }
+
+        let mut num_messages = 0;
+
+        // cap num messages to avoid infinite loop
+        while num_messages - copied.len() < 3 && num_messages < 1000 {
+            let m = random_message(&mut seq, &topics);
+            deliver_message(&mut gs, 1, m, &peers, &mut copied);
+            num_messages += 1;
+        }
+
+        // we should not reach this limit
+        assert!(num_messages < 1000);
+
+        gs.heartbeat();
+        assert_eq!(gs.peer_score.as_ref().unwrap().0.score(&peers[0]), 0.0);
+
+        sleep(Duration::from_secs(1));
+
+        gs.events.clear();
+        //collect broken promises
+        gs.heartbeat();
+
+        //assert that the peer sends the promises now
+        assert_eq!(
+            gs.events
+                .iter()
+                .filter(|e| match e {
+                    GossipsubNetworkBehaviourAction::NotifyHandler { peer_id, event, .. } => {
+                        peer_id == &peers[0] && event.publish.len() == 1
+                    }
+                    _ => true,
+                })
+                .count(),
+            num_messages - copied.len()
+        );
+
+        assert_eq!(
+            gs.peer_score.as_ref().unwrap().0.score(&peers[0]),
+            0.5_f64.powi(2) * -2.0 * 0.7
+        );
+    }
+
+    #[test]
     fn test_opportunistic_grafting() {
         let config = GossipsubConfigBuilder::new()
             .mesh_n_low(3)
