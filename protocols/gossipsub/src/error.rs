@@ -20,6 +20,7 @@
 
 //! Error types that can result from gossipsub.
 
+use crate::compression::CompressionError;
 use libp2p_core::identity::error::SigningError;
 use libp2p_core::upgrade::ProtocolError;
 use std::fmt;
@@ -36,6 +37,8 @@ pub enum PublishError {
     /// The overall message was too large. This could be due to excessive topics or an excessive
     /// message size.
     MessageTooLarge,
+    /// The compression algorithm failed.
+    CompressionFailed,
 }
 
 /// Error associated with subscribing to a topic.
@@ -89,11 +92,19 @@ pub enum ValidationError {
     /// Message source existed when validation has been sent to
     /// [`crate::behaviour::MessageAuthenticity::Anonymous`].
     MessageSourcePresent,
+    /// The message could not be decompressed.
+    DecompressionFailed,
 }
 
 impl From<std::io::Error> for GossipsubHandlerError {
     fn from(error: std::io::Error) -> GossipsubHandlerError {
         GossipsubHandlerError::Io(error)
+    }
+}
+
+impl From<CompressionError> for PublishError {
+    fn from(_error: CompressionError) -> PublishError {
+        PublishError::CompressionFailed
     }
 }
 

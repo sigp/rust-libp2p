@@ -127,6 +127,7 @@ pub mod protocol;
 
 mod backoff;
 mod behaviour;
+mod compression;
 mod config;
 mod gossip_promises;
 mod handler;
