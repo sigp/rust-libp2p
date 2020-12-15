@@ -604,12 +604,6 @@ impl PeerScore {
     }
 
     pub fn validate_message<T>(&mut self, _from: &PeerId, _msg: &GossipsubMessageWithId<T>) {
-        //resolve mesh promise
-        if let Some(mesh_promises) = self.mesh_promise_data.get_mut(&_msg.topic) {
-            if mesh_promises.resolve_promise(_msg.message_id(), _from) {
-                Self::report_mesh_promise(&mut self.peer_stats, _from, &_msg.topic, true);
-            }
-        }
         // adds an empty record with the message id
         self.deliveries
             .entry(_msg.message_id().clone())
@@ -718,6 +712,13 @@ impl PeerScore {
         if record.peers.get(from).is_some() {
             // we have already seen this duplicate!
             return;
+        }
+
+        //resolve mesh promise
+        if let Some(mesh_promises) = self.mesh_promise_data.get_mut(&msg.topic) {
+            if mesh_promises.resolve_promise(msg.message_id(), from) {
+                Self::report_mesh_promise(&mut self.peer_stats, from, &msg.topic, true);
+            }
         }
 
         if let Some(callback) = self.message_delivery_time_callback {

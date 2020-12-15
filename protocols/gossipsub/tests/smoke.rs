@@ -30,8 +30,7 @@ use std::{
 
 use futures::StreamExt;
 use libp2p_core::{
-    identity, multiaddr::Protocol, transport::MemoryTransport, upgrade,
-    Multiaddr, Transport,
+    identity, multiaddr::Protocol, transport::MemoryTransport, upgrade, Multiaddr, Transport,
 };
 use libp2p_gossipsub::{
     Gossipsub, GossipsubConfigBuilder, GossipsubEvent, IdentTopic as Topic, MessageAuthenticity,

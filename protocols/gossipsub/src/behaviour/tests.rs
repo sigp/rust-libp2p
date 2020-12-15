@@ -4106,15 +4106,20 @@ mod tests {
             {
                 copied.push(msg.clone());
                 deliver_message(gs, 0, msg, peers, copied);
+            } else if index == 0 {
+                //peer 1 always delivers all messages
+                deliver_message(gs, 1, msg, peers, copied);
             }
         }
 
         let mut num_messages = 0;
 
         // cap num messages to avoid infinite loop
-        while num_messages - copied.len() < 3 && num_messages < 1000 {
+        while num_messages - copied.len() < 10 && num_messages < 1000 {
             let m = random_message(&mut seq, &topics);
             deliver_message(&mut gs, 1, m, &peers, &mut copied);
+            let m2 = random_message(&mut seq, &topics);
+            deliver_message(&mut gs, 0, m2, &peers, &mut copied);
             num_messages += 1;
         }
 
@@ -4148,6 +4153,9 @@ mod tests {
             gs.peer_score.as_ref().unwrap().0.score(&peers[0]),
             0.5_f64.powi(2) * -2.0 * 0.7
         );
+
+        //assert that peer 1 didn't get penalized
+        assert_eq!(gs.peer_score.as_ref().unwrap().0.score(&peers[1]), 0.0)
     }
 
     #[test]
