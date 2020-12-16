@@ -1754,6 +1754,9 @@ where
         // look for broken mesh promises
         if let Some((peer_score, ..)) = &mut self.peer_score {
             let promises = peer_score.report_broken_promises();
+            // don't forward for testing reasons
+            // TODO uncomment that
+            /*
             for (message_id, peer_id) in promises {
                 if let Some(message) = self.mcache.get(&message_id).cloned() {
                     //forward message to peer_id
@@ -1773,7 +1776,7 @@ where
                         message_id, peer_id
                     );
                 }
-            }
+            }*/
         }
 
         // check connections to explicit peers
