@@ -117,7 +117,7 @@ impl MessageAuthenticity {
 /// Event that can be emitted by the gossipsub behaviour.
 #[derive(Debug)]
 pub enum GenericGossipsubEvent<T: AsRef<[u8]>> {
-    /// A message has been received.    
+    /// A message has been received.
     Message {
         /// The peer that forwarded us this message.
         propagation_source: PeerId,
@@ -589,6 +589,10 @@ where
                     } else {
                         // We have no fanout peers, select mesh_n of them and add them to the fanout
                         let mesh_n = self.config.mesh_n();
+                        trace!(
+                            "Getting random_peers to fill low mesh, unfiltered peer set: {:?}",
+                            self.topic_peers.get(topic_hash)
+                        );
                         let new_peers = Self::get_random_peers(
                             &self.topic_peers,
                             &self.peer_protocols,
@@ -1384,9 +1388,10 @@ where
         propagation_source: &PeerId,
     ) -> bool {
         debug!(
-            "Handling message: {:?} from peer: {}",
+            "Handling message: {:?} from peer: {} in topic: {}",
             msg.message_id(),
-            propagation_source.to_string()
+            propagation_source.to_string(),
+            msg.topic
         );
 
         // Reject any message from a blacklisted peer
