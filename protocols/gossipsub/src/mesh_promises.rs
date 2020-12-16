@@ -67,8 +67,11 @@ impl MeshPromises {
                 self.list.push_front(element);
                 break;
             } else {
-                self.promises.remove(&element.element);
-                result.push(element.element);
+                // if there is no corresponding entry in `promises` then we know the promise got
+                // broken
+                if self.promises.remove(&element.element) {
+                    result.push(element.element);
+                }
             }
         }
         result
