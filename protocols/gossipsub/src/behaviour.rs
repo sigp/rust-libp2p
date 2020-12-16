@@ -2316,23 +2316,26 @@ where
         // mesh
         if let Some(mesh_peers) = self.mesh.get(&topic) {
             for peer_id in mesh_peers {
-                if Some(peer_id) != propagation_source
-                    && Some(peer_id) != message.source.as_ref()
-                    && !delivered_by.contains(peer_id)
-                {
+                if Some(peer_id) != propagation_source && Some(peer_id) != message.source.as_ref() {
                     if mesh_promise_probability > 0.0
                         && !self.explicit_peers.contains(peer_id)
                         && thread_rng().gen_bool(mesh_promise_probability)
                     {
                         //don't send to this peer, we use the message as a promise
                         peer_score.as_mut().map(|peer_score| {
-                            peer_score.add_promise(
-                                topic,
-                                message.message_id().clone(),
-                                peer_id.clone(),
-                            )
+                            if delivered_by.contains(peer_id) {
+                                // the promise got already satisfied => we directly count it as
+                                // satisfied without adding a promise at all
+                                peer_score.report_successful_mesh_promise(peer_id, topic);
+                            } else {
+                                peer_score.add_promise(
+                                    topic,
+                                    message.message_id().clone(),
+                                    peer_id.clone(),
+                                );
+                            }
                         });
-                    } else {
+                    } else if !delivered_by.contains(peer_id) {
                         recipient_peers.insert(peer_id.clone());
                     }
                 }

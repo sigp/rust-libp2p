@@ -710,6 +710,10 @@ impl PeerScore {
         self.deliveries.get(msg_id).map(|record| &record.peers)
     }
 
+    pub fn report_successful_mesh_promise(&mut self, peer_id: &PeerId, topic: &TopicHash) {
+        Self::report_mesh_promise(&mut self.peer_stats, peer_id, topic, true);
+    }
+
     pub fn duplicated_message<T>(&mut self, from: &PeerId, msg: &GossipsubMessageWithId<T>) {
         let record = self
             .deliveries
