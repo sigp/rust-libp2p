@@ -19,7 +19,7 @@
 // DEALINGS IN THE SOFTWARE.
 
 use crate::topic::TopicHash;
-use crate::types::{GossipsubMessageWithId, MessageId};
+use crate::types::{MessageId, RawGossipsubMessage};
 use libp2p_core::PeerId;
 use log::debug;
 use std::fmt::Debug;
@@ -34,15 +34,18 @@ pub struct CacheEntry {
 
 /// MessageCache struct holding history of messages.
 #[derive(Clone)]
-pub struct MessageCache<T> {
-    msgs: HashMap<MessageId, GossipsubMessageWithId<T>>,
+pub struct MessageCache {
+    msgs: HashMap<MessageId, RawGossipsubMessage>,
     /// For every message and peer the number of times this peer asked for the message
     iwant_counts: HashMap<MessageId, HashMap<PeerId, u32>>,
     history: Vec<Vec<CacheEntry>>,
+    /// The number of indices in the cache history used for gossipping. That means that a message
+    /// won't get gossipped anymore when shift got called `gossip` many times after inserting the
+    /// message in the cache.
     gossip: usize,
 }
 
-impl<T: Debug + AsRef<[u8]>> fmt::Debug for MessageCache<T> {
+impl fmt::Debug for MessageCache {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MessageCache")
             .field("msgs", &self.msgs)
@@ -53,7 +56,7 @@ impl<T: Debug + AsRef<[u8]>> fmt::Debug for MessageCache<T> {
 }
 
 /// Implementation of the MessageCache.
-impl<T> MessageCache<T> {
+impl MessageCache {
     pub fn new(gossip: usize, history_capacity: usize) -> Self {
         MessageCache {
             gossip,
@@ -66,8 +69,11 @@ impl<T> MessageCache<T> {
     /// Put a message into the memory cache.
     ///
     /// Returns the message if it already exists.
-    pub fn put(&mut self, msg: GossipsubMessageWithId<T>) -> Option<GossipsubMessageWithId<T>> {
-        let message_id = msg.message_id();
+    pub fn put(
+        &mut self,
+        message_id: &MessageId,
+        msg: RawGossipsubMessage,
+    ) -> Option<RawGossipsubMessage> {
         debug!("Put message {:?} in mcache", message_id);
         let cache_entry = CacheEntry {
             mid: message_id.clone(),
@@ -83,42 +89,46 @@ impl<T> MessageCache<T> {
     }
 
     /// Get a message with `message_id`
-    #[allow(dead_code)]
-    pub fn get(&self, message_id: &MessageId) -> Option<&GossipsubMessageWithId<T>> {
+    #[cfg(test)]
+    pub fn get(&self, message_id: &MessageId) -> Option<&RawGossipsubMessage> {
         self.msgs.get(message_id)
     }
 
-    ///increases the iwant count for the given message by one and returns the message together
+    /// Increases the iwant count for the given message by one and returns the message together
     /// with the iwant if the message exists.
     pub fn get_with_iwant_counts(
         &mut self,
         message_id: &MessageId,
         peer: &PeerId,
-    ) -> Option<(&GossipsubMessageWithId<T>, u32)> {
+    ) -> Option<(&RawGossipsubMessage, u32)> {
         let iwant_counts = &mut self.iwant_counts;
-        self.msgs.get(message_id).map(|message| {
-            (message, {
-                let count = iwant_counts
-                    .entry(message_id.clone())
-                    .or_default()
-                    .entry(peer.clone())
-                    .or_default();
-                *count += 1;
-                *count
-            })
+        self.msgs.get(message_id).and_then(|message| {
+            if !message.validated {
+                None
+            } else {
+                Some((message, {
+                    let count = iwant_counts
+                        .entry(message_id.clone())
+                        .or_default()
+                        .entry(peer.clone())
+                        .or_default();
+                    *count += 1;
+                    *count
+                }))
+            }
         })
     }
 
-    /// Gets and validates a message with `message_id`.
-    pub fn validate(&mut self, message_id: &MessageId) -> Option<&GossipsubMessageWithId<T>> {
+    /// Gets a message with [`MessageId`] and tags it as validated.
+    pub fn validate(&mut self, message_id: &MessageId) -> Option<&RawGossipsubMessage> {
         self.msgs.get_mut(message_id).map(|message| {
             message.validated = true;
             &*message
         })
     }
 
-    /// Get a list of GossipIds for a given topic
-    pub fn get_gossip_ids(&self, topic: &TopicHash) -> Vec<MessageId> {
+    /// Get a list of [`MessageId`]s for a given topic.
+    pub fn get_gossip_message_ids(&self, topic: &TopicHash) -> Vec<MessageId> {
         self.history[..self.gossip]
             .iter()
             .fold(vec![], |mut current_entries, entries| {
@@ -147,7 +157,7 @@ impl<T> MessageCache<T> {
     }
 
     /// Shift the history array down one and delete messages associated with the
-    /// last entry
+    /// last entry.
     pub fn shift(&mut self) {
         for entry in self.history.pop().expect("history is always > 1") {
             if let Some(msg) = self.msgs.remove(&entry.mid) {
@@ -155,8 +165,9 @@ impl<T> MessageCache<T> {
                     // If GossipsubConfig::validate_messages is true, the implementing
                     // application has to ensure that Gossipsub::validate_message gets called for
                     // each received message within the cache timeout time."
-                    debug!("The message with id {} got removed from the cache without being validated.",
-                    &entry.mid
+                    debug!(
+                        "The message with id {} got removed from the cache without being validated.",
+                        &entry.mid
                     );
                 }
             }
@@ -170,7 +181,7 @@ impl<T> MessageCache<T> {
     }
 
     /// Removes a message from the cache and returns it if existent
-    pub fn remove(&mut self, message_id: &MessageId) -> Option<GossipsubMessageWithId<T>> {
+    pub fn remove(&mut self, message_id: &MessageId) -> Option<RawGossipsubMessage> {
         //We only remove the message from msgs and iwant_count and keep the message_id in the
         // history vector. Zhe id in the history vector will simply be ignored on popping.
 
@@ -183,10 +194,10 @@ impl<T> MessageCache<T> {
 mod tests {
     use super::*;
     use crate::types::RawGossipsubMessage;
-    use crate::{GossipsubMessage, IdentTopic as Topic, TopicHash};
+    use crate::{IdentTopic as Topic, TopicHash};
     use libp2p_core::PeerId;
 
-    fn gen_testm(x: u64, topic: TopicHash) -> GossipsubMessage {
+    fn gen_testm(x: u64, topic: TopicHash) -> (MessageId, RawGossipsubMessage) {
         let default_id = |message: &RawGossipsubMessage| {
             // default message id is: source + sequence number
             let mut source_string = message.source.as_ref().unwrap().to_base58();
@@ -202,17 +213,17 @@ mod tests {
             source,
             data,
             sequence_number,
-            topic: topic,
+            topic,
             signature: None,
             key: None,
             validated: false,
         };
 
         let id = default_id(&m);
-        GossipsubMessage::new(m, id)
+        (id, m)
     }
 
-    fn new_cache(gossip_size: usize, history: usize) -> MessageCache<Vec<u8>> {
+    fn new_cache(gossip_size: usize, history: usize) -> MessageCache {
         MessageCache::new(gossip_size, history)
     }
 
@@ -231,13 +242,13 @@ mod tests {
         let mut mc = new_cache(10, 15);
 
         let topic1_hash = Topic::new("topic1").hash().clone();
-        let m = gen_testm(10, topic1_hash);
+        let (id, m) = gen_testm(10, topic1_hash);
 
-        mc.put(m.clone());
+        mc.put(&id, m.clone());
 
         assert!(mc.history[0].len() == 1);
 
-        let fetched = mc.get(m.message_id());
+        let fetched = mc.get(&id);
 
         assert_eq!(fetched.is_none(), false);
         assert_eq!(fetched.is_some(), true);
@@ -255,9 +266,9 @@ mod tests {
         let mut mc = new_cache(10, 15);
 
         let topic1_hash = Topic::new("topic1").hash().clone();
-        let m = gen_testm(10, topic1_hash);
+        let (id, m) = gen_testm(10, topic1_hash);
 
-        mc.put(m.clone());
+        mc.put(&id, m.clone());
 
         // Try to get an incorrect ID
         let wrong_id = MessageId::new(b"wrongid");
@@ -285,8 +296,8 @@ mod tests {
 
         // Build the message
         for i in 0..10 {
-            let m = gen_testm(i, topic1_hash.clone());
-            mc.put(m.clone());
+            let (id, m) = gen_testm(i, topic1_hash.clone());
+            mc.put(&id, m.clone());
         }
 
         mc.shift();
@@ -308,8 +319,8 @@ mod tests {
 
         // Build the message
         for i in 0..10 {
-            let m = gen_testm(i, topic1_hash.clone());
-            mc.put(m.clone());
+            let (id, m) = gen_testm(i, topic1_hash.clone());
+            mc.put(&id, m.clone());
         }
 
         mc.shift();
@@ -334,8 +345,8 @@ mod tests {
 
         // Build the message
         for i in 0..10 {
-            let m = gen_testm(i, topic1_hash.clone());
-            mc.put(m.clone());
+            let (id, m) = gen_testm(i, topic1_hash.clone());
+            mc.put(&id, m.clone());
         }
 
         // Shift right until deleting messages

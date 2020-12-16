@@ -1,4 +1,25 @@
-# 0.25.0 [unreleased]
+# 0.27.0 [unreleased]
+
+- Update `libp2p-swarm` and `libp2p-core`.
+
+# 0.26.0 [2020-12-08]
+
+- Create multiple multicast response packets as required to avoid
+  hitting the limit of 9000 bytes per MDNS packet.
+  [PR 1877](https://github.com/libp2p/rust-libp2p/pull/1877).
+
+- Detect interface changes and join the MDNS multicast
+  group on all interfaces as they become available.
+  [PR 1830](https://github.com/libp2p/rust-libp2p/pull/1830).
+
+- Replace the use of macros for abstracting over `tokio`
+  and `async-std` with the use of `async-io`. As a result
+  there may now be an additional reactor thread running
+  called `async-io` when using `tokio`, with the futures
+  still being polled by the `tokio` runtime.
+  [PR 1830](https://github.com/libp2p/rust-libp2p/pull/1830).
+
+# 0.25.0 [2020-11-25]
 
 - Update `libp2p-swarm` and `libp2p-core`.
 
