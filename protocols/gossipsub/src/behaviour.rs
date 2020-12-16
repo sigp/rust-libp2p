@@ -2438,8 +2438,8 @@ where
 
                 let signature = {
                     let message = rpc_proto::Message {
-                        from: Some(author.clone().into_bytes()),
-                        data: Some(compressed_data.clone().into()),
+                        from: Some(author.clone().to_bytes()),
+                        data: Some(compressed_data.clone()),
                         seqno: Some(sequence_number.to_be_bytes().to_vec()),
                         topic: topic.clone().into_string(),
                         signature: None,

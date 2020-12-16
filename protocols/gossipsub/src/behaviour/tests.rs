@@ -137,7 +137,9 @@ mod tests {
     }
 
     #[cfg(feature = "snappy")]
-    fn inject_nodes2() -> InjectNodesBuilder<SnappyCompression, AllowAllSubscriptionFilter> {
+    // used for testing compression
+    fn _inject_nodes_compression(
+    ) -> InjectNodesBuilder<SnappyCompression, AllowAllSubscriptionFilter> {
         inject_nodes()
     }
 
@@ -237,7 +239,7 @@ mod tests {
         let rpc = rpc.clone();
         for message in rpc.publish.into_iter() {
             messages.push(RawGossipsubMessage {
-                source: message.from.map(|x| PeerId::from_bytes(x).unwrap()),
+                source: message.from.map(|x| PeerId::from_bytes(&x).unwrap()),
                 data: message.data.unwrap_or_default(),
                 sequence_number: message.seqno.map(|x| BigEndian::read_u64(&x)), // don't inform the application
                 topic: TopicHash::from_raw(message.topic),
@@ -291,7 +293,7 @@ mod tests {
                     .into_iter()
                     .filter_map(|info| {
                         info.peer_id
-                            .and_then(|id| PeerId::from_bytes(id).ok())
+                            .and_then(|id| PeerId::from_bytes(&id).ok())
                             .map(|peer_id|
                                     //TODO signedPeerRecord, see https://github.com/libp2p/specs/pull/217
                                     PeerInfo {

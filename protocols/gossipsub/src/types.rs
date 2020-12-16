@@ -248,7 +248,7 @@ impl Into<rpc_proto::Rpc> for GossipsubRpc {
 
         for message in self.messages.into_iter() {
             let message = rpc_proto::Message {
-                from: message.source.map(|m| m.into_bytes()),
+                from: message.source.map(|m| m.to_bytes()),
                 data: Some(message.data),
                 seqno: message.sequence_number.map(|s| s.to_be_bytes().to_vec()),
                 topic: TopicHash::into_string(message.topic),
@@ -314,7 +314,7 @@ impl Into<rpc_proto::Rpc> for GossipsubRpc {
                         peers: peers
                             .into_iter()
                             .map(|info| rpc_proto::PeerInfo {
-                                peer_id: info.peer_id.map(|id| id.into_bytes()),
+                                peer_id: info.peer_id.map(|id| id.to_bytes()),
                                 /// TODO, see https://github.com/libp2p/specs/pull/217
                                 signed_peer_record: None,
                             })
