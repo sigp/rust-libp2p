@@ -959,7 +959,7 @@ impl PeerScore {
         peer: &PeerId,
         topic: &TopicHash,
         satisfied: bool,
-    ) -> f64 {
+    ) -> (f64, f64) {
         if let Some(topic_stats) = peer_stats
             .get_mut(peer)
             .and_then(|s| s.topics.get_mut(topic))
