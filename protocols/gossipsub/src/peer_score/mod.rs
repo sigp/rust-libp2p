@@ -703,6 +703,10 @@ impl PeerScore {
         }
     }
 
+    pub fn delivered_by(&self, msg_id: &MessageId) -> Option<&HashSet<PeerId>> {
+        self.deliveries.get(msg_id).map(|record| &record.peers)
+    }
+
     pub fn duplicated_message<T>(&mut self, from: &PeerId, msg: &GossipsubMessageWithId<T>) {
         let record = self
             .deliveries

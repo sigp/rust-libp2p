@@ -2307,10 +2307,19 @@ where
         } else {
             0.0
         };
+
+        let delivered_by = peer_score
+            .as_ref()
+            .and_then(|peer_score| peer_score.delivered_by(&message.message_id()).cloned())
+            .unwrap_or_else(|| HashSet::new());
+
         // mesh
         if let Some(mesh_peers) = self.mesh.get(&topic) {
             for peer_id in mesh_peers {
-                if Some(peer_id) != propagation_source && Some(peer_id) != message.source.as_ref() {
+                if Some(peer_id) != propagation_source
+                    && Some(peer_id) != message.source.as_ref()
+                    && !delivered_by.contains(peer_id)
+                {
                     if mesh_promise_probability > 0.0
                         && !self.explicit_peers.contains(peer_id)
                         && thread_rng().gen_bool(mesh_promise_probability)
