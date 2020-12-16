@@ -380,9 +380,12 @@ impl PeerScore {
         let mut broken_promises = Vec::new();
         for (topic, promises) in &mut self.mesh_promise_data {
             for (message_id, peer_id) in promises.extract_broken_promises() {
-                let rel = Self::report_mesh_promise(&mut self.peer_stats, &peer_id, topic, false);
+                let (rel, total) =
+                    Self::report_mesh_promise(&mut self.peer_stats, &peer_id, topic, false);
                 if let Some(topic_params) = self.params.topics.get(topic) {
-                    if rel >= topic_params.mesh_message_deliveries_threshold {
+                    if rel >= topic_params.mesh_promise_relative_threshold
+                        && total >= topic_params.mesh_promise_min_total
+                    {
                         debug!(
                             "Broken mesh promise for peer {} and message {} in topic {}",
                             peer_id, message_id, topic
@@ -969,9 +972,12 @@ impl PeerScore {
             topic_stats.mesh_promises_total += 1.0;
             topic_stats.mesh_promises_broken_relative =
                 broken_promises_total / topic_stats.mesh_promises_total;
-            topic_stats.mesh_promises_broken_relative
+            (
+                topic_stats.mesh_promises_broken_relative,
+                topic_stats.mesh_promises_total,
+            )
         } else {
-            0.0
+            (0.0, 0.0)
         }
     }
 
