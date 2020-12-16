@@ -384,7 +384,8 @@ impl PeerScore {
                     Self::report_mesh_promise(&mut self.peer_stats, &peer_id, topic, false);
                 if let Some(topic_params) = self.params.topics.get(topic) {
                     if rel >= topic_params.mesh_promise_relative_threshold
-                        && total >= topic_params.mesh_promise_min_total
+                    // TODO uncomment below
+                    //&& total >= topic_params.mesh_promise_min_total
                     {
                         debug!(
                             "Broken mesh promise for peer {} and message {} in topic {}",
@@ -1005,6 +1006,11 @@ impl PeerScore {
         peer_id: PeerId,
     ) {
         use hash_map::Entry::*;
+        trace!(
+            "Add promise for messsage {} and peer {}",
+            message_id,
+            peer_id
+        );
         match self.mesh_promise_data.entry(topic.clone()) {
             Occupied(mut entry) => entry.get_mut().add_promise(message_id, peer_id),
             Vacant(entry) => {
