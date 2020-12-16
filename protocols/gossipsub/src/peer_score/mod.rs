@@ -724,6 +724,11 @@ impl PeerScore {
         //resolve mesh promise
         if let Some(mesh_promises) = self.mesh_promise_data.get_mut(&msg.topic) {
             if mesh_promises.resolve_promise(msg.message_id(), from) {
+                trace!(
+                    "report satisfied mesh promise for message {} and peer {}",
+                    msg.message_id(),
+                    from
+                );
                 Self::report_mesh_promise(&mut self.peer_stats, from, &msg.topic, true);
             }
         }
