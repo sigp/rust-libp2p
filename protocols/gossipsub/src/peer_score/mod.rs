@@ -299,6 +299,7 @@ impl PeerScore {
                 // P8: mesh promises
                 if topic_stats.mesh_promises_broken_relative
                     > topic_params.mesh_promise_relative_threshold
+                    && topic_stats.mesh_promises_total >= topic_params.mesh_promise_min_total
                 {
                     let excess = topic_stats.mesh_promises_broken_relative
                         - topic_params.mesh_promise_relative_threshold;
