@@ -201,7 +201,7 @@ type GossipsubNetworkBehaviourAction = NetworkBehaviourAction<Arc<rpc_proto::Rpc
 /// message signing is disabled, the [`ValidationMode`] in the config should be adjusted to an
 /// appropriate level to accept unsigned messages.
 pub struct Gossipsub<
-    C: MessageCompression + Copy = NoCompression,
+    C: MessageCompression = NoCompression,
     F: TopicSubscriptionFilter = AllowAllSubscriptionFilter,
 > {
     /// Configuration providing gossipsub performance parameters.
@@ -296,7 +296,7 @@ pub struct Gossipsub<
 
 impl<C, F> Gossipsub<C, F>
 where
-    C: MessageCompression + Default + Copy,
+    C: MessageCompression + Default,
     F: TopicSubscriptionFilter + Default,
 {
     /// Creates a [`Gossipsub`] struct given a set of parameters specified via a
@@ -391,7 +391,7 @@ where
 
 impl<C, F> Gossipsub<C, F>
 where
-    C: MessageCompression + Copy,
+    C: MessageCompression,
     F: TopicSubscriptionFilter,
 {
     /// Lists the hashes of the topics we are currently subscribed to.
@@ -1536,7 +1536,7 @@ where
 
         // Try and decompress the message. If it fails, consider it invalid.
         let message = match GossipsubMessage::from_raw(
-            self.message_compression,
+            &self.message_compression,
             raw_message.clone(),
             self.config.max_transmit_size(),
         ) {
@@ -1554,6 +1554,13 @@ where
         };
 
         let msg_id = self.config.message_id(&message);
+
+        // Check the validity of the message
+        // Peers get penalized if this message is invalid. We don't add it to the duplicate cache
+        // and instead continually penalize peers that repeatedly send this message.
+        if !self.message_is_valid(&msg_id, &mut raw_message, propagation_source) {
+            return;
+        }
 
         // Add the message to the duplicate caches
         if let Some(fast_message_id) = fast_message_id {
@@ -1576,11 +1583,6 @@ where
             "Put message {:?} in duplicate_cache and resolve promises",
             msg_id
         );
-
-        // Check the validity of the message
-        if !self.message_is_valid(&msg_id, &mut raw_message, propagation_source) {
-            return;
-        }
 
         // Tells score that message arrived (but is maybe not fully validated yet).
         // Consider the message as delivered for gossip promises.
@@ -2700,7 +2702,7 @@ fn get_ip_addr(addr: &Multiaddr) -> Option<IpAddr> {
 
 impl<C, F> NetworkBehaviour for Gossipsub<C, F>
 where
-    C: Send + 'static + MessageCompression + Copy,
+    C: Send + 'static + MessageCompression,
     F: Send + 'static + TopicSubscriptionFilter,
 {
     type ProtocolsHandler = GossipsubHandler;
@@ -3171,7 +3173,7 @@ fn validate_config(
     Ok(())
 }
 
-impl<C: MessageCompression + Copy, F: TopicSubscriptionFilter> fmt::Debug for Gossipsub<C, F> {
+impl<C: MessageCompression, F: TopicSubscriptionFilter> fmt::Debug for Gossipsub<C, F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Gossipsub")
             .field("config", &self.config)

@@ -137,7 +137,7 @@ pub struct GossipsubMessage {
 
 impl GossipsubMessage {
     pub fn from_raw<C: MessageCompression>(
-        compression: C,
+        compression: &C,
         raw_message: RawGossipsubMessage,
         max_size: usize,
     ) -> Result<Self, CompressionError> {

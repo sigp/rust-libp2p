@@ -29,7 +29,7 @@ impl From<snap::Error> for CompressionError {
 }
 
 /// The default for gossipsub.
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 pub struct NoCompression;
 
 impl MessageCompression for NoCompression {
@@ -48,7 +48,7 @@ impl MessageCompression for NoCompression {
 
 /// Optional Snappy compression
 #[cfg(feature = "snappy")]
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 pub struct SnappyCompression;
 
 #[cfg(feature = "snappy")]

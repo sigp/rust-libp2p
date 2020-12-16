@@ -49,7 +49,7 @@ mod tests {
     // TODO: remove trait bound Default when this issue is fixed:
     //  https://github.com/colin-kiegel/rust-derive-builder/issues/93
     where
-        C: MessageCompression + Default + Copy + Send + 'static,
+        C: MessageCompression + Default + Clone + Send + 'static,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
         peer_no: usize,
@@ -65,7 +65,7 @@ mod tests {
 
     impl<C, F> InjectNodes<C, F>
     where
-        C: MessageCompression + Default + Copy + Send + 'static,
+        C: MessageCompression + Default + Clone + Send + 'static,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
         pub fn create_network(self) -> (Gossipsub<C, F>, Vec<PeerId>, Vec<TopicHash>) {
@@ -116,7 +116,7 @@ mod tests {
 
     impl<C, F> InjectNodesBuilder<C, F>
     where
-        C: MessageCompression + Default + Copy + Send + 'static,
+        C: MessageCompression + Default + Clone + Send + 'static,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
         pub fn create_network(&self) -> (Gossipsub<C, F>, Vec<PeerId>, Vec<TopicHash>) {
@@ -126,7 +126,7 @@ mod tests {
 
     fn inject_nodes<C, F>() -> InjectNodesBuilder<C, F>
     where
-        C: MessageCompression + Default + Copy + Send + 'static,
+        C: MessageCompression + Default + Clone + Send + 'static,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
         InjectNodesBuilder::default()
@@ -150,7 +150,7 @@ mod tests {
         explicit: bool,
     ) -> PeerId
     where
-        C: MessageCompression + Default + Copy + Send + 'static,
+        C: MessageCompression + Default + Clone + Send + 'static,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
         add_peer_with_addr(gs, topic_hashes, outbound, explicit, Multiaddr::empty())
@@ -164,7 +164,7 @@ mod tests {
         address: Multiaddr,
     ) -> PeerId
     where
-        C: MessageCompression + Default + Copy + Send + 'static,
+        C: MessageCompression + Default + Clone + Send + 'static,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
         add_peer_with_addr_and_kind(
@@ -186,7 +186,7 @@ mod tests {
         kind: Option<PeerKind>,
     ) -> PeerId
     where
-        C: MessageCompression + Default + Copy + Send + 'static,
+        C: MessageCompression + Default + Clone + Send + 'static,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
         let peer = PeerId::random();
@@ -608,7 +608,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message = GossipsubMessage::from_raw(
-            gs.message_compression,
+            &gs.message_compression,
             publishes
                 .first()
                 .expect("Should contain > 0 entries")
@@ -695,7 +695,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message = GossipsubMessage::from_raw(
-            gs.message_compression,
+            &gs.message_compression,
             publishes
                 .first()
                 .expect("Should contain > 0 entries")
@@ -947,7 +947,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message = GossipsubMessage::from_raw(
-            gs.message_compression,
+            &gs.message_compression,
             raw_message.clone(),
             gs.config.max_transmit_size(),
         )
@@ -977,7 +977,7 @@ mod tests {
             sent_messages
                 .iter()
                 .map(|msg| GossipsubMessage::from_raw(
-                    gs.message_compression,
+                    &gs.message_compression,
                     msg.clone(),
                     gs.config.max_transmit_size(),
                 )
@@ -1010,7 +1010,7 @@ mod tests {
 
             // Decompress the raw message and calculate the message id.
             let message = GossipsubMessage::from_raw(
-                gs.message_compression,
+                &gs.message_compression,
                 raw_message.clone(),
                 gs.config.max_transmit_size(),
             )
@@ -1032,7 +1032,7 @@ mod tests {
                         .iter()
                         .map(|msg| {
                             GossipsubMessage::from_raw(
-                                gs.message_compression,
+                                &gs.message_compression,
                                 msg.clone(),
                                 gs.config.max_transmit_size(),
                             )
@@ -1259,7 +1259,7 @@ mod tests {
         );
     }
 
-    fn count_control_msgs<C: MessageCompression + Copy, F: TopicSubscriptionFilter>(
+    fn count_control_msgs<C: MessageCompression, F: TopicSubscriptionFilter>(
         gs: &Gossipsub<C, F>,
         mut filter: impl FnMut(&PeerId, &GossipsubControlAction) -> bool,
     ) -> usize {
@@ -1283,9 +1283,7 @@ mod tests {
                 .sum::<usize>()
     }
 
-    fn flush_events<C: MessageCompression + Copy, F: TopicSubscriptionFilter>(
-        gs: &mut Gossipsub<C, F>,
-    ) {
+    fn flush_events<C: MessageCompression, F: TopicSubscriptionFilter>(gs: &mut Gossipsub<C, F>) {
         gs.control_pool.clear();
         gs.events.clear();
     }
@@ -2033,7 +2031,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message = GossipsubMessage::from_raw(
-            gs.message_compression,
+            &gs.message_compression,
             publishes
                 .first()
                 .expect("Should contain > 0 entries")
@@ -2086,7 +2084,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message = GossipsubMessage::from_raw(
-            gs.message_compression,
+            &gs.message_compression,
             raw_message,
             gs.config.max_transmit_size(),
         )
@@ -2137,7 +2135,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message = GossipsubMessage::from_raw(
-            gs.message_compression,
+            &gs.message_compression,
             raw_message,
             gs.config.max_transmit_size(),
         )
@@ -2510,7 +2508,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message = GossipsubMessage::from_raw(
-            gs.message_compression,
+            &gs.message_compression,
             raw_message,
             gs.config.max_transmit_size(),
         )
@@ -2590,7 +2588,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message = GossipsubMessage::from_raw(
-            gs.message_compression,
+            &gs.message_compression,
             raw_message.clone(),
             gs.config.max_transmit_size(),
         )
@@ -2622,7 +2620,7 @@ mod tests {
             .map(|(peer_id, msg)| (
                 peer_id,
                 GossipsubMessage::from_raw(
-                    gs.message_compression,
+                    &gs.message_compression,
                     msg.clone(),
                     gs.config.max_transmit_size(),
                 )
@@ -2635,7 +2633,7 @@ mod tests {
             .map(|(peer_id, msg)| (
                 peer_id,
                 GossipsubMessage::from_raw(
-                    gs.message_compression,
+                    &gs.message_compression,
                     msg.clone(),
                     gs.config.max_transmit_size(),
                 )
@@ -2692,7 +2690,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message = GossipsubMessage::from_raw(
-            gs.message_compression,
+            &gs.message_compression,
             raw_message,
             gs.config.max_transmit_size(),
         )
@@ -2902,14 +2900,14 @@ mod tests {
         };
 
         let message2 = GossipsubMessage::from_raw(
-            gs.message_compression,
+            &gs.message_compression,
             raw_message2.clone(),
             gs.config.max_transmit_size(),
         )
         .unwrap();
 
         let message4 = GossipsubMessage::from_raw(
-            gs.message_compression,
+            &gs.message_compression,
             raw_message4,
             gs.config.max_transmit_size(),
         )
@@ -3519,7 +3517,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message1 =
-            GossipsubMessage::from_raw(gs.message_compression, m1, gs.config.max_transmit_size())
+            GossipsubMessage::from_raw(&gs.message_compression, m1, gs.config.max_transmit_size())
                 .unwrap();
 
         assert_eq!(gs.peer_score.as_ref().unwrap().0.score(&peers[0]), 0.0);
@@ -3690,7 +3688,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message1 =
-            GossipsubMessage::from_raw(gs.message_compression, m1, gs.config.max_transmit_size())
+            GossipsubMessage::from_raw(&gs.message_compression, m1, gs.config.max_transmit_size())
                 .unwrap();
         //message m1 gets ignored
         gs.report_message_validation_result(
@@ -3750,7 +3748,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message1 =
-            GossipsubMessage::from_raw(gs.message_compression, m1, gs.config.max_transmit_size())
+            GossipsubMessage::from_raw(&gs.message_compression, m1, gs.config.max_transmit_size())
                 .unwrap();
 
         //message m1 gets rejected
@@ -3812,7 +3810,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message1 = GossipsubMessage::from_raw(
-            gs.message_compression,
+            &gs.message_compression,
             m1.clone(),
             gs.config.max_transmit_size(),
         )
@@ -3891,15 +3889,15 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message1 =
-            GossipsubMessage::from_raw(gs.message_compression, m1, gs.config.max_transmit_size())
+            GossipsubMessage::from_raw(&gs.message_compression, m1, gs.config.max_transmit_size())
                 .unwrap();
         // Decompress the raw message and calculate the message id.
         let message2 =
-            GossipsubMessage::from_raw(gs.message_compression, m2, gs.config.max_transmit_size())
+            GossipsubMessage::from_raw(&gs.message_compression, m2, gs.config.max_transmit_size())
                 .unwrap();
         // Decompress the raw message and calculate the message id.
         let message3 =
-            GossipsubMessage::from_raw(gs.message_compression, m3, gs.config.max_transmit_size())
+            GossipsubMessage::from_raw(&gs.message_compression, m3, gs.config.max_transmit_size())
                 .unwrap();
 
         assert_eq!(gs.peer_score.as_ref().unwrap().0.score(&peers[0]), 0.0);
@@ -3976,7 +3974,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message1 =
-            GossipsubMessage::from_raw(gs.message_compression, m1, gs.config.max_transmit_size())
+            GossipsubMessage::from_raw(&gs.message_compression, m1, gs.config.max_transmit_size())
                 .unwrap();
         assert_eq!(gs.peer_score.as_ref().unwrap().0.score(&peers[0]), 0.0);
 
@@ -4344,7 +4342,7 @@ mod tests {
 
         // Decompress the raw message and calculate the message id.
         let message1 = GossipsubMessage::from_raw(
-            gs.message_compression,
+            &gs.message_compression,
             m1.clone(),
             gs.config.max_transmit_size(),
         )
@@ -4403,7 +4401,7 @@ mod tests {
         for raw_message in &messages {
             // Decompress the raw message and calculate the message id.
             let message = GossipsubMessage::from_raw(
-                gs.message_compression,
+                &gs.message_compression,
                 raw_message.clone(),
                 gs.config.max_transmit_size(),
             )
@@ -4420,7 +4418,7 @@ mod tests {
             .take(10)
             .map(|msg| {
                 GossipsubMessage::from_raw(
-                    gs.message_compression,
+                    &gs.message_compression,
                     msg.clone(),
                     gs.config.max_transmit_size(),
                 )
@@ -4456,7 +4454,7 @@ mod tests {
         for raw_message in messages[10..].iter() {
             // Decompress the raw message and calculate the message id.
             let message = GossipsubMessage::from_raw(
-                gs.message_compression,
+                &gs.message_compression,
                 raw_message.clone(),
                 gs.config.max_transmit_size(),
             )
@@ -4511,7 +4509,7 @@ mod tests {
             .map(|_| random_message(&mut seq, &topics))
             .map(|msg| {
                 GossipsubMessage::from_raw(
-                    gs.message_compression,
+                    &gs.message_compression,
                     msg,
                     gs.config.max_transmit_size(),
                 )
@@ -4711,14 +4709,14 @@ mod tests {
 
                 // Decompress the raw message and calculate the message id.
                 let message1 = GossipsubMessage::from_raw(
-                    gs.message_compression,
+                    &gs.message_compression,
                     msg1.clone(),
                     gs.config.max_transmit_size(),
                 )
                 .unwrap();
                 // Decompress the raw message and calculate the message id.
                 let message2 = GossipsubMessage::from_raw(
-                    gs.message_compression,
+                    &gs.message_compression,
                     msg2.clone(),
                     gs.config.max_transmit_size(),
                 )
