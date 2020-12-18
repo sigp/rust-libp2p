@@ -21,12 +21,12 @@
 use crate::time_cache::ExpiringElement;
 use crate::{MessageId, SemanticMessageId};
 use libp2p_core::PeerId;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 /// A promise consists of a set of peers that are expected to satisfy the promise and the list of
 /// message ids that are considered duplicates via the semantic message id.
-pub type MeshPromise = (Vec<PeerId>, Vec<MessageId>);
+pub type MeshPromise = (BTreeSet<PeerId>, Vec<MessageId>, PeerId);
 
 pub(crate) struct MeshPromises {
     /// An ordered list of promises by expires time (similar to time_cache).
@@ -52,10 +52,13 @@ impl MeshPromises {
         &mut self,
         semantic_message_id: SemanticMessageId,
         message_id: MessageId,
-        peer_ids: Vec<PeerId>,
+        mesh_peers: BTreeSet<PeerId>,
+        from: &PeerId,
     ) {
-        self.promises
-            .insert(semantic_message_id.clone(), (peer_ids, vec![message_id]));
+        self.promises.insert(
+            semantic_message_id.clone(),
+            (mesh_peers, vec![message_id], from.clone()),
+        );
         self.list.push_back(ExpiringElement {
             element: semantic_message_id,
             expires: Instant::now() + self.window,
@@ -67,8 +70,8 @@ impl MeshPromises {
         semantic_message_id: &SemanticMessageId,
         message_id: &MessageId,
     ) -> bool {
-        if let Some((_, promise)) = self.promises.get_mut(&semantic_message_id) {
-            promise.push(message_id.clone());
+        if let Some((_, message_ids, _)) = self.promises.get_mut(&semantic_message_id) {
+            message_ids.push(message_id.clone());
             true
         } else {
             false
@@ -89,5 +92,9 @@ impl MeshPromises {
             }
         }
         result
+    }
+
+    pub fn contains(&self, semantic_message_id: &SemanticMessageId) -> bool {
+        self.promises.contains_key(semantic_message_id)
     }
 }

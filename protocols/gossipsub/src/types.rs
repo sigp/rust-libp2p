@@ -78,6 +78,12 @@ declare_message_id_type!(FastMessageId, "FastMessageId");
 // An id type for semantically grouping messages that are considered the same after validation.
 declare_message_id_type!(SemanticMessageId, "SemanticMessageId");
 
+impl From<&MessageId> for SemanticMessageId {
+    fn from(m: &MessageId) -> Self {
+        Self(m.0.clone())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 /// Describes the types of peers that can exist in the gossipsub context.
 pub enum PeerKind {

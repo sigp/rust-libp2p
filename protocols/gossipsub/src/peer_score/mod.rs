@@ -190,6 +190,8 @@ enum DeliveryStatus {
     Invalid,
     /// Instructed by the validator to ignore the message.
     Ignored,
+    /// Ignored but tracked because of the semantic id
+    IgnoredAndTracked,
 }
 
 impl Default for DeliveryRecord {
@@ -384,17 +386,18 @@ impl PeerScore {
         let mut broken_promises = Vec::new();
         for (topic, promises) in &mut self.mesh_promise_data {
             if let Some(current_mesh) = current_meshs.get(topic) {
-                for (peer_ids, message_ids) in promises.extract_promises() {
+                for (peer_ids, message_ids, from) in promises.extract_promises() {
                     let delivered_peers = HashSet::new();
                     for id in &message_ids {
                         if let Some(deliveries) = self.deliveries.get(id) {
                             delivered_peers.union(&deliveries.peers);
                         }
                     }
-                    let mut broken_peer_ids = Vec::new();
+                    let mut broken_peer_ids = BTreeSet::new();
                     for peer_id in peer_ids {
-                        let broken =
-                            current_mesh.contains(&peer_id) && !delivered_peers.contains(&peer_id);
+                        let broken = peer_id != from
+                            && current_mesh.contains(&peer_id)
+                            && !delivered_peers.contains(&peer_id);
                         let (rel, total) = Self::report_mesh_promise(
                             &mut self.peer_stats,
                             &peer_id,
@@ -414,11 +417,11 @@ impl PeerScore {
                                     );
                                 }
                             }
-                            broken_peer_ids.push(peer_id);
+                            broken_peer_ids.insert(peer_id);
                         }
                     }
                     if !broken_peer_ids.is_empty() {
-                        broken_promises.push((broken_peer_ids, message_ids));
+                        broken_promises.push((broken_peer_ids, message_ids, from));
                     }
                 }
             } else {
@@ -667,7 +670,7 @@ impl PeerScore {
             .or_insert_with(DeliveryRecord::default);
 
         // this should be the first delivery trace
-        if record.status != DeliveryStatus::Unknown {
+        if matches!(record.status, DeliveryStatus::Unknown) {
             warn!("Unexpected delivery trace: Message from {} was first seen {}s ago and has a delivery status {:?}", from, record.first_seen.elapsed().as_secs(), record.status);
             return;
         }
@@ -713,15 +716,27 @@ impl PeerScore {
                 .or_insert_with(DeliveryRecord::default);
 
             // this should be the first delivery trace
-            if record.status != DeliveryStatus::Unknown {
+            if matches!(record.status, DeliveryStatus::Unknown) {
                 warn!("Unexpected delivery trace: Message from {} was first seen {}s ago and has a delivery status {:?}", from, record.first_seen.elapsed().as_secs(), record.status);
                 return;
             }
 
-            if let RejectReason::ValidationIgnored = reason {
+            if let RejectReason::ValidationIgnored(semantic_message_id) = reason {
                 // we were explicitly instructed by the validator to ignore the message but not penalize
                 // the peer
-                record.status = DeliveryStatus::Ignored;
+                if let Some(semantic_message_id) = semantic_message_id {
+                    record.status = DeliveryStatus::Ignored;
+                    if let Some(promises) = self.mesh_promise_data.get_mut(&msg.topic) {
+                        if promises.contains(&semantic_message_id) {
+                            //don't clear peers and add from to it, then return
+                            record.status = DeliveryStatus::IgnoredAndTracked;
+                            record.peers.insert(from.clone());
+                            return;
+                        }
+                    }
+                }
+
+                //clear the peers since we don't need them anymore
                 record.peers.clear();
                 return;
             }
@@ -788,6 +803,10 @@ impl PeerScore {
             }
             DeliveryStatus::Ignored => {
                 // the message was ignored; do nothing (we don't know if it was valid)
+            }
+            DeliveryStatus::IgnoredAndTracked => {
+                // we can resolve the promise for this peer
+                record.peers.insert(from.clone());
             }
         }
     }
@@ -1019,22 +1038,28 @@ impl PeerScore {
         topic: &TopicHash,
         semantic_id: SemanticMessageId,
         message_id: MessageId,
-        peers: Vec<PeerId>,
+        mesh_peers: BTreeSet<PeerId>,
+        from: &PeerId,
     ) {
         use hash_map::Entry::*;
         trace!(
-            "Add promise for semantic id {} and messsage {} and peers {:?}",
+            "Add promise for semantic id {} and messsage {} and peers {:?} from {}",
             semantic_id,
             message_id,
-            peers,
+            mesh_peers,
+            from
         );
         match self.mesh_promise_data.entry(topic.clone()) {
-            Occupied(mut entry) => entry.get_mut().add_promise(semantic_id, message_id, peers),
+            Occupied(mut entry) => {
+                entry
+                    .get_mut()
+                    .add_promise(semantic_id, message_id, mesh_peers, from)
+            }
             Vacant(entry) => {
                 if let Some(topic_params) = self.params.topics.get(topic) {
                     entry
                         .insert(MeshPromises::new(topic_params.mesh_promise_window))
-                        .add_promise(semantic_id, message_id, peers)
+                        .add_promise(semantic_id, message_id, mesh_peers, from)
                 }
             }
         }
@@ -1056,7 +1081,7 @@ impl PeerScore {
 }
 
 /// The reason a Gossipsub message has been rejected.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum RejectReason {
     /// The message failed the configured validation during decoding.
     ValidationError(ValidationError),
@@ -1067,7 +1092,7 @@ pub(crate) enum RejectReason {
     /// The source (from field) of the message was blacklisted.
     BlackListedSource,
     /// The validation was ignored.
-    ValidationIgnored,
+    ValidationIgnored(Option<SemanticMessageId>),
     /// The validation failed.
     ValidationFailed,
 }

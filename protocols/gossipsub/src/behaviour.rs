@@ -655,12 +655,12 @@ where
                 let semantic_id =
                     semantic_id.unwrap_or_else(|| SemanticMessageId(message_id.0.clone()));
                 let status =
-                    self.forward_or_track_promise(&semantic_id, message, Some(propagation_source))?;
+                    self.forward_or_track_promise(&semantic_id, message, propagation_source)?;
                 self.mcache.set_message_state(message_id, status);
                 return Ok(true);
             }
             MessageAcceptance::Reject => RejectReason::ValidationFailed,
-            MessageAcceptance::Ignore => RejectReason::ValidationIgnored,
+            MessageAcceptance::Ignore => RejectReason::ValidationIgnored(semantic_id.clone()),
         };
 
         if let Some(message) = self.mcache.remove(message_id) {
@@ -1554,7 +1554,7 @@ where
             // we use the msg_id as SemanticMessageId if no validation is required
             let semantic_msg_id = SemanticMessageId(msg_id.0.clone());
             if self
-                .forward_or_track_promise(&semantic_msg_id, msg, Some(propagation_source))
+                .forward_or_track_promise(&semantic_msg_id, msg, propagation_source)
                 .is_err()
             {
                 error!("Failed to forward message. Too large");
@@ -1567,12 +1567,10 @@ where
         &mut self,
         semantic_id: &SemanticMessageId,
         mut message: GossipsubMessageWithId<T>,
-        propagation_source: Option<&PeerId>,
+        propagation_source: &PeerId,
     ) -> Result<GossipsubMessageState, PublishError> {
         if let Some((peer_score, ..)) = &mut self.peer_score {
-            if let Some(peer) = propagation_source {
-                peer_score.deliver_message(peer, &message);
-            }
+            peer_score.deliver_message(propagation_source, &message);
 
             if let Some(mesh_peers) = self.mesh.get(&message.topic) {
                 //decide if we track the promise
@@ -1584,7 +1582,8 @@ where
                         &message.topic,
                         semantic_id.clone(),
                         message.message_id().clone(),
-                        mesh_peers.iter().cloned().collect(),
+                        mesh_peers.clone(),
+                        propagation_source,
                     );
                     return Ok(GossipsubMessageState::Tracking);
                 }
@@ -1593,7 +1592,7 @@ where
 
         // we don't track the message as promise => forward the message
         message.state = GossipsubMessageState::Forwarding;
-        self.forward_msg(message, propagation_source)?;
+        self.forward_msg(message, Some(propagation_source))?;
         Ok(GossipsubMessageState::Forwarding)
     }
 
@@ -3029,14 +3028,14 @@ where
                             .and_then(|id| fast_message_id_cache.get(&id))
                         {
                             let message = GossipsubMessageWithId::new(message, msg_id.clone());
-                            peer_score.reject_message(&propagation_source, &message, reason);
                             gossip_promises.reject_message(msg_id, &reason);
+                            peer_score.reject_message(&propagation_source, &message, reason);
                         } else {
                             let message = GenericGossipsubMessage::from(message);
                             let id = self.config.message_id(&message);
                             let message = GossipsubMessageWithId::new(message, id);
-                            peer_score.reject_message(&propagation_source, &message, reason);
                             gossip_promises.reject_message(message.message_id(), &reason);
+                            peer_score.reject_message(&propagation_source, &message, reason);
                         }
                     }
                 } else {
