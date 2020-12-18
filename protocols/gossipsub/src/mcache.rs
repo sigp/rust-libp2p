@@ -19,7 +19,7 @@
 // DEALINGS IN THE SOFTWARE.
 
 use crate::topic::TopicHash;
-use crate::types::{GossipsubMessageWithId, MessageId};
+use crate::types::{GossipsubMessageState, GossipsubMessageWithId, MessageId};
 use libp2p_core::PeerId;
 use log::debug;
 use std::fmt::Debug;
@@ -109,11 +109,10 @@ impl<T> MessageCache<T> {
     }
 
     /// Gets and validates a message with `message_id`.
-    pub fn validate(&mut self, message_id: &MessageId) -> Option<&GossipsubMessageWithId<T>> {
-        self.msgs.get_mut(message_id).map(|message| {
-            message.validated = true;
-            &*message
-        })
+    pub fn set_message_state(&mut self, message_id: &MessageId, state: GossipsubMessageState) {
+        if let Some(message) = self.msgs.get_mut(message_id) {
+            message.state = state;
+        }
     }
 
     /// Get a list of GossipIds for a given topic
@@ -122,22 +121,25 @@ impl<T> MessageCache<T> {
             .iter()
             .fold(vec![], |mut current_entries, entries| {
                 // search for entries with desired topic
-                let mut found_entries: Vec<MessageId> = entries
-                    .iter()
-                    .filter_map(|entry| {
-                        if &entry.topic == topic {
-                            let mid = &entry.mid;
-                            // Only gossip validated messages
-                            if let Some(true) = self.msgs.get(mid).map(|msg| msg.validated) {
-                                Some(mid.clone())
+                let mut found_entries: Vec<MessageId> =
+                    entries
+                        .iter()
+                        .filter_map(|entry| {
+                            if &entry.topic == topic {
+                                let mid = &entry.mid;
+                                // Only gossip validated messages
+                                if let Some(true) = self.msgs.get(mid).map(|msg| {
+                                    matches!(msg.state, GossipsubMessageState::Forwarding)
+                                }) {
+                                    Some(mid.clone())
+                                } else {
+                                    None
+                                }
                             } else {
                                 None
                             }
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+                        })
+                        .collect();
 
                 // generate the list
                 current_entries.append(&mut found_entries);
@@ -150,12 +152,13 @@ impl<T> MessageCache<T> {
     pub fn shift(&mut self) {
         for entry in self.history.pop().expect("history is always > 1") {
             if let Some(msg) = self.msgs.remove(&entry.mid) {
-                if !msg.validated {
+                use GossipsubMessageState::*;
+                if matches!(msg.state, NotValidated) {
                     // If GossipsubConfig::validate_messages is true, the implementing
                     // application has to ensure that Gossipsub::validate_message gets called for
                     // each received message within the cache timeout time."
                     debug!("The message with id {} got removed from the cache without being validated.",
-                    &entry.mid
+                           &entry.mid
                     );
                 }
             }

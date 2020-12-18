@@ -75,6 +75,9 @@ declare_message_id_type!(MessageId, "MessageId");
 // A type for gossipsub fast messsage ids, not to confuse with "real" message ids.
 declare_message_id_type!(FastMessageId, "FastMessageId");
 
+// An id type for semantically grouping messages that are considered the same after validation.
+declare_message_id_type!(SemanticMessageId, "SemanticMessageId");
+
 #[derive(Debug, Clone, PartialEq)]
 /// Describes the types of peers that can exist in the gossipsub context.
 pub enum PeerKind {
@@ -86,6 +89,13 @@ pub enum PeerKind {
     Floodsub,
     /// The peer doesn't support any of the protocols.
     NotSupported,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum GossipsubMessageState {
+    NotValidated,
+    Forwarding,
+    Tracking,
 }
 
 /// A message received by the gossipsub system.
@@ -109,8 +119,8 @@ pub struct GenericGossipsubMessage<T> {
     /// The public key of the message if it is signed and the source `PeerId` cannot be inlined.
     pub key: Option<Vec<u8>>,
 
-    /// Flag indicating if this message has been validated by the application or not.
-    pub validated: bool,
+    /// The state of the gossipsub message
+    pub state: GossipsubMessageState,
 }
 
 impl<T> GenericGossipsubMessage<T> {
@@ -122,7 +132,7 @@ impl<T> GenericGossipsubMessage<T> {
             topic: m.topic,
             signature: m.signature,
             key: m.key,
-            validated: m.validated,
+            state: m.state,
         }
     }
 }
@@ -158,7 +168,7 @@ impl<T> GossipsubMessageWithId<T> {
             topic: m.topic,
             signature: m.signature,
             key: m.key,
-            validated: m.validated,
+            state: m.state,
         }
     }
 

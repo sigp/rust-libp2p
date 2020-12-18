@@ -22,10 +22,10 @@
 //! Manages and stores the Scoring logic of a particular peer on the gossipsub behaviour.
 
 use crate::time_cache::TimeCache;
-use crate::{MessageId, TopicHash};
+use crate::{MessageId, SemanticMessageId, TopicHash};
 use libp2p_core::PeerId;
 use log::{debug, trace, warn};
-use std::collections::{hash_map, HashMap, HashSet};
+use std::collections::{hash_map, BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
@@ -376,25 +376,55 @@ impl PeerScore {
         }
     }
 
-    pub fn report_broken_promises(&mut self) -> Vec<MeshPromise> {
+    pub fn report_mesh_promises(
+        &mut self,
+        current_meshs: &HashMap<TopicHash, BTreeSet<PeerId>>,
+    ) -> Vec<MeshPromise> {
         //report broken promises
         let mut broken_promises = Vec::new();
         for (topic, promises) in &mut self.mesh_promise_data {
-            for (message_id, peer_id) in promises.extract_broken_promises() {
-                let (rel, total) =
-                    Self::report_mesh_promise(&mut self.peer_stats, &peer_id, topic, false);
-                if let Some(topic_params) = self.params.topics.get(topic) {
-                    if rel >= topic_params.mesh_promise_relative_threshold
-                    // TODO uncomment below
-                    //&& total >= topic_params.mesh_promise_min_total
-                    {
-                        debug!(
-                            "Broken mesh promise for peer {} and message {} in topic {}",
-                            peer_id, message_id, topic
+            if let Some(current_mesh) = current_meshs.get(topic) {
+                for (peer_ids, message_ids) in promises.extract_promises() {
+                    let delivered_peers = HashSet::new();
+                    for id in &message_ids {
+                        if let Some(deliveries) = self.deliveries.get(id) {
+                            delivered_peers.union(&deliveries.peers);
+                        }
+                    }
+                    let mut broken_peer_ids = Vec::new();
+                    for peer_id in peer_ids {
+                        let broken =
+                            current_mesh.contains(&peer_id) && !delivered_peers.contains(&peer_id);
+                        let (rel, total) = Self::report_mesh_promise(
+                            &mut self.peer_stats,
+                            &peer_id,
+                            topic,
+                            !broken,
                         );
+                        if broken {
+                            if let Some(topic_params) = self.params.topics.get(topic) {
+                                if rel >= topic_params.mesh_promise_relative_threshold
+                                // TODO uncomment below
+                                //&& total >= topic_params.mesh_promise_min_total
+                                {
+                                    debug!(
+                                        "Broken mesh promise for peer {} and message ids {:?} in \
+                                        topic {}",
+                                        peer_id, message_ids, topic
+                                    );
+                                }
+                            }
+                            broken_peer_ids.push(peer_id);
+                        }
+                    }
+                    if !broken_peer_ids.is_empty() {
+                        broken_promises.push((broken_peer_ids, message_ids));
                     }
                 }
-                broken_promises.push((message_id, peer_id));
+            } else {
+                // we are not subscribed to this topic anymore => extract promises but do nothing
+                // with them
+                promises.extract_promises();
             }
         }
         broken_promises
@@ -712,10 +742,6 @@ impl PeerScore {
         self.deliveries.get(msg_id).map(|record| &record.peers)
     }
 
-    pub fn report_successful_mesh_promise(&mut self, peer_id: &PeerId, topic: &TopicHash) {
-        Self::report_mesh_promise(&mut self.peer_stats, peer_id, topic, true);
-    }
-
     pub fn duplicated_message<T>(&mut self, from: &PeerId, msg: &GossipsubMessageWithId<T>) {
         let record = self
             .deliveries
@@ -725,18 +751,6 @@ impl PeerScore {
         if record.peers.get(from).is_some() {
             // we have already seen this duplicate!
             return;
-        }
-
-        //resolve mesh promise
-        if let Some(mesh_promises) = self.mesh_promise_data.get_mut(&msg.topic) {
-            if mesh_promises.resolve_promise(msg.message_id(), from) {
-                trace!(
-                    "report satisfied mesh promise for message {} and peer {}",
-                    msg.message_id(),
-                    from
-                );
-                Self::report_mesh_promise(&mut self.peer_stats, from, &msg.topic, true);
-            }
         }
 
         if let Some(callback) = self.message_delivery_time_callback {
@@ -1000,28 +1014,44 @@ impl PeerScore {
             .unwrap_or(0.0)
     }
 
-    pub(crate) fn add_promise(
+    pub(crate) fn add_mesh_promise(
         &mut self,
         topic: &TopicHash,
+        semantic_id: SemanticMessageId,
         message_id: MessageId,
-        peer_id: PeerId,
+        peers: Vec<PeerId>,
     ) {
         use hash_map::Entry::*;
         trace!(
-            "Add promise for messsage {} and peer {}",
+            "Add promise for semantic id {} and messsage {} and peers {:?}",
+            semantic_id,
             message_id,
-            peer_id
+            peers,
         );
         match self.mesh_promise_data.entry(topic.clone()) {
-            Occupied(mut entry) => entry.get_mut().add_promise(message_id, peer_id),
+            Occupied(mut entry) => entry.get_mut().add_promise(semantic_id, message_id, peers),
             Vacant(entry) => {
                 if let Some(topic_params) = self.params.topics.get(topic) {
                     entry
                         .insert(MeshPromises::new(topic_params.mesh_promise_window))
-                        .add_promise(message_id, peer_id)
+                        .add_promise(semantic_id, message_id, peers)
                 }
             }
         }
+    }
+
+    pub(crate) fn try_add_duplicate_message_id(
+        &mut self,
+        topic: &TopicHash,
+        semantic_message_id: &SemanticMessageId,
+        message_id: &MessageId,
+    ) -> bool {
+        self.mesh_promise_data
+            .get_mut(topic)
+            .map(|promise_data| {
+                promise_data.try_add_duplicate_message_id(semantic_message_id, message_id)
+            })
+            .unwrap_or(false)
     }
 }
 

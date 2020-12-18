@@ -19,20 +19,24 @@
 // DEALINGS IN THE SOFTWARE.
 
 use crate::time_cache::ExpiringElement;
-use crate::MessageId;
+use crate::{MessageId, SemanticMessageId};
 use libp2p_core::PeerId;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-pub type MeshPromise = (MessageId, PeerId);
+/// A promise consists of a set of peers that are expected to satisfy the promise and the list of
+/// message ids that are considered duplicates via the semantic message id.
+pub type MeshPromise = (Vec<PeerId>, Vec<MessageId>);
 
 pub(crate) struct MeshPromises {
-    /// Set of all stored promises.
-    promises: HashSet<MeshPromise>,
     /// An ordered list of promises by expires time (similar to time_cache).
-    list: VecDeque<ExpiringElement<MeshPromise>>,
+    list: VecDeque<ExpiringElement<SemanticMessageId>>,
     /// The window for promises
     pub(crate) window: Duration,
+    /// A mapping that maps semantic ids that we are currently tracking to a promise that contains
+    /// the list of peers that need to satisfy the promise + a list of all message ids corresponding
+    /// to this semantic id.
+    promises: HashMap<SemanticMessageId, MeshPromise>,
 }
 
 impl MeshPromises {
@@ -44,22 +48,34 @@ impl MeshPromises {
         }
     }
 
-    pub fn add_promise(&mut self, message_id: MessageId, peer_id: PeerId) {
-        let promise = (message_id, peer_id);
-        self.promises.insert(promise.clone());
+    pub fn add_promise(
+        &mut self,
+        semantic_message_id: SemanticMessageId,
+        message_id: MessageId,
+        peer_ids: Vec<PeerId>,
+    ) {
+        self.promises
+            .insert(semantic_message_id.clone(), (peer_ids, vec![message_id]));
         self.list.push_back(ExpiringElement {
-            element: promise,
+            element: semantic_message_id,
             expires: Instant::now() + self.window,
         });
     }
 
-    /// Returns true iff there was an open promise for this message id and this peer to resolve
-    pub fn resolve_promise(&mut self, message_id: &MessageId, peer_id: &PeerId) -> bool {
-        let promise = (message_id.clone(), peer_id.clone());
-        self.promises.remove(&promise)
+    pub fn try_add_duplicate_message_id(
+        &mut self,
+        semantic_message_id: &SemanticMessageId,
+        message_id: &MessageId,
+    ) -> bool {
+        if let Some((_, promise)) = self.promises.get_mut(&semantic_message_id) {
+            promise.push(message_id.clone());
+            true
+        } else {
+            false
+        }
     }
 
-    pub fn extract_broken_promises(&mut self) -> Vec<MeshPromise> {
+    pub fn extract_promises(&mut self) -> Vec<MeshPromise> {
         let now = Instant::now();
         let mut result = Vec::new();
         while let Some(element) = self.list.pop_front() {
@@ -67,10 +83,8 @@ impl MeshPromises {
                 self.list.push_front(element);
                 break;
             } else {
-                // if there is no corresponding entry in `promises` then we know the promise got
-                // broken
-                if self.promises.remove(&element.element) {
-                    result.push(element.element);
+                if let Some(promise) = self.promises.remove(&element.element) {
+                    result.push(promise);
                 }
             }
         }
