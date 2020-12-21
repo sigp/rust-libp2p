@@ -387,10 +387,12 @@ impl PeerScore {
         for (topic, promises) in &mut self.mesh_promise_data {
             if let Some(current_mesh) = current_meshs.get(topic) {
                 for (peer_ids, message_ids, from) in promises.extract_promises() {
-                    let delivered_peers = HashSet::new();
+                    let mut delivered_peers = HashSet::new();
                     for id in &message_ids {
                         if let Some(deliveries) = self.deliveries.get(id) {
-                            delivered_peers.union(&deliveries.peers);
+                            for peer in &deliveries.peers {
+                                delivered_peers.insert(peer);
+                            }
                         }
                     }
                     let mut broken_peer_ids = BTreeSet::new();
