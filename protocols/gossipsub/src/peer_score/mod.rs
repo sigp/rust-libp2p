@@ -409,8 +409,7 @@ impl PeerScore {
                         if broken {
                             if let Some(topic_params) = self.params.topics.get(topic) {
                                 if rel >= topic_params.mesh_promise_relative_threshold
-                                // TODO uncomment below
-                                //&& total >= topic_params.mesh_promise_min_total
+                                    && total >= topic_params.mesh_promise_min_total
                                 {
                                     debug!(
                                         "Broken mesh promise for peer {} and message ids {:?} in \
