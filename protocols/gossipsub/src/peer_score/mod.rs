@@ -744,7 +744,7 @@ impl PeerScore {
                 }
 
                 //clear the peers since we don't need them anymore
-                trace!("Clear peers for message ", msg.message_id());
+                trace!("Clear peers for message {}", msg.message_id());
                 record.peers.clear();
                 return;
             }
@@ -752,7 +752,7 @@ impl PeerScore {
             // mark the message as invalid and penalize peers that have already forwarded it.
             record.status = DeliveryStatus::Invalid;
             // release the delivery time tracking map to free some memory early
-            trace!("clear peers for message ", msg.message_id());
+            trace!("clear peers for message {}", msg.message_id());
             record.peers.drain().collect()
         };
 
