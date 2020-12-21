@@ -679,7 +679,7 @@ impl PeerScore {
             .or_insert_with(DeliveryRecord::default);
 
         // this should be the first delivery trace
-        if matches!(record.status, DeliveryStatus::Unknown) {
+        if !matches!(record.status, DeliveryStatus::Unknown) {
             warn!("Unexpected delivery trace: Message from {} was first seen {}s ago and has a delivery status {:?}", from, record.first_seen.elapsed().as_secs(), record.status);
             return;
         }
@@ -725,8 +725,8 @@ impl PeerScore {
                 .or_insert_with(DeliveryRecord::default);
 
             // this should be the first delivery trace
-            if matches!(record.status, DeliveryStatus::Unknown) {
-                warn!("Unexpected delivery trace: Message from {} was first seen {}s ago and has a delivery status {:?}", from, record.first_seen.elapsed().as_secs(), record.status);
+            if !matches!(record.status, DeliveryStatus::Unknown) {
+                warn!("Unexpected delivery trace: Message from {} was first seeln {}s ago and has a delivery status {:?}", from, record.first_seen.elapsed().as_secs(), record.status);
                 return;
             }
 
