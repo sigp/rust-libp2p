@@ -421,6 +421,13 @@ impl PeerScore {
                         }
                     }
                     if !broken_peer_ids.is_empty() {
+                        trace!(
+                            "broken promises for message ids {:?}, delivered peers: {:?}, broken \
+                            peers: {:?}",
+                            message_ids,
+                            delivered_peers,
+                            broken_peer_ids
+                        );
                         broken_promises.push((broken_peer_ids, message_ids, from));
                     }
                 }
@@ -737,6 +744,7 @@ impl PeerScore {
                 }
 
                 //clear the peers since we don't need them anymore
+                trace!("Clear peers for message ", msg.message_id());
                 record.peers.clear();
                 return;
             }
@@ -744,6 +752,7 @@ impl PeerScore {
             // mark the message as invalid and penalize peers that have already forwarded it.
             record.status = DeliveryStatus::Invalid;
             // release the delivery time tracking map to free some memory early
+            trace!("clear peers for message ", msg.message_id());
             record.peers.drain().collect()
         };
 
@@ -791,10 +800,20 @@ impl PeerScore {
                 // the message is being validated; track the peer delivery and wait for
                 // the Deliver/Reject notification.
                 record.peers.insert(from.clone());
+                trace!(
+                    "insert peer {} into record for message id {}",
+                    from,
+                    msg.message_id()
+                );
             }
             DeliveryStatus::Valid(validated) => {
                 // mark the peer delivery time to only count a duplicate delivery once.
                 record.peers.insert(from.clone());
+                trace!(
+                    "insert peer {} into record for message id {}",
+                    from,
+                    msg.message_id()
+                );
                 self.mark_duplicate_message_delivery(from, msg, Some(validated));
             }
             DeliveryStatus::Invalid => {
@@ -807,6 +826,11 @@ impl PeerScore {
             DeliveryStatus::IgnoredAndTracked => {
                 // we can resolve the promise for this peer
                 record.peers.insert(from.clone());
+                trace!(
+                    "insert peer {} into record for message id {}",
+                    from,
+                    msg.message_id()
+                );
             }
         }
     }
