@@ -22,15 +22,16 @@
 //! Manages and stores the Scoring logic of a particular peer on the gossipsub behaviour.
 
 use crate::time_cache::TimeCache;
-use crate::{MessageId, TopicHash};
+use crate::{MessageId, SemanticMessageId, TopicHash};
 use libp2p_core::PeerId;
 use log::{debug, trace, warn};
-use std::collections::{hash_map, HashMap, HashSet};
+use std::collections::{hash_map, BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 mod params;
 use crate::error::ValidationError;
+use crate::mesh_promises::{MeshPromise, MeshPromises};
 pub use params::{
     score_parameter_decay, score_parameter_decay_with_base, PeerScoreParams, PeerScoreThresholds,
     TopicScoreParams,
@@ -52,6 +53,8 @@ pub(crate) struct PeerScore {
     deliveries: TimeCache<MessageId, DeliveryRecord>,
     /// callback for monitoring message delivery times
     message_delivery_time_callback: Option<fn(&PeerId, &TopicHash, f64)>,
+    /// Tracking mesh promises
+    mesh_promises_per_topic: HashMap<TopicHash, MeshPromises>,
 }
 
 /// General statistics for a given gossipsub peer.
@@ -119,6 +122,9 @@ struct TopicStats {
     mesh_failure_penalty: f64,
     /// Invalid message counter.
     invalid_message_deliveries: f64,
+    /// Mesh promises
+    mesh_promises_broken_relative: f64,
+    mesh_promises_total: f64,
 }
 
 impl TopicStats {
@@ -158,6 +164,8 @@ impl Default for TopicStats {
             mesh_message_deliveries: Default::default(),
             mesh_failure_penalty: Default::default(),
             invalid_message_deliveries: Default::default(),
+            mesh_promises_broken_relative: 0.0,
+            mesh_promises_total: 0.0,
         }
     }
 }
@@ -179,6 +187,8 @@ enum DeliveryStatus {
     Invalid,
     /// Instructed by the validator to ignore the message.
     Ignored,
+    /// Ignored but tracked because of the semantic id
+    IgnoredAndTracked,
 }
 
 impl Default for DeliveryRecord {
@@ -208,6 +218,7 @@ impl PeerScore {
             peer_ips: HashMap::new(),
             deliveries: TimeCache::new(Duration::from_secs(TIME_CACHE_DURATION)),
             message_delivery_time_callback: callback,
+            mesh_promises_per_topic: HashMap::default(),
         }
     }
 
@@ -284,6 +295,17 @@ impl PeerScore {
                     topic_stats.invalid_message_deliveries * topic_stats.invalid_message_deliveries;
                 topic_score += p4 * topic_params.invalid_message_deliveries_weight;
 
+                // P8: mesh promises
+                if topic_stats.mesh_promises_broken_relative
+                    > topic_params.mesh_promise_relative_threshold
+                    && topic_stats.mesh_promises_total >= topic_params.mesh_promise_min_total
+                {
+                    let excess = topic_stats.mesh_promises_broken_relative
+                        - topic_params.mesh_promise_relative_threshold;
+                    let p8 = excess * excess;
+                    topic_score += p8 * topic_params.mesh_promise_weight;
+                }
+
                 // update score, mixing with topic weight
                 score += topic_score * topic_params.topic_weight;
             }
@@ -353,6 +375,78 @@ impl PeerScore {
         }
     }
 
+    /// Check for all expired mesh promises if any peer didn't deliver the message and report those
+    /// peers.
+    ///
+    /// A mesh promise is considered broken if a peer that was in the mesh when first receiving the
+    /// message and is still in the mesh now didn't deliver any semantically equivalent message,
+    /// that is a message with the same `semantic_id`.
+    ///
+    /// Returns a list of all broken promises containing only the peers that broke the promise.
+    pub fn report_mesh_promises(
+        &mut self,
+        current_meshs: &HashMap<TopicHash, BTreeSet<PeerId>>,
+    ) -> Vec<MeshPromise> {
+        //report broken promises
+        let mut broken_promises = Vec::new();
+        for (topic, promises) in &mut self.mesh_promises_per_topic {
+            if let Some(current_mesh) = current_meshs.get(topic) {
+                for (peer_ids, message_ids, from) in promises.extract_promises() {
+                    let mut delivered_peers = HashSet::new();
+                    for id in &message_ids {
+                        if let Some(deliveries) = self.deliveries.get(id) {
+                            for peer in &deliveries.peers {
+                                delivered_peers.insert(peer);
+                            }
+                        }
+                    }
+                    let mut broken_peer_ids = BTreeSet::new();
+                    for peer_id in peer_ids {
+                        let broken = peer_id != from
+                            && current_mesh.contains(&peer_id)
+                            && !delivered_peers.contains(&peer_id);
+                        let (rel, total) = Self::report_mesh_promise(
+                            &mut self.peer_stats,
+                            &peer_id,
+                            topic,
+                            !broken,
+                        );
+                        if broken {
+                            if let Some(topic_params) = self.params.topics.get(topic) {
+                                if rel >= topic_params.mesh_promise_relative_threshold
+                                    && total >= topic_params.mesh_promise_min_total
+                                {
+                                    debug!(
+                                        "Broken mesh promise for peer {} and message ids {:?} in \
+                                        topic {}",
+                                        peer_id, message_ids, topic
+                                    );
+                                }
+                            }
+                            broken_peer_ids.insert(peer_id);
+                        }
+                    }
+                    if !broken_peer_ids.is_empty() {
+                        trace!(
+                            "broken promises for message ids {:?}, delivered peers: {:?}, broken \
+                            peers: {:?}, topic: {}",
+                            message_ids,
+                            delivered_peers,
+                            broken_peer_ids,
+                            topic
+                        );
+                        broken_promises.push((broken_peer_ids, message_ids, from));
+                    }
+                }
+            } else {
+                // we are not subscribed to this topic anymore => extract promises but do nothing
+                // with them
+                promises.extract_promises();
+            }
+        }
+        broken_promises
+    }
+
     pub fn refresh_scores(&mut self) {
         let now = Instant::now();
         let params_ref = &self.params;
@@ -397,6 +491,14 @@ impl PeerScore {
                     if topic_stats.invalid_message_deliveries < params_ref.decay_to_zero {
                         topic_stats.invalid_message_deliveries = 0.0;
                     }
+
+                    if topic_stats.mesh_promises_total >= topic_params.mesh_promise_min_total {
+                        topic_stats.mesh_promises_total *= topic_params.mesh_promise_decay;
+                        if topic_stats.mesh_promises_total < topic_params.mesh_promise_min_total {
+                            topic_stats.mesh_promises_total = topic_params.mesh_promise_min_total;
+                        }
+                    }
+
                     // update mesh time and activate mesh message delivery parameter if need be
                     if let MeshStatus::Active {
                         ref mut mesh_time,
@@ -407,6 +509,11 @@ impl PeerScore {
                         if *mesh_time > topic_params.mesh_message_deliveries_activation {
                             topic_stats.mesh_message_deliveries_active = true;
                         }
+                    } else {
+                        // Decay mesh_promises_broken_relative for non-mesh peers. This is needed
+                        // so that non-mesh peers can improve their score over time.
+                        topic_stats.mesh_promises_broken_relative *=
+                            topic_params.mesh_promise_decay;
                     }
                 }
             }
@@ -577,7 +684,7 @@ impl PeerScore {
             .or_insert_with(DeliveryRecord::default);
 
         // this should be the first delivery trace
-        if record.status != DeliveryStatus::Unknown {
+        if !matches!(record.status, DeliveryStatus::Unknown) {
             warn!("Unexpected delivery trace: Message from {} was first seen {}s ago and has a delivery status {:?}", from, record.first_seen.elapsed().as_secs(), record.status);
             return;
         }
@@ -630,15 +737,27 @@ impl PeerScore {
                 .or_insert_with(DeliveryRecord::default);
 
             // this should be the first delivery trace
-            if record.status != DeliveryStatus::Unknown {
+            if !matches!(record.status, DeliveryStatus::Unknown) {
                 warn!("Unexpected delivery trace: Message from {} was first seen {}s ago and has a delivery status {:?}", from, record.first_seen.elapsed().as_secs(), record.status);
                 return;
             }
 
-            if let RejectReason::ValidationIgnored = reason {
+            if let RejectReason::ValidationIgnored(semantic_message_id) = reason {
                 // we were explicitly instructed by the validator to ignore the message but not penalize
                 // the peer
-                record.status = DeliveryStatus::Ignored;
+                if let Some(semantic_message_id) = semantic_message_id {
+                    record.status = DeliveryStatus::Ignored;
+                    if let Some(promises) = self.mesh_promises_per_topic.get_mut(topic_hash) {
+                        if promises.contains(&semantic_message_id) {
+                            //don't clear peers (we still need them) and add from to it, then return
+                            record.status = DeliveryStatus::IgnoredAndTracked;
+                            record.peers.insert(from.clone());
+                            return;
+                        }
+                    }
+                }
+
+                //clear the peers since we don't need them anymore
                 record.peers.clear();
                 return;
             }
@@ -653,6 +772,11 @@ impl PeerScore {
         for peer_id in peers.iter() {
             self.mark_invalid_message_delivery(peer_id, topic_hash)
         }
+    }
+
+    /// Returns the set of peers that sent us the message with this id until now.
+    pub fn delivered_by(&self, msg_id: &MessageId) -> Option<&HashSet<PeerId>> {
+        self.deliveries.get(msg_id).map(|record| &record.peers)
     }
 
     pub fn duplicated_message(
@@ -706,6 +830,11 @@ impl PeerScore {
             DeliveryStatus::Ignored => {
                 // the message was ignored; do nothing (we don't know if it was valid)
             }
+            DeliveryStatus::IgnoredAndTracked => {
+                // we still track the peers for this ignored message so that we can resolve the
+                // promise when it expires.
+                record.peers.insert(from.clone());
+            }
         }
     }
 
@@ -727,6 +856,7 @@ impl PeerScore {
             Occupied(mut entry) => {
                 let first_message_deliveries_cap = params.first_message_deliveries_cap;
                 let mesh_message_delivieries_cap = params.mesh_message_deliveries_cap;
+                let mesh_promise_window = params.mesh_promise_window;
                 let old_params = entry.insert(params);
 
                 if old_params.first_message_deliveries_cap > first_message_deliveries_cap {
@@ -746,6 +876,17 @@ impl PeerScore {
                                 tstats.mesh_message_deliveries = mesh_message_delivieries_cap;
                             }
                         }
+                    }
+                }
+
+                // check if mesh promises window changed
+                //
+                // Note: If mesh promise window decreases this might only take effect after the old
+                //       promise window is over since the MeshPromises' ordered list assumes that
+                //       expire times come in ordered.
+                if old_params.mesh_promise_window != mesh_promise_window {
+                    if let Some(promises) = self.mesh_promises_per_topic.get_mut(&topic_hash) {
+                        promises.window = mesh_promise_window;
                     }
                 }
             }
@@ -872,10 +1013,101 @@ impl PeerScore {
             .and_then(|s| s.topics.get(topic))
             .map(|t| t.mesh_message_deliveries)
     }
+
+    /// Updates the topic stats considering a satisfied or broken promise.
+    ///
+    /// Returns the new relative amount of broken promises for this peer and topic and the absolut
+    /// amount of tracked promises for this peer and topic. Note that both values get decayed in
+    /// `refresh_scores`.
+    fn report_mesh_promise(
+        peer_stats: &mut HashMap<PeerId, PeerStats>,
+        peer: &PeerId,
+        topic: &TopicHash,
+        satisfied: bool,
+    ) -> (f64, f64) {
+        if let Some(topic_stats) = peer_stats
+            .get_mut(peer)
+            .and_then(|s| s.topics.get_mut(topic))
+        {
+            let mut broken_promises_total =
+                topic_stats.mesh_promises_broken_relative * topic_stats.mesh_promises_total;
+            if !satisfied {
+                broken_promises_total += 1.0;
+            }
+            topic_stats.mesh_promises_total += 1.0;
+            topic_stats.mesh_promises_broken_relative =
+                broken_promises_total / topic_stats.mesh_promises_total;
+            (
+                topic_stats.mesh_promises_broken_relative,
+                topic_stats.mesh_promises_total,
+            )
+        } else {
+            (0.0, 0.0)
+        }
+    }
+
+    /// Gets the probability that a newly received message in this topic should get tracked as a
+    /// mesh promise.
+    pub(crate) fn get_mesh_promise_probability(&self, topic: &TopicHash) -> f64 {
+        self.params
+            .topics
+            .get(topic)
+            .map(|p| p.mesh_promise_probability)
+            .unwrap_or(0.0)
+    }
+
+    /// Adds a new mesh promise to the `mesh_promises_per_topic` data structure.
+    pub(crate) fn add_mesh_promise(
+        &mut self,
+        topic: &TopicHash,
+        semantic_id: SemanticMessageId,
+        message_id: MessageId,
+        mesh_peers: BTreeSet<PeerId>,
+        from: &PeerId,
+    ) {
+        use hash_map::Entry::*;
+        trace!(
+            "Add promise for semantic id {} and messsage {} and peers {:?} from {}",
+            semantic_id,
+            message_id,
+            mesh_peers,
+            from
+        );
+        match self.mesh_promises_per_topic.entry(topic.clone()) {
+            Occupied(mut entry) => {
+                entry
+                    .get_mut()
+                    .add_promise(semantic_id, message_id, mesh_peers, from)
+            }
+            Vacant(entry) => {
+                if let Some(topic_params) = self.params.topics.get(topic) {
+                    entry
+                        .insert(MeshPromises::new(topic_params.mesh_promise_window))
+                        .add_promise(semantic_id, message_id, mesh_peers, from)
+                }
+            }
+        }
+    }
+
+    /// Registers a new `message_id` for some `semantic_message_id`. Returns `true` if the given
+    /// `semantic_message_id` is currently tracked and `false` otherwise.
+    pub(crate) fn try_add_duplicate_message_id(
+        &mut self,
+        topic: &TopicHash,
+        semantic_message_id: &SemanticMessageId,
+        message_id: &MessageId,
+    ) -> bool {
+        self.mesh_promises_per_topic
+            .get_mut(topic)
+            .map(|promise_data| {
+                promise_data.try_add_duplicate_message_id(semantic_message_id, message_id)
+            })
+            .unwrap_or(false)
+    }
 }
 
 /// The reason a Gossipsub message has been rejected.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum RejectReason {
     /// The message failed the configured validation during decoding.
     ValidationError(ValidationError),
@@ -886,7 +1118,7 @@ pub(crate) enum RejectReason {
     /// The source (from field) of the message was blacklisted.
     BlackListedSource,
     /// The validation was ignored.
-    ValidationIgnored,
+    ValidationIgnored(Option<SemanticMessageId>),
     /// The validation failed.
     ValidationFailed,
 }

@@ -34,7 +34,7 @@ use std::{
 use futures::StreamExt;
 use log::{debug, error, info, trace, warn};
 use prost::Message;
-use rand::{seq::SliceRandom, thread_rng};
+use rand::{seq::SliceRandom, thread_rng, Rng};
 use wasm_timer::{Instant, Interval};
 
 use libp2p_core::{
@@ -59,11 +59,12 @@ use crate::time_cache::{DuplicateCache, TimeCache};
 use crate::topic::{Hasher, Topic, TopicHash};
 use crate::transform::{DataTransform, IdentityTransform};
 use crate::types::{
-    FastMessageId, GossipsubControlAction, GossipsubMessage, GossipsubSubscription,
-    GossipsubSubscriptionAction, MessageAcceptance, MessageId, PeerInfo, RawGossipsubMessage,
+    FastMessageId, GossipsubControlAction, GossipsubMessage, GossipsubMessageState,
+    GossipsubSubscription, GossipsubSubscriptionAction, MessageAcceptance, MessageId, PeerInfo,
+    RawGossipsubMessage,
 };
 use crate::types::{GossipsubRpc, PeerKind};
-use crate::{rpc_proto, TopicScoreParams};
+use crate::{rpc_proto, SemanticMessageId, TopicScoreParams};
 use std::{cmp::Ordering::Equal, fmt::Debug};
 
 #[cfg(test)]
@@ -711,11 +712,11 @@ where
         info!("Published message: {:?}", &msg_id);
         Ok(msg_id)
     }
-
-    /// This function should be called when [`GossipsubConfig::validate_messages()`] is `true` after
-    /// the message got validated by the caller. Messages are stored in the ['Memcache'] and
-    /// validation is expected to be fast enough that the messages should still exist in the cache.
-    /// There are three possible validation outcomes and the outcome is given in acceptance.
+    /// This function or [`Self::report_message_validation_result`] should be called when
+    /// [`GossipsubConfig::validate_messages()`] is `true` after the message got validated by the
+    /// caller. Messages are stored in the ['Memcache'] and validation is expected to be fast enough
+    /// that the messages should still exist in the cache. There are three possible validation
+    /// outcomes and the outcome is given in acceptance.
     ///
     /// If acceptance = [`MessageAcceptance::Accept`] the message will get propagated to the
     /// network. The `propagation_source` parameter indicates who the message was received by and
@@ -730,16 +731,22 @@ where
     /// This function will return true if the message was found in the cache and false if was not
     /// in the cache anymore.
     ///
+    /// If semantic_id is `Some` the mesh promise tracker uses the semantic id to identify
+    /// semantically equivalent messages and allow peers to send only one of the semantically
+    /// equivalent messages to us. Two messages with the same `message_id` must have the same
+    /// `semantic_id` but two messages with the same `semantic_id` may have different `message_id`s.
+    ///
     /// This should only be called once per message.
-    pub fn report_message_validation_result(
+    pub fn report_message_validation_result_with_semantic_id(
         &mut self,
         msg_id: &MessageId,
         propagation_source: &PeerId,
         acceptance: MessageAcceptance,
+        semantic_id: Option<SemanticMessageId>,
     ) -> Result<bool, PublishError> {
         let reject_reason = match acceptance {
             MessageAcceptance::Accept => {
-                let raw_message = match self.mcache.validate(msg_id) {
+                let raw_message = match self.mcache.get(msg_id) {
                     Some(raw_message) => raw_message.clone(),
                     None => {
                         warn!(
@@ -749,14 +756,31 @@ where
                         return Ok(false);
                     }
                 };
-                self.forward_msg(msg_id, raw_message, Some(propagation_source))?;
+                let semantic_id =
+                    semantic_id.unwrap_or_else(|| SemanticMessageId(msg_id.0.clone()));
+                let status = self.forward_or_track_promise(
+                    &semantic_id,
+                    msg_id,
+                    raw_message,
+                    propagation_source,
+                )?;
+                self.mcache.set_message_state(msg_id, status);
                 return Ok(true);
             }
             MessageAcceptance::Reject => RejectReason::ValidationFailed,
-            MessageAcceptance::Ignore => RejectReason::ValidationIgnored,
+            MessageAcceptance::Ignore => RejectReason::ValidationIgnored(semantic_id.clone()),
         };
 
         if let Some(raw_message) = self.mcache.remove(msg_id) {
+            if let Some((peer_score, ..)) = &mut self.peer_score {
+                if let Some(semantic_id) = semantic_id {
+                    peer_score.try_add_duplicate_message_id(
+                        &raw_message.topic,
+                        &semantic_id,
+                        msg_id,
+                    );
+                }
+            }
             // Tell peer_score about reject
             if let Some((peer_score, ..)) = &mut self.peer_score {
                 peer_score.reject_message(
@@ -771,6 +795,40 @@ where
             warn!("Rejected message not in cache. Message Id: {}", msg_id);
             Ok(false)
         }
+    }
+
+    /// This function or [`Self::report_message_validation_result_with_semantic_id`] should be
+    /// called when [`GossipsubConfig::validate_messages()`] is `true` after the message got validated by the
+    /// caller. Messages are stored in the ['Memcache'] and validation is expected to be fast enough
+    /// that the messages should still exist in the cache. There are three possible validation
+    /// outcomes and the outcome is given in acceptance.
+    ///
+    /// If acceptance = Accept the message will get propagated to the network. The
+    /// `propagation_source` parameter indicates who the message was received by and will not
+    ///  be forwarded back to that peer.
+    ///
+    /// If acceptance = Reject the message will be deleted from the memcache and the P₄ penalty
+    /// will be applied to the `propagation_source`.
+    ///
+    /// If acceptance = Ignore the message will be deleted from the memcache but no P₄ penalty
+    /// will be applied.
+    ///
+    /// This function will return true if the message was found in the cache and false if was not
+    /// in the cache anymore.
+    ///
+    /// This should only be called once per message.
+    pub fn report_message_validation_result(
+        &mut self,
+        message_id: &MessageId,
+        propagation_source: &PeerId,
+        acceptance: MessageAcceptance,
+    ) -> Result<bool, PublishError> {
+        self.report_message_validation_result_with_semantic_id(
+            message_id,
+            propagation_source,
+            acceptance,
+            None,
+        )
     }
 
     /// Adds a new peer to the list of explicitly connected peers.
@@ -1518,13 +1576,6 @@ where
             }
         }
 
-        // If we are not validating messages, assume this message is validated
-        // This will allow the message to be gossiped without explicitly calling
-        // `validate_message`.
-        if !self.config.validate_messages() {
-            raw_message.validated = true;
-        }
-
         // reject messages claiming to be from ourselves but not locally published
         let self_published = !self.config.allow_self_origin()
             && if let Some(own_id) = self.publish_config.get_own_id() {
@@ -1651,14 +1702,55 @@ where
 
         // forward the message to mesh peers, if no validation is required
         if !self.config.validate_messages() {
+            // we use the msg_id as SemanticMessageId if no validation is required
+            let semantic_msg_id = SemanticMessageId(msg_id.0.clone());
             if self
-                .forward_msg(&msg_id, raw_message, Some(propagation_source))
+                .forward_or_track_promise(
+                    &semantic_msg_id,
+                    &msg_id,
+                    raw_message,
+                    propagation_source,
+                )
                 .is_err()
             {
                 error!("Failed to forward message. Too large");
             }
             debug!("Completed message handling for message: {:?}", msg_id);
         }
+    }
+
+    fn forward_or_track_promise(
+        &mut self,
+        semantic_id: &SemanticMessageId,
+        msg_id: &MessageId,
+        mut message: RawGossipsubMessage,
+        propagation_source: &PeerId,
+    ) -> Result<GossipsubMessageState, PublishError> {
+        if let Some((peer_score, ..)) = &mut self.peer_score {
+            peer_score.deliver_message(propagation_source, msg_id, &message.topic);
+
+            if let Some(mesh_peers) = self.mesh.get(&message.topic) {
+                //decide if we track the promise
+                let promise_probability = peer_score.get_mesh_promise_probability(&message.topic);
+                if thread_rng().gen_bool(promise_probability) {
+                    //we track the message as promise
+                    message.state = GossipsubMessageState::Tracking;
+                    peer_score.add_mesh_promise(
+                        &message.topic,
+                        semantic_id.clone(),
+                        msg_id.clone(),
+                        mesh_peers.clone(),
+                        propagation_source,
+                    );
+                    return Ok(GossipsubMessageState::Tracking);
+                }
+            }
+        }
+
+        // we don't track the message as promise => forward the message
+        message.state = GossipsubMessageState::Forwarding;
+        self.forward_msg(msg_id, message, Some(propagation_source))?;
+        Ok(GossipsubMessageState::Forwarding)
     }
 
     // Handles invalid messages received.
@@ -1676,8 +1768,8 @@ where
                 .fast_message_id(&raw_message)
                 .and_then(|id| fast_message_id_cache.get(&id))
             {
-                peer_score.reject_message(propagation_source, msg_id, &raw_message.topic, reason);
                 gossip_promises.reject_message(msg_id, &reason);
+                peer_score.reject_message(propagation_source, msg_id, &raw_message.topic, reason);
             } else {
                 // The message is invalid, we reject it ignoring any gossip promises. If a peer is
                 // advertising this message via an IHAVE and it's invalid it will be double
@@ -1888,6 +1980,35 @@ where
 
         // apply iwant penalties
         self.apply_iwant_penalties();
+
+        // look for broken mesh promises
+        if let Some((peer_score, ..)) = &mut self.peer_score {
+            let promises = peer_score.report_mesh_promises(&self.mesh);
+            for (broken_peers, messages, _) in promises {
+                // the first message in messages is the original message received from `from`.
+                let message_id = messages
+                    .first()
+                    .expect("mesh promise contains at least one message");
+                if let Some(message) = self.mcache.get(&message_id).cloned() {
+                    //forward message to peer_id
+                    if self
+                        .forward_message_to(message_id, message, broken_peers.iter())
+                        .is_err()
+                    {
+                        error!(
+                            "Failed to forward message {} to peers {:?}",
+                            message_id, broken_peers
+                        );
+                    }
+                } else {
+                    warn!(
+                        "Dropped message {} from mcache before we could forward it to peers {:?}, \
+                       after they broke the promise",
+                        message_id, broken_peers
+                    );
+                }
+            }
+        }
 
         // check connections to explicit peers
         if self.heartbeat_ticks % self.config.check_explicit_peers_ticks() == 0 {
@@ -2400,23 +2521,26 @@ where
         message: RawGossipsubMessage,
         propagation_source: Option<&PeerId>,
     ) -> Result<bool, PublishError> {
-        // message is fully validated inform peer_score
-        if let Some((peer_score, ..)) = &mut self.peer_score {
-            if let Some(peer) = propagation_source {
-                peer_score.deliver_message(peer, msg_id, &message.topic);
-            }
-        }
-
         debug!("Forwarding message: {:?}", msg_id);
         let mut recipient_peers = HashSet::new();
 
         // add mesh peers
         let topic = &message.topic;
+
+        let delivered_by = self
+            .peer_score
+            .as_ref()
+            .map(|(peer_score, ..)| peer_score)
+            .and_then(|peer_score| peer_score.delivered_by(msg_id).cloned())
+            .unwrap_or_else(|| HashSet::new());
+
         // mesh
         if let Some(mesh_peers) = self.mesh.get(&topic) {
             for peer_id in mesh_peers {
                 if Some(peer_id) != propagation_source && Some(peer_id) != message.source.as_ref() {
-                    recipient_peers.insert(peer_id.clone());
+                    if !delivered_by.contains(peer_id) {
+                        recipient_peers.insert(peer_id.clone());
+                    }
                 }
             }
         }
@@ -2435,24 +2559,37 @@ where
 
         // forward the message to peers
         if !recipient_peers.is_empty() {
-            let event = Arc::new(
-                GossipsubRpc {
-                    subscriptions: Vec::new(),
-                    messages: vec![RawGossipsubMessage::from(message.clone())],
-                    control_msgs: Vec::new(),
-                }
-                .into_protobuf(),
-            );
-
-            for peer in recipient_peers.iter() {
-                debug!("Sending message: {:?} to peer {:?}", msg_id, peer);
-                self.send_message(peer.clone(), event.clone())?;
-            }
+            self.forward_message_to(msg_id, message, recipient_peers.iter())?;
             debug!("Completed forwarding message");
             Ok(true)
         } else {
             Ok(false)
         }
+    }
+
+    fn forward_message_to<'a, I>(
+        &mut self,
+        msg_id: &MessageId,
+        message: RawGossipsubMessage,
+        peers: I,
+    ) -> Result<(), PublishError>
+    where
+        I: Iterator<Item = &'a PeerId>,
+    {
+        let event = Arc::new(
+            GossipsubRpc {
+                subscriptions: Vec::new(),
+                messages: vec![message],
+                control_msgs: Vec::new(),
+            }
+            .into_protobuf(),
+        );
+
+        for peer in peers {
+            debug!("Sending message: {:?} to peer {:?}", msg_id, peer);
+            self.send_message(peer.clone(), event.clone())?;
+        }
+        Ok(())
     }
 
     /// Constructs a [`RawGossipsubMessage`] performing message signing if required.
@@ -2500,7 +2637,7 @@ where
                     topic,
                     signature,
                     key: inline_key.clone(),
-                    validated: true, // all published messages are valid
+                    state: GossipsubMessageState::Forwarding, // all published messages are valid
                 })
             }
             PublishConfig::Author(peer_id) => {
@@ -2513,7 +2650,7 @@ where
                     topic,
                     signature: None,
                     key: None,
-                    validated: true, // all published messages are valid
+                    state: GossipsubMessageState::Forwarding, // all published messages are valid
                 })
             }
             PublishConfig::RandomAuthor => {
@@ -2526,7 +2663,7 @@ where
                     topic,
                     signature: None,
                     key: None,
-                    validated: true, // all published messages are valid
+                    state: GossipsubMessageState::Forwarding, // all published messages are valid
                 })
             }
             PublishConfig::Anonymous => {
@@ -2539,7 +2676,7 @@ where
                     topic,
                     signature: None,
                     key: None,
-                    validated: true, // all published messages are valid
+                    state: GossipsubMessageState::Forwarding, // all published messages are valid
                 })
             }
         }
@@ -3271,7 +3408,7 @@ mod local_test {
             topic: TopicHash::from_raw("test_topic"),
             signature: None,
             key: None,
-            validated: false,
+            state: GossipsubMessageState::NotValidated,
         }
     }
 

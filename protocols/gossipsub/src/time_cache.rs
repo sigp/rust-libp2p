@@ -28,11 +28,11 @@ use std::collections::hash_map::{
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-struct ExpiringElement<Element> {
+pub(crate) struct ExpiringElement<Element> {
     /// The element that expires
-    element: Element,
+    pub(crate) element: Element,
     /// The expire time.
-    expires: Instant,
+    pub(crate) expires: Instant,
 }
 
 pub struct TimeCache<Key, Value> {
