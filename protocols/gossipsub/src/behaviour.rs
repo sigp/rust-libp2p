@@ -2526,21 +2526,11 @@ where
 
         // add mesh peers
         let topic = &message.topic;
-
-        let delivered_by = self
-            .peer_score
-            .as_ref()
-            .map(|(peer_score, ..)| peer_score)
-            .and_then(|peer_score| peer_score.delivered_by(msg_id).cloned())
-            .unwrap_or_else(|| HashSet::new());
-
         // mesh
         if let Some(mesh_peers) = self.mesh.get(&topic) {
             for peer_id in mesh_peers {
                 if Some(peer_id) != propagation_source && Some(peer_id) != message.source.as_ref() {
-                    if !delivered_by.contains(peer_id) {
-                        recipient_peers.insert(peer_id.clone());
-                    }
+                    recipient_peers.insert(peer_id.clone());
                 }
             }
         }

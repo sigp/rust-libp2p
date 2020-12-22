@@ -774,11 +774,6 @@ impl PeerScore {
         }
     }
 
-    /// Returns the set of peers that sent us the message with this id until now.
-    pub fn delivered_by(&self, msg_id: &MessageId) -> Option<&HashSet<PeerId>> {
-        self.deliveries.get(msg_id).map(|record| &record.peers)
-    }
-
     pub fn duplicated_message(
         &mut self,
         from: &PeerId,
