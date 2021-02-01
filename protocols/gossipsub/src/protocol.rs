@@ -24,8 +24,8 @@ use crate::handler::HandlerEvent;
 use crate::rpc_proto;
 use crate::topic::TopicHash;
 use crate::types::{
-    GossipsubControlAction, GossipsubRpc, GossipsubSubscription, GossipsubSubscriptionAction,
-    MessageId, PeerInfo, PeerKind, RawGossipsubMessage,
+    GossipsubControlAction, GossipsubMessageState, GossipsubRpc, GossipsubSubscription,
+    GossipsubSubscriptionAction, MessageId, PeerInfo, PeerKind, RawGossipsubMessage,
 };
 use byteorder::{BigEndian, ByteOrder};
 use bytes::Bytes;
@@ -338,7 +338,7 @@ impl Decoder for GossipsubCodec {
                     topic: TopicHash::from_raw(message.topic),
                     signature: None, // don't inform the application
                     key: message.key,
-                    validated: false,
+                    state: GossipsubMessageState::NotValidated,
                 };
                 invalid_messages.push((message, validation_error));
                 // proceed to the next message
@@ -358,7 +358,7 @@ impl Decoder for GossipsubCodec {
                     topic: TopicHash::from_raw(message.topic),
                     signature: None, // don't inform the application
                     key: message.key,
-                    validated: false,
+                    state: GossipsubMessageState::NotValidated,
                 };
                 invalid_messages.push((message, ValidationError::InvalidSignature));
                 // proceed to the next message
@@ -383,7 +383,7 @@ impl Decoder for GossipsubCodec {
                             topic: TopicHash::from_raw(message.topic),
                             signature: message.signature, // don't inform the application
                             key: message.key,
-                            validated: false,
+                            state: GossipsubMessageState::NotValidated,
                         };
                         invalid_messages.push((message, ValidationError::InvalidSequenceNumber));
                         // proceed to the next message
@@ -402,7 +402,7 @@ impl Decoder for GossipsubCodec {
                         topic: TopicHash::from_raw(message.topic),
                         signature: message.signature, // don't inform the application
                         key: message.key,
-                        validated: false,
+                        state: GossipsubMessageState::NotValidated,
                     };
                     invalid_messages.push((message, ValidationError::EmptySequenceNumber));
                     continue;
@@ -428,7 +428,7 @@ impl Decoder for GossipsubCodec {
                                     topic: TopicHash::from_raw(message.topic),
                                     signature: message.signature, // don't inform the application
                                     key: message.key,
-                                    validated: false,
+                                    state: GossipsubMessageState::NotValidated,
                                 };
                                 invalid_messages.push((message, ValidationError::InvalidPeerId));
                                 continue;
@@ -452,7 +452,7 @@ impl Decoder for GossipsubCodec {
                 topic: TopicHash::from_raw(message.topic),
                 signature: message.signature,
                 key: message.key,
-                validated: false,
+                state: GossipsubMessageState::NotValidated,
             });
         }
 
@@ -552,6 +552,7 @@ impl Decoder for GossipsubCodec {
 mod tests {
     use super::*;
     use crate::config::GossipsubConfig;
+    use crate::types::GossipsubMessageState;
     use crate::Gossipsub;
     use crate::IdentTopic as Topic;
     use libp2p_core::identity::Keypair;
@@ -637,7 +638,7 @@ mod tests {
             // mark as validated as its a published message
             match decoded_rpc {
                 HandlerEvent::Message { mut rpc, .. } => {
-                    rpc.messages[0].validated = true;
+                    rpc.messages[0].state = GossipsubMessageState::Forwarding;
 
                     assert_eq!(rpc, rpc);
                 }

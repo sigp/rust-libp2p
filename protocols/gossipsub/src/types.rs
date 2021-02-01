@@ -80,6 +80,15 @@ declare_message_id_type!(MessageId, "MessageId");
 // filter duplicates quickly without performing the overhead of decompression.
 declare_message_id_type!(FastMessageId, "FastMessageId");
 
+// An id type for semantically grouping messages that are considered the same after validation.
+declare_message_id_type!(SemanticMessageId, "SemanticMessageId");
+
+impl From<&MessageId> for SemanticMessageId {
+    fn from(m: &MessageId) -> Self {
+        Self(m.0.clone())
+    }
+}
+
 /// Describes the types of peers that can exist in the gossipsub context.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PeerKind {
@@ -91,6 +100,13 @@ pub enum PeerKind {
     Floodsub,
     /// The peer doesn't support any of the protocols.
     NotSupported,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum GossipsubMessageState {
+    NotValidated,
+    Forwarding,
+    Tracking,
 }
 
 /// A message received by the gossipsub system and stored locally in caches..
@@ -114,8 +130,8 @@ pub struct RawGossipsubMessage {
     /// The public key of the message if it is signed and the source [`PeerId`] cannot be inlined.
     pub key: Option<Vec<u8>>,
 
-    /// Flag indicating if this message has been validated by the application or not.
-    pub validated: bool,
+    /// The state of the gossipsub message
+    pub state: GossipsubMessageState,
 }
 
 /// The message sent to the user after a [`RawGossipsubMessage`] has been transformed by a

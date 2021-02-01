@@ -131,6 +131,7 @@ mod config;
 mod gossip_promises;
 mod handler;
 mod mcache;
+mod mesh_promises;
 mod peer_score;
 pub mod subscription_filter;
 pub mod time_cache;
@@ -155,7 +156,7 @@ pub use self::peer_score::{
 pub use self::topic::{Hasher, Topic, TopicHash};
 pub use self::types::{
     FastMessageId, GossipsubMessage, GossipsubRpc, MessageAcceptance, MessageId,
-    RawGossipsubMessage,
+    RawGossipsubMessage, SemanticMessageId,
 };
 pub type IdentTopic = Topic<self::topic::IdentityHash>;
 pub type Sha256Topic = Topic<self::topic::Sha256Hash>;

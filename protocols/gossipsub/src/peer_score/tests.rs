@@ -21,7 +21,7 @@
 /// A collection of unit tests mostly ported from the go implementation.
 use super::*;
 
-use crate::types::RawGossipsubMessage;
+use crate::types::{GossipsubMessageState, RawGossipsubMessage};
 use crate::{GossipsubMessage, IdentTopic as Topic};
 
 // estimates a value within variance
@@ -41,7 +41,7 @@ fn make_test_message(seq: u64) -> (MessageId, RawGossipsubMessage) {
         topic: Topic::new("test").hash(),
         signature: None,
         key: None,
-        validated: true,
+        state: GossipsubMessageState::Forwarding,
     };
 
     let message = GossipsubMessage {
@@ -694,7 +694,12 @@ fn test_score_reject_message_deliveries() {
     // these should have no effect in the score
     peer_score.reject_message(&peer_id_a, &id, &msg.topic, RejectReason::BlackListedPeer);
     peer_score.reject_message(&peer_id_a, &id, &msg.topic, RejectReason::BlackListedSource);
-    peer_score.reject_message(&peer_id_a, &id, &msg.topic, RejectReason::ValidationIgnored);
+    peer_score.reject_message(
+        &peer_id_a,
+        &id,
+        &msg.topic,
+        RejectReason::ValidationIgnored(None),
+    );
 
     peer_score.refresh_scores();
     let score_a = peer_score.score(&peer_id_a);
@@ -708,7 +713,12 @@ fn test_score_reject_message_deliveries() {
 
     // this should have no effect in the score, and subsequent duplicate messages should have no
     // effect either
-    peer_score.reject_message(&peer_id_a, &id, &msg.topic, RejectReason::ValidationIgnored);
+    peer_score.reject_message(
+        &peer_id_a,
+        &id,
+        &msg.topic,
+        RejectReason::ValidationIgnored(None),
+    );
     peer_score.duplicated_message(&peer_id_b, &id, &msg.topic);
 
     peer_score.refresh_scores();
@@ -726,7 +736,12 @@ fn test_score_reject_message_deliveries() {
 
     // this should have no effect in the score, and subsequent duplicate messages should have no
     // effect either
-    peer_score.reject_message(&peer_id_a, &id, &msg.topic, RejectReason::ValidationIgnored);
+    peer_score.reject_message(
+        &peer_id_a,
+        &id,
+        &msg.topic,
+        RejectReason::ValidationIgnored(None),
+    );
     peer_score.duplicated_message(&peer_id_b, &id, &msg.topic);
 
     peer_score.refresh_scores();

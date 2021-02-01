@@ -282,6 +282,18 @@ pub struct TopicScoreParams {
     ///  The weight of the parameter MUST be negative (or zero to disable).
     pub invalid_message_deliveries_weight: f64,
     pub invalid_message_deliveries_decay: f64,
+
+    ///  P8: mesh promises
+    ///  We track some percentage of mesh messages and count the relative amount of broken promises.
+    ///  The value of the parameter is 0 if the relative amount is below the threshold and otherwise
+    ///  the square of the difference to the threshold.
+    ///  The weight of the parameter MUST be negative (or zero to disable).
+    pub mesh_promise_weight: f64,
+    pub mesh_promise_probability: f64,
+    pub mesh_promise_decay: f64,
+    pub mesh_promise_relative_threshold: f64,
+    pub mesh_promise_min_total: f64,
+    pub mesh_promise_window: Duration,
 }
 
 /// NOTE: The topic score parameters are very network specific.
@@ -311,6 +323,13 @@ impl Default for TopicScoreParams {
             // P4
             invalid_message_deliveries_weight: -1.0,
             invalid_message_deliveries_decay: 0.3,
+            // P8
+            mesh_promise_weight: -1.0,
+            mesh_promise_probability: 0.1,
+            mesh_promise_decay: 0.95,
+            mesh_promise_relative_threshold: 0.5,
+            mesh_promise_min_total: 5.0,
+            mesh_promise_window: Duration::from_secs(1),
         }
     }
 }
