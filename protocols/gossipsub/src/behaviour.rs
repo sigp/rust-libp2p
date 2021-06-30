@@ -64,6 +64,8 @@ use crate::types::{
 use crate::types::{GossipsubRpc, PeerConnections, PeerKind};
 use crate::{rpc_proto, TopicScoreParams};
 use std::{cmp::Ordering::Equal, fmt::Debug};
+use std::collections::BTreeMap;
+use std::ops::AddAssign;
 
 #[cfg(test)]
 mod tests;
@@ -247,6 +249,10 @@ pub struct Gossipsub<
     /// Overlay network of connected peers - Maps topics to connected gossipsub peers.
     mesh: HashMap<TopicHash, BTreeSet<PeerId>>,
 
+    /// Map of topic to peers to first message counts
+    count_first_messages: HashMap<TopicHash, BTreeMap<PeerId, u64>>,
+    count_all_messages:  HashMap<TopicHash, BTreeMap<PeerId, u64>>,
+
     /// Map of topics to list of peers that we publish to, but don't subscribe to.
     fanout: HashMap<TopicHash, BTreeSet<PeerId>>,
 
@@ -396,6 +402,8 @@ where
             explicit_peers: HashSet::new(),
             blacklisted_peers: HashSet::new(),
             mesh: HashMap::new(),
+            count_first_messages: HashMap::new(), // HashMap<TopicHash, std::collections::BTreeMap<PeerId, u64>>,
+            count_all_messages:  HashMap::new(), // HashMap<TopicHash, std::collections::BTreeMap<PeerId, u64>>,
             fanout: HashMap::new(),
             fanout_last_pub: HashMap::new(),
             backoffs: BackoffStorage::new(
@@ -456,6 +464,14 @@ where
         self.peer_topics
             .iter()
             .map(|(peer_id, topic_set)| (peer_id, topic_set.iter().collect()))
+    }
+
+    pub fn all_messages_count_for_topic(&self, topic: &TopicHash) -> Option<&BTreeMap<PeerId, u64>> {
+        self.count_all_messages.get(topic)
+    }
+
+    pub fn first_messages_count_for_topic(&self, topic: &TopicHash) -> Option<&BTreeMap<PeerId, u64>> {
+        self.count_first_messages.get(topic)
     }
 
     /// Lists all known peers and their associated protocol.
@@ -1588,6 +1604,13 @@ where
         mut raw_message: RawGossipsubMessage,
         propagation_source: &PeerId,
     ) {
+        self.count_all_messages
+            .entry(raw_message.topic.clone())
+            .or_insert_with(|| BTreeMap::new())
+            .entry(propagation_source.to_owned())
+            .or_insert_with(|| 0)
+            .add_assign(1);
+
         let fast_message_id = self.config.fast_message_id(&raw_message);
         if let Some(fast_message_id) = fast_message_id.as_ref() {
             if let Some(msg_id) = self.fast_messsage_id_cache.get(fast_message_id) {
@@ -1632,6 +1655,7 @@ where
                 .entry(fast_message_id)
                 .or_insert_with(|| msg_id.clone());
         }
+
         if !self.duplicate_cache.insert(msg_id.clone()) {
             debug!("Message already received, ignoring. Message: {}", msg_id);
             if let Some((peer_score, ..)) = &mut self.peer_score {
@@ -1639,7 +1663,15 @@ where
             }
             return;
         }
-        debug!(
+        else {
+            self.count_first_messages
+                .entry(message.topic.clone())
+                .or_insert_with(|| BTreeMap::new())
+                .entry(propagation_source.to_owned())
+                .or_insert_with(|| 0)
+                .add_assign(1)
+        }
+        trace!(
             "Put message {:?} in duplicate_cache and resolve promises",
             msg_id
         );
