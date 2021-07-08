@@ -26,7 +26,7 @@ void = "1"
 wasm-timer = "0.2"
 
 [build-dependencies]
-prost-build = "0.7"
+prost-build = "0.8"
 
 [dev-dependencies]
 env_logger = "0.8.3"
