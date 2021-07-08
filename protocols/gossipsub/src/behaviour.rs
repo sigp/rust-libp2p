@@ -31,7 +31,7 @@ use std::{
 };
 
 use futures::StreamExt;
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, trace, warn};
 use prost::Message;
 use rand::{seq::SliceRandom, thread_rng};
 use wasm_timer::{Instant, Interval};
@@ -1357,7 +1357,7 @@ where
                 .collect();
             // Send the prune messages to the peer
             debug!(
-                "GRAFT: Did not subscribe to topics -  Sending PRUNE to peer: {}",
+                "GRAFT: Not subscribed to topics -  Sending PRUNE to peer: {}",
                 peer_id
             );
 
@@ -2823,7 +2823,7 @@ where
             return;
         }
 
-        info!("New peer connected: {}", peer_id);
+        debug!("New peer connected: {}", peer_id);
         // We need to send our subscriptions to the newly-connected node.
         let mut subscriptions = vec![];
         for topic_hash in self.mesh.keys() {
@@ -3205,6 +3205,13 @@ where
                 NetworkBehaviourAction::ReportObservedAddr { address, score } => {
                     NetworkBehaviourAction::ReportObservedAddr { address, score }
                 }
+                NetworkBehaviourAction::CloseConnection {
+                    peer_id,
+                    connection,
+                } => NetworkBehaviourAction::CloseConnection {
+                    peer_id,
+                    connection,
+                },
             });
         }
 

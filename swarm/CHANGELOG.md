@@ -2,6 +2,26 @@
 
 - Update dependencies.
 
+- Drive `ExpandedSwarm` via `Stream` trait only.
+
+  - Change `Stream` implementation of `ExpandedSwarm` to return all
+    `SwarmEvents` instead of only the `NetworkBehaviour`'s events.
+
+  - Remove `ExpandedSwarm::next_event`. Users can use `<ExpandedSwarm as
+    StreamExt>::next` instead.
+
+  - Remove `ExpandedSwarm::next`. Users can use `<ExpandedSwarm as
+    StreamExt>::filter_map` instead.
+
+  See [PR 2100] for details.
+
+- Add `ExpandedSwarm::disconnect_peer_id` and
+  `NetworkBehaviourAction::CloseConnection` to close connections to a specific
+  peer via an `ExpandedSwarm` or `NetworkBehaviour`. See [PR 2110] for details.
+
+[PR 2100]: https://github.com/libp2p/rust-libp2p/pull/2100
+[PR 2110]: https://github.com/libp2p/rust-libp2p/pull/2110/
+
 # 0.29.0 [2021-04-13]
 
 - Remove `Deref` and `DerefMut` implementations previously dereferencing to the
