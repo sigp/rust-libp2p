@@ -254,6 +254,7 @@ pub struct Gossipsub<
     /// Map of topic to peers to first message counts
     count_first_messages: HashMap<TopicHash, BTreeMap<MeshIndex, u64>>,
     count_all_messages: HashMap<TopicHash, BTreeMap<MeshIndex, u64>>,
+    count_validated_messages: HashMap<TopicHash, BTreeMap<MeshIndex, u64>>,
     /// Map of PeerId to MeshIndex for each topic
     mesh_index: HashMap<TopicHash, HashMap<PeerId, MeshIndex>>,
 
@@ -408,6 +409,7 @@ where
             mesh: HashMap::new(),
             count_first_messages: HashMap::new(),
             count_all_messages: HashMap::new(),
+            count_validated_messages: HashMap::new(),
             mesh_index: HashMap::new(),
             fanout: HashMap::new(),
             fanout_last_pub: HashMap::new(),
@@ -485,6 +487,13 @@ where
         self.count_first_messages.get(topic)
     }
 
+    pub fn validated_messages_count_for_topic(
+        &self,
+        topic: &TopicHash,
+    ) -> Option<&BTreeMap<MeshIndex, u64>> {
+        self.count_validated_messages.get(topic)
+    }
+
     pub fn get_mesh_index_for_topic_for_peer(
         &self,
         topic: &TopicHash,
@@ -514,6 +523,9 @@ where
                         }
                         if let Some(first_count) = self.count_first_messages.get_mut(topic) {
                             *first_count.entry(index.clone()).or_insert_with(|| 0) = 0u64;
+                        }
+                        if let Some(validate_count) = self.count_validated_messages.get_mut(topic) {
+                            *validate_count.entry(index.clone()).or_insert_with(|| 0) = 0u64;
                         }
                     }
                 }
@@ -550,6 +562,11 @@ where
             }
             if let Some(first_count) = self.count_first_messages.get_mut(topic) {
                 for (_, count) in first_count {
+                    *count = 0;
+                }
+            }
+            if let Some(validate_count) = self.count_validated_messages.get_mut(topic) {
+                for (_, count) in validate_count {
                     *count = 0;
                 }
             }
@@ -840,7 +857,27 @@ where
                         return Ok(false);
                     }
                 };
-                self.forward_msg(msg_id, raw_message, Some(propagation_source))?;
+                self.forward_msg(msg_id, raw_message.clone(), Some(propagation_source))?;
+
+                let propagation_index = match self.mesh.get(&raw_message.topic) {
+                    Some(set) if set.contains(propagation_source) => self
+                        .mesh_index
+                        .entry(raw_message.topic.clone())
+                        .or_insert_with(|| HashMap::new())
+                        .get(propagation_source)
+                        .map(|f| *f)
+                        .unwrap_or_else(|| -2),
+                    Some(_) => -3,
+                    None => -4,
+                };
+
+                self.count_validated_messages
+                    .entry(raw_message.topic.clone())
+                    .or_insert_with(|| BTreeMap::new())
+                    .entry(propagation_index)
+                    .or_insert_with(|| 0)
+                    .add_assign(1);
+
                 return Ok(true);
             }
             MessageAcceptance::Reject => RejectReason::ValidationFailed,
