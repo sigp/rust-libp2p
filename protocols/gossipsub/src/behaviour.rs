@@ -219,14 +219,7 @@ impl MessageCounts {
         }
     }
     fn churn(&mut self) {
-        if self.all != 0 {
-            self.all = 0;
-            self.first = 0;
-            self.validated = 0;
-            self.rejected = 0;
-            self.ignored = 0;
-            self.churn += 1;
-        }
+        self.churn += 1;
     }
 }
 
@@ -551,8 +544,7 @@ where
                 }
             }
         } else {
-            // we aren't subscribed to this topic anymore - churn the counts
-            // zero the message counts when the peer is removed
+            // we aren't subscribed to this topic anymore - churn the message counts
             if let Some(peer_map) = self.message_counts.get_mut(topic) {
                 for (.., msg_counts) in peer_map {
                     msg_counts.churn();
@@ -833,9 +825,24 @@ where
         propagation_source: &PeerId,
         acceptance: MessageAcceptance,
     ) -> Result<bool, PublishError> {
+        let mcache_fetch = self.mcache.validate(msg_id);
+        let topic_index_tuple= match &mcache_fetch {
+            Some(msg) => match self.mesh.get(&msg.topic) {
+                Some(set) if set.contains(propagation_source) => self
+                    .mesh_index
+                    .entry(msg.topic.clone())
+                    .or_insert_with(|| HashMap::new())
+                    .get(propagation_source)
+                    .map(|f| (msg.topic.clone(), *f)),
+                Some(_) => Some((msg.topic.clone(), -3)),
+                None => Some((msg.topic.clone(), -4)),
+            },
+            None => None
+        };
+
         let reject_reason = match acceptance {
             MessageAcceptance::Accept => {
-                let raw_message = match self.mcache.validate(msg_id) {
+                let raw_message = match mcache_fetch {
                     Some(raw_message) => raw_message.clone(),
                     None => {
                         warn!(
@@ -847,46 +854,23 @@ where
                 };
                 self.forward_msg(msg_id, raw_message.clone(), Some(propagation_source))?;
 
-                let propagation_index = match self.mesh.get(&raw_message.topic) {
-                    Some(set) if set.contains(propagation_source) => self
-                        .mesh_index
-                        .entry(raw_message.topic.clone())
-                        .or_insert_with(|| HashMap::new())
-                        .get(propagation_source)
-                        .map(|f| *f)
-                        .unwrap_or_else(|| -2),
-                    Some(_) => -3,
-                    None => -4,
-                };
-
-                self.message_counts
-                    .entry(raw_message.topic.clone())
-                    .or_insert_with(|| BTreeMap::new())
-                    .entry(propagation_index)
-                    .or_insert_with(|| MessageCounts::new())
-                    .validated
-                    .add_assign(1);
-
-                return Ok(true);
-            }
-            MessageAcceptance::Reject => {
-                if let Some(raw_message) = self.mcache.validate(msg_id) {
-                    let propagation_index = match self.mesh.get(&raw_message.topic) {
-                        Some(set) if set.contains(propagation_source) => self
-                            .mesh_index
-                            .entry(raw_message.topic.clone())
-                            .or_insert_with(|| HashMap::new())
-                            .get(propagation_source)
-                            .map(|f| *f)
-                            .unwrap_or_else(|| -2),
-                        Some(_) => -3,
-                        None => -4,
-                    };
-
+                if let Some((topic,mesh_index)) = topic_index_tuple {
                     self.message_counts
-                        .entry(raw_message.topic.clone())
+                        .entry(topic)
                         .or_insert_with(|| BTreeMap::new())
-                        .entry(propagation_index)
+                        .entry(mesh_index)
+                        .or_insert_with(|| MessageCounts::new())
+                        .validated
+                        .add_assign(1);
+                }
+                return Ok(true);
+            },
+            MessageAcceptance::Reject => {
+                if let Some((topic,mesh_index)) = topic_index_tuple {
+                    self.message_counts
+                        .entry(topic)
+                        .or_insert_with(|| BTreeMap::new())
+                        .entry(mesh_index)
                         .or_insert_with(|| MessageCounts::new())
                         .rejected
                         .add_assign(1);
@@ -894,28 +878,15 @@ where
                 RejectReason::ValidationFailed
             },
             MessageAcceptance::Ignore => {
-                if let Some(raw_message) = self.mcache.validate(msg_id) {
-                    let propagation_index = match self.mesh.get(&raw_message.topic) {
-                        Some(set) if set.contains(propagation_source) => self
-                            .mesh_index
-                            .entry(raw_message.topic.clone())
-                            .or_insert_with(|| HashMap::new())
-                            .get(propagation_source)
-                            .map(|f| *f)
-                            .unwrap_or_else(|| -2),
-                        Some(_) => -3,
-                        None => -4,
-                    };
-
+                if let Some((topic,mesh_index)) = topic_index_tuple {
                     self.message_counts
-                        .entry(raw_message.topic.clone())
+                        .entry(topic)
                         .or_insert_with(|| BTreeMap::new())
-                        .entry(propagation_index)
+                        .entry(mesh_index)
                         .or_insert_with(|| MessageCounts::new())
                         .ignored
                         .add_assign(1);
                 }
-
                 RejectReason::ValidationIgnored
             },
         };
@@ -1764,7 +1735,7 @@ where
         mut raw_message: RawGossipsubMessage,
         propagation_source: &PeerId,
     ) {
-        let propagation_index = match self.mesh.get(&raw_message.topic) {
+        let mesh_index = match self.mesh.get(&raw_message.topic) {
             Some(set) if set.contains(propagation_source) => self
                 .mesh_index
                 .entry(raw_message.topic.clone())
@@ -1779,7 +1750,7 @@ where
         self.message_counts
             .entry(raw_message.topic.clone())
             .or_insert_with(|| BTreeMap::new())
-            .entry(propagation_index.clone())
+            .entry(mesh_index.clone())
             .or_insert_with(|| MessageCounts::new())
             .all
             .add_assign(1);
@@ -1839,7 +1810,7 @@ where
             self.message_counts
                 .entry(message.topic.clone())
                 .or_insert_with(|| BTreeMap::new())
-                .entry(propagation_index)
+                .entry(mesh_index)
                 .or_insert_with(|| MessageCounts::new())
                 .first
                 .add_assign(1)
