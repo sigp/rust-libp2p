@@ -198,6 +198,37 @@ type GossipsubNetworkBehaviourAction =
     NetworkBehaviourAction<Arc<GossipsubHandlerIn>, GossipsubEvent>;
 
 pub type MeshIndex = i32;
+pub struct MessageCounts {
+    pub all: u64,
+    pub first: u64,
+    pub validated: u64,
+    pub rejected: u64,
+    pub ignored: u64,
+    pub churn: u64,
+}
+
+impl MessageCounts {
+    fn new() -> Self {
+        MessageCounts {
+            all: 0,
+            first: 0,
+            validated: 0,
+            rejected: 0,
+            ignored: 0,
+            churn: 0,
+        }
+    }
+    fn churn(&mut self) {
+        if self.all != 0 {
+            self.all = 0;
+            self.first = 0;
+            self.validated = 0;
+            self.rejected = 0;
+            self.ignored = 0;
+            self.churn += 1;
+        }
+    }
+}
 
 /// Network behaviour that handles the gossipsub protocol.
 ///
@@ -251,11 +282,9 @@ pub struct Gossipsub<
     /// Overlay network of connected peers - Maps topics to connected gossipsub peers.
     mesh: HashMap<TopicHash, BTreeSet<PeerId>>,
 
-    /// Map of topic to peers to first message counts
-    count_first_messages: HashMap<TopicHash, BTreeMap<MeshIndex, u64>>,
-    count_all_messages: HashMap<TopicHash, BTreeMap<MeshIndex, u64>>,
-    count_validated_messages: HashMap<TopicHash, BTreeMap<MeshIndex, u64>>,
-    count_rejected_messages: HashMap<TopicHash, BTreeMap<MeshIndex, u64>>,
+    /// Map of topic to peers to message counts
+    message_counts: HashMap<TopicHash, BTreeMap<MeshIndex, MessageCounts>>,
+
     /// Map of PeerId to MeshIndex for each topic
     mesh_index: HashMap<TopicHash, HashMap<PeerId, MeshIndex>>,
 
@@ -408,10 +437,7 @@ where
             explicit_peers: HashSet::new(),
             blacklisted_peers: HashSet::new(),
             mesh: HashMap::new(),
-            count_first_messages: HashMap::new(),
-            count_all_messages: HashMap::new(),
-            count_validated_messages: HashMap::new(),
-            count_rejected_messages: HashMap::new(),
+            message_counts: HashMap::new(),
             mesh_index: HashMap::new(),
             fanout: HashMap::new(),
             fanout_last_pub: HashMap::new(),
@@ -475,33 +501,10 @@ where
             .map(|(peer_id, topic_set)| (peer_id, topic_set.iter().collect()))
     }
 
-    pub fn all_messages_count_for_topic(
+    pub fn message_counts_for_topic(
         &self,
         topic: &TopicHash,
-    ) -> Option<&BTreeMap<MeshIndex, u64>> {
-        self.count_all_messages.get(topic)
-    }
-
-    pub fn first_messages_count_for_topic(
-        &self,
-        topic: &TopicHash,
-    ) -> Option<&BTreeMap<MeshIndex, u64>> {
-        self.count_first_messages.get(topic)
-    }
-
-    pub fn validated_messages_count_for_topic(
-        &self,
-        topic: &TopicHash,
-    ) -> Option<&BTreeMap<MeshIndex, u64>> {
-        self.count_validated_messages.get(topic)
-    }
-
-    pub fn rejected_messages_count_for_topic(
-        &self,
-        topic: &TopicHash,
-    ) -> Option<&BTreeMap<MeshIndex, u64>> {
-        self.count_rejected_messages.get(topic)
-    }
+    ) -> Option<&BTreeMap<MeshIndex, MessageCounts>> { self.message_counts.get(topic) }
 
     fn update_mesh_indices_for_topic(&mut self, topic: &TopicHash) {
         let mut remove_peers = BTreeMap::new();
@@ -515,19 +518,6 @@ where
                     }
                     if !mesh_peers.contains(peer) {
                         remove_peers.insert(index.clone(), peer.clone());
-                        // zero the message counts when the peer is removed
-                        if let Some(all_count) = self.count_all_messages.get_mut(topic) {
-                            *all_count.entry(index.clone()).or_insert_with(|| 0) = 0u64;
-                        }
-                        if let Some(first_count) = self.count_first_messages.get_mut(topic) {
-                            *first_count.entry(index.clone()).or_insert_with(|| 0) = 0u64;
-                        }
-                        if let Some(validate_count) = self.count_validated_messages.get_mut(topic) {
-                            *validate_count.entry(index.clone()).or_insert_with(|| 0) = 0u64;
-                        }
-                        if let Some(rejected_count) = self.count_rejected_messages.get_mut(topic) {
-                            *rejected_count.entry(index.clone()).or_insert_with(|| 0) = 0u64;
-                        }
                     }
                 }
             } else {
@@ -543,6 +533,12 @@ where
                                 let result = (*rm_index).clone();
                                 mesh_indices.remove(rm_peer);
                                 remove_peers.remove(&result);
+                                // mark this slot as churned
+                                if let Some(peer_map) = self.message_counts.get_mut(topic) {
+                                    if let Some(msg_count) = peer_map.get_mut(&result) {
+                                        msg_count.churn();
+                                    }
+                                }
                                 result
                             }
                             None => {
@@ -555,25 +551,11 @@ where
                 }
             }
         } else {
-            // we aren't subscribed to this topic anymore - zero the counts
-            if let Some(all_count) = self.count_all_messages.get_mut(topic) {
-                for (_, count) in all_count {
-                    *count = 0;
-                }
-            }
-            if let Some(first_count) = self.count_first_messages.get_mut(topic) {
-                for (_, count) in first_count {
-                    *count = 0;
-                }
-            }
-            if let Some(validate_count) = self.count_validated_messages.get_mut(topic) {
-                for (_, count) in validate_count {
-                    *count = 0;
-                }
-            }
-            if let Some(rejected_count) = self.count_rejected_messages.get_mut(topic) {
-                for (_, count) in rejected_count {
-                    *count = 0;
+            // we aren't subscribed to this topic anymore - churn the counts
+            // zero the message counts when the peer is removed
+            if let Some(peer_map) = self.message_counts.get_mut(topic) {
+                for (.., msg_counts) in peer_map {
+                    msg_counts.churn();
                 }
             }
             self.mesh_index.remove(topic);
@@ -877,11 +859,12 @@ where
                     None => -4,
                 };
 
-                self.count_validated_messages
+                self.message_counts
                     .entry(raw_message.topic.clone())
                     .or_insert_with(|| BTreeMap::new())
                     .entry(propagation_index)
-                    .or_insert_with(|| 0)
+                    .or_insert_with(|| MessageCounts::new())
+                    .validated
                     .add_assign(1);
 
                 return Ok(true);
@@ -900,16 +883,41 @@ where
                         None => -4,
                     };
 
-                    self.count_rejected_messages
+                    self.message_counts
                         .entry(raw_message.topic.clone())
                         .or_insert_with(|| BTreeMap::new())
                         .entry(propagation_index)
-                        .or_insert_with(|| 0)
+                        .or_insert_with(|| MessageCounts::new())
+                        .rejected
                         .add_assign(1);
                 }
                 RejectReason::ValidationFailed
             },
-            MessageAcceptance::Ignore => RejectReason::ValidationIgnored,
+            MessageAcceptance::Ignore => {
+                if let Some(raw_message) = self.mcache.validate(msg_id) {
+                    let propagation_index = match self.mesh.get(&raw_message.topic) {
+                        Some(set) if set.contains(propagation_source) => self
+                            .mesh_index
+                            .entry(raw_message.topic.clone())
+                            .or_insert_with(|| HashMap::new())
+                            .get(propagation_source)
+                            .map(|f| *f)
+                            .unwrap_or_else(|| -2),
+                        Some(_) => -3,
+                        None => -4,
+                    };
+
+                    self.message_counts
+                        .entry(raw_message.topic.clone())
+                        .or_insert_with(|| BTreeMap::new())
+                        .entry(propagation_index)
+                        .or_insert_with(|| MessageCounts::new())
+                        .ignored
+                        .add_assign(1);
+                }
+
+                RejectReason::ValidationIgnored
+            },
         };
 
         if let Some(raw_message) = self.mcache.remove(msg_id) {
@@ -1768,11 +1776,12 @@ where
             None => -4,
         };
 
-        self.count_all_messages
+        self.message_counts
             .entry(raw_message.topic.clone())
             .or_insert_with(|| BTreeMap::new())
             .entry(propagation_index.clone())
-            .or_insert_with(|| 0)
+            .or_insert_with(|| MessageCounts::new())
+            .all
             .add_assign(1);
 
         let fast_message_id = self.config.fast_message_id(&raw_message);
@@ -1827,11 +1836,12 @@ where
             }
             return;
         } else {
-            self.count_first_messages
+            self.message_counts
                 .entry(message.topic.clone())
                 .or_insert_with(|| BTreeMap::new())
                 .entry(propagation_index)
-                .or_insert_with(|| 0)
+                .or_insert_with(|| MessageCounts::new())
+                .first
                 .add_assign(1)
         }
         trace!(
