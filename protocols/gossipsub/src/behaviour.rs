@@ -199,12 +199,14 @@ type GossipsubNetworkBehaviourAction =
 
 pub type MeshIndex = i32;
 pub struct MessageCounts {
-    pub all: u64,
-    pub first: u64,
-    pub validated: u64,
-    pub rejected: u64,
-    pub ignored: u64,
-    pub churn: u64,
+    pub all: u32,
+    pub first: u32,
+    pub validated: u32,
+    pub rejected: u32,
+    pub ignored: u32,
+    pub churn_total: u32,
+    pub churn_score_negative: u32,
+    pub churn_disconnected: u32,
 }
 
 impl MessageCounts {
@@ -215,11 +217,10 @@ impl MessageCounts {
             validated: 0,
             rejected: 0,
             ignored: 0,
-            churn: 0,
+            churn_total: 0,
+            churn_score_negative: 0,
+            churn_disconnected: 0,
         }
-    }
-    fn churn(&mut self) {
-        self.churn += 1;
     }
 }
 
@@ -278,8 +279,8 @@ pub struct Gossipsub<
     /// Map of topic to peers to message counts
     message_counts: HashMap<TopicHash, BTreeMap<MeshIndex, MessageCounts>>,
 
-    /// Map of PeerId to MeshIndex for each topic
-    mesh_index: HashMap<TopicHash, HashMap<PeerId, MeshIndex>>,
+    /// Map of PeerId to Mesh Slot Index for each topic
+    mesh_indices: HashMap<TopicHash, HashMap<PeerId, MeshIndex>>,
 
     /// Map of topics to list of peers that we publish to, but don't subscribe to.
     fanout: HashMap<TopicHash, BTreeSet<PeerId>>,
@@ -431,7 +432,7 @@ where
             blacklisted_peers: HashSet::new(),
             mesh: HashMap::new(),
             message_counts: HashMap::new(),
-            mesh_index: HashMap::new(),
+            mesh_indices: HashMap::new(),
             fanout: HashMap::new(),
             fanout_last_pub: HashMap::new(),
             backoffs: BackoffStorage::new(
@@ -504,8 +505,8 @@ where
         let mut greatest_index = 0;
         if let Some(mesh_peers) = self.mesh.get(topic) {
             // iterate over mesh indices to find peers that have been removed from mesh
-            if let Some(mesh_indices) = self.mesh_index.get(topic) {
-                for (peer, index) in mesh_indices {
+            if let Some(index_map) = self.mesh_indices.get(topic) {
+                for (peer, index) in index_map {
                     if *index > greatest_index {
                         greatest_index = index.clone();
                     }
@@ -515,21 +516,21 @@ where
                 }
             } else {
                 // topic isn't in mesh indices -> create it
-                self.mesh_index.insert(topic.clone(), HashMap::new());
+                self.mesh_indices.insert(topic.clone(), HashMap::new());
             }
             // iterate over mesh and find new peers that need a peer index
-            if let Some(mesh_indices) = self.mesh_index.get_mut(topic) {
+            if let Some(index_map) = self.mesh_indices.get_mut(topic) {
                 for mesh_peer in mesh_peers {
-                    if !mesh_indices.contains_key(mesh_peer) {
+                    if !index_map.contains_key(mesh_peer) {
                         let new_index: MeshIndex = match remove_peers.iter().next() {
                             Some((rm_index, rm_peer)) => {
                                 let result = (*rm_index).clone();
-                                mesh_indices.remove(rm_peer);
+                                index_map.remove(rm_peer);
                                 remove_peers.remove(&result);
                                 // mark this slot as churned
                                 if let Some(peer_map) = self.message_counts.get_mut(topic) {
                                     if let Some(msg_count) = peer_map.get_mut(&result) {
-                                        msg_count.churn();
+                                        msg_count.churn_total.add_assign(1);
                                     }
                                 }
                                 result
@@ -539,7 +540,7 @@ where
                                 greatest_index
                             }
                         };
-                        mesh_indices.insert(mesh_peer.clone(), new_index);
+                        index_map.insert(mesh_peer.clone(), new_index);
                     }
                 }
             }
@@ -547,10 +548,10 @@ where
             // we aren't subscribed to this topic anymore - churn the message counts
             if let Some(peer_map) = self.message_counts.get_mut(topic) {
                 for (.., msg_counts) in peer_map {
-                    msg_counts.churn();
+                    msg_counts.churn_total.add_assign(1);
                 }
             }
-            self.mesh_index.remove(topic);
+            self.mesh_indices.remove(topic);
         }
     }
 
@@ -829,7 +830,7 @@ where
         let topic_index_tuple= match &mcache_fetch {
             Some(msg) => match self.mesh.get(&msg.topic) {
                 Some(set) if set.contains(propagation_source) => self
-                    .mesh_index
+                    .mesh_indices
                     .entry(msg.topic.clone())
                     .or_insert_with(|| HashMap::new())
                     .get(propagation_source)
@@ -1737,7 +1738,7 @@ where
     ) {
         let mesh_index = match self.mesh.get(&raw_message.topic) {
             Some(set) if set.contains(propagation_source) => self
-                .mesh_index
+                .mesh_indices
                 .entry(raw_message.topic.clone())
                 .or_insert_with(|| HashMap::new())
                 .get(propagation_source)
@@ -2163,6 +2164,16 @@ where
                 modified_topics.insert(topic_hash.clone());
             }
             for peer in to_remove {
+                if let Some(index_map) = self.mesh_indices.get(topic_hash) {
+                    if let Some(mesh_index) = index_map.get(&peer) {
+                        if let Some(count_map) = self.message_counts.get_mut(topic_hash) {
+                            count_map.entry(mesh_index.clone())
+                                .or_insert_with(|| MessageCounts::new())
+                                .churn_score_negative
+                                .add_assign(1);
+                        }
+                    }
+                }
                 peers.remove(&peer);
             }
 
@@ -3058,8 +3069,24 @@ where
                 // check the mesh for the topic
                 if let Some(mesh_peers) = self.mesh.get_mut(&topic) {
                     // check if the peer is in the mesh and remove it
-                    mesh_peers.remove(peer_id);
-                    modified_topics.insert(topic.clone());
+                    if mesh_peers.contains(peer_id) {
+                        if let Some(mesh_index) = self
+                            .mesh_indices
+                            .entry(topic.clone())
+                            .or_insert_with(|| HashMap::new())
+                            .get(peer_id)
+                            .map(|idx| *idx) {
+                            if let Some(peer_map) = self.message_counts.get_mut(topic) {
+                                peer_map
+                                    .entry(mesh_index)
+                                    .or_insert_with(|| MessageCounts::new())
+                                    .churn_disconnected
+                                    .add_assign(1);
+                            }
+                        }
+                        mesh_peers.remove(peer_id);
+                        modified_topics.insert(topic.clone());
+                    }
                 }
 
                 // remove from topic_peers
