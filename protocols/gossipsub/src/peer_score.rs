@@ -213,6 +213,10 @@ impl PeerScore {
 
     /// Returns the score for a peer.
     pub fn score(&self, peer_id: &PeerId) -> f64 {
+        self.score_with_index(peer_id, None)
+    }
+
+    pub fn score_with_index(&self, peer_id: &PeerId, slot_index: Option<i32>) -> f64 {
         let peer_stats = match self.peer_stats.get(peer_id) {
             Some(v) => v,
             None => return 0.0,
@@ -264,9 +268,13 @@ impl PeerScore {
                     let p3 = deficit * deficit;
                     topic_score += p3 * topic_params.mesh_message_deliveries_weight;
                     debug!(
-                        "The peer {} has a mesh message deliveries deficit of {} in topic\
+                        "SCORE_PENALTY: The peer {} (mesh index [{}]) has a mesh message deliveries deficit of {} in topic\
                          {} and will get penalized by {}",
                         peer_id,
+                        match &slot_index {
+                            Some(id) => i32::to_string(id),
+                            None => "unknown".to_string(),
+                        },
                         deficit,
                         topic,
                         p3 * topic_params.mesh_message_deliveries_weight
