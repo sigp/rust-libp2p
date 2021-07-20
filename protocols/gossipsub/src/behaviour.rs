@@ -562,7 +562,7 @@ where
                     msg_counts.churn_topic.add_assign(1);
                 }
             }
-            self.mesh_indices.remove(topic);
+            //self.mesh_indices.remove(topic);
         }
     }
 
@@ -840,12 +840,10 @@ where
         let mcache_fetch = self.mcache.validate(msg_id);
         let topic_index_tuple= match &mcache_fetch {
             Some(msg) => match self.mesh.get(&msg.topic) {
-                Some(set) if set.contains(propagation_source) => self
-                    .mesh_indices
-                    .entry(msg.topic.clone())
-                    .or_insert_with(|| HashMap::new())
-                    .get(propagation_source)
-                    .map(|f| (msg.topic.clone(), *f)),
+                Some(set) if set.contains(propagation_source) => match self.mesh_indices.get(&msg.topic) {
+                    Some(index_map) => index_map.get(propagation_source).map(|f| (msg.topic.clone(), *f)),
+                    None => Some((msg.topic.clone(), -5)),
+                }
                 Some(_) => Some((msg.topic.clone(), -3)),
                 None => Some((msg.topic.clone(), -4)),
             },
