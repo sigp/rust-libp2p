@@ -533,11 +533,13 @@ where
                         let new_index: MeshIndex = match remove_peers.iter().next() {
                             Some((rm_index, rm_peer)) => {
                                 let result = (*rm_index).clone();
+                                let lg_peer     = rm_peer.clone();
                                 index_map.remove(rm_peer);
                                 remove_peers.remove(&result);
                                 // mark this slot as churned
                                 if let Some(peer_map) = self.message_counts.get_mut(topic) {
                                     if let Some(msg_count) = peer_map.get_mut(&result) {
+                                        debug!("churn_inspect[{}]: [index {}] replacing peer {} with peer {}", topic, result, lg_peer, mesh_peer);
                                         msg_count.churn_total.add_assign(1);
                                     }
                                 }
@@ -545,6 +547,7 @@ where
                             }
                             None => {
                                 greatest_index += 1;
+                                debug!("churn_inspect[{}] assigning peer {} new [index {}]", topic, mesh_peer, greatest_index);
                                 greatest_index
                             }
                         };
@@ -1178,15 +1181,18 @@ where
                 Self::control_pool_add(&mut self.control_pool, peer, control);
 
                 // update leave count
+                let mut status = String::from(": FAILURE");
                 if let Some(index_map) = self.mesh_indices.get(topic_hash) {
                     if let Some(idx) = index_map.get(&peer) {
                         if let Some(count_map) = self.message_counts.get_mut(topic_hash) {
                             if let Some(msg_counts) = count_map.get_mut(idx) {
                                 msg_counts.churn_leave.add_assign(1);
+                                status = format!(" [index {}]: SUCCESS", idx);
                             }
                         }
                     }
                 }
+                debug!("churn_inspect[{}]: increment churn_leave peer {}{}", topic_hash, peer, status);
 
                 // If the peer did not previously exist in any mesh, inform the handler
                 peer_removed_from_mesh(
@@ -2046,15 +2052,18 @@ where
         let mut modified_topics = topics_to_graft.iter().collect::<HashSet<_>>();
         // remove unsubscribed peers from the mesh if it exists
         for (peer_id, topic_hash) in unsubscribed_peers {
+            let mut status = String::from(": FAILURE");
             if let Some(index_map) = self.mesh_indices.get(&topic_hash) {
                 if let Some(idx) = index_map.get(&peer_id) {
                     if let Some(count_map) = self.message_counts.get_mut(&topic_hash) {
                         if let Some(msg_counts) = count_map.get_mut(idx) {
                             msg_counts.churn_unsubscribed.add_assign(1);
+                            status = format!(" [index {}]: SUCCESS", idx);
                         }
                     }
                 }
             }
+            debug!("churn_inspect[{}]: increment churn_unsubscribed peer {}{}", topic_hash, peer_id, status);
             self.remove_peer_from_mesh(&peer_id, &topic_hash, None, false);
             // remove_peer_from_mesh will update the peer indices for us so we don't need to update it
             modified_topics.remove(&topic_hash);
@@ -2212,15 +2221,18 @@ where
                 modified_topics.insert(topic_hash.clone());
             }
             for peer in to_remove {
+                let mut status = String::from(": FAILURE");
                 if let Some(index_map) = self.mesh_indices.get(topic_hash) {
                     if let Some(mesh_index) = index_map.get(&peer) {
                         if let Some(count_map) = self.message_counts.get_mut(topic_hash) {
                             if let Some(msg_count) = count_map.get_mut(mesh_index) {
                                 msg_count.churn_score_negative.add_assign(1);
+                                status = format!(" [index {}]: SUCCESS", mesh_index);
                             }
                         }
                     }
                 }
+                debug!("churn_inspect[{}]: increment churn_score_negative peer {}{}", topic_hash, peer, status);
                 peers.remove(&peer);
             }
 
@@ -2301,15 +2313,18 @@ where
                         }
                     }
 
+                    let mut status = String::from(": FAILURE");
                     if let Some(index_map) = self.mesh_indices.get(topic_hash) {
                         if let Some(idx) = index_map.get(&peer) {
                             if let Some(count_map) = self.message_counts.get_mut(topic_hash) {
                                 if let Some(msg_counts) = count_map.get_mut(idx) {
+                                    status = format!(" [index {}]: SUCCESS", idx);
                                     msg_counts.churn_pruned.add_assign(1);
                                 }
                             }
                         }
                     }
+                    debug!("churn_inspect[{}]: increment churn_pruned peer {}{}", topic_hash, peer, status);
 
                     // remove the peer
                     peers.remove(&peer);
@@ -3129,15 +3144,18 @@ where
                 if let Some(mesh_peers) = self.mesh.get_mut(&topic) {
                     // check if the peer is in the mesh and remove it
                     if mesh_peers.contains(peer_id) {
+                        let mut status = String::from(": FAILURE");
                         if let Some(index_map) = self.mesh_indices.get(topic) {
                             if let Some(idx) = index_map.get(peer_id) {
                                 if let Some(count_map) = self.message_counts.get_mut(topic) {
                                     if let Some(msg_counts) = count_map.get_mut(idx) {
+                                        status = format!(" [index {}]: SUCCESS", idx);
                                         msg_counts.churn_disconnected.add_assign(1);
                                     }
                                 }
                             }
                         }
+                        debug!("churn_inspect[{}]: increment churn_disconnected peer {}{}", topic, peer_id, status);
                         mesh_peers.remove(peer_id);
                         modified_topics.insert(topic.clone());
                     }
