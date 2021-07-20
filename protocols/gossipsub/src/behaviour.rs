@@ -209,8 +209,9 @@ pub struct MessageCounts {
     pub churn_disconnected: u32,
     pub churn_leave: u32,
     pub churn_unsubscribed: u32,
-    pub churn_pruned: u32,
+    pub churn_excess: u32,
     pub churn_topic: u32,
+    pub churn_prune: u32,
 }
 
 impl MessageCounts {
@@ -226,8 +227,9 @@ impl MessageCounts {
             churn_disconnected: 0,
             churn_leave: 0,
             churn_unsubscribed: 0,
-            churn_pruned: 0,
+            churn_excess: 0,
             churn_topic: 0,
+            churn_prune: 0,
         }
     }
 }
@@ -1609,6 +1611,23 @@ where
         let (below_threshold, score) =
             self.score_below_threshold(peer_id, |pst| pst.accept_px_threshold);
         for (topic_hash, px, backoff) in prune_data {
+            let status = match self.mesh_indices.get(&topic_hash) {
+                Some(index_map) => match index_map.get(peer_id) {
+                    Some(idx) => match self.message_counts.get_mut(&topic_hash) {
+                        Some(count_map) => match count_map.get_mut(idx) {
+                            Some(msg_counts) => {
+                                msg_counts.churn_prune.add_assign(1);
+                                format!("[index {}] SUCCESS", idx)
+                            },
+                            None => format!("[index {}]: FAILURE [retrieving msg_counts]", idx),
+                        },
+                        None => format!("[index {}]: FAILURE [retrieving count_map]", idx),
+                    },
+                    None => "FAILURE [retrieving mesh index]".to_string(),
+                },
+                None => "FAILURE [retrieving index_map]".to_string(),
+            };
+            debug!("churn_inspect[{}]: increment churn_prune peer {}{}", topic_hash, peer_id, status);
             self.remove_peer_from_mesh(peer_id, &topic_hash, backoff, true);
 
             if self.mesh.contains_key(&topic_hash) {
@@ -2332,7 +2351,7 @@ where
                             Some(idx) => match self.message_counts.get_mut(topic_hash) {
                                 Some(count_map) => match count_map.get_mut(idx) {
                                     Some(msg_counts) => {
-                                        msg_counts.churn_pruned.add_assign(1);
+                                        msg_counts.churn_excess.add_assign(1);
                                         format!("[index {}] SUCCESS", idx)
                                     },
                                     None => format!("[index {}]: FAILURE [retrieving msg_counts]", idx),
@@ -2343,7 +2362,7 @@ where
                         },
                         None => "FAILURE [retrieving index_map]".to_string(),
                     };
-                    debug!("churn_inspect[{}]: increment churn_pruned peer {}{}", topic_hash, peer, status);
+                    debug!("churn_inspect[{}]: increment churn_excess peer {}{}", topic_hash, peer, status);
 
                     // remove the peer
                     peers.remove(&peer);
