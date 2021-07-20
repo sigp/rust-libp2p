@@ -210,6 +210,7 @@ pub struct MessageCounts {
     pub churn_leave: u32,
     pub churn_unsubscribed: u32,
     pub churn_pruned: u32,
+    pub churn_topic: u32,
 }
 
 impl MessageCounts {
@@ -226,6 +227,7 @@ impl MessageCounts {
             churn_leave: 0,
             churn_unsubscribed: 0,
             churn_pruned: 0,
+            churn_topic: 0,
         }
     }
 }
@@ -554,7 +556,7 @@ where
             // we aren't subscribed to this topic anymore - churn the message counts
             if let Some(peer_map) = self.message_counts.get_mut(topic) {
                 for (.., msg_counts) in peer_map {
-                    msg_counts.churn_total.add_assign(1);
+                    msg_counts.churn_topic.add_assign(1);
                 }
             }
             self.mesh_indices.remove(topic);
