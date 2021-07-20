@@ -207,6 +207,9 @@ pub struct MessageCounts {
     pub churn_total: u32,
     pub churn_score_negative: u32,
     pub churn_disconnected: u32,
+    pub churn_leave: u32,
+    pub churn_unsubscribed: u32,
+    pub churn_pruned: u32,
 }
 
 impl MessageCounts {
@@ -220,6 +223,9 @@ impl MessageCounts {
             churn_total: 0,
             churn_score_negative: 0,
             churn_disconnected: 0,
+            churn_leave: 0,
+            churn_unsubscribed: 0,
+            churn_pruned: 0,
         }
     }
 }
@@ -1169,6 +1175,17 @@ where
                 let control = self.make_prune(topic_hash, &peer, self.config.do_px());
                 Self::control_pool_add(&mut self.control_pool, peer, control);
 
+                // update leave count
+                if let Some(index_map) = self.mesh_indices.get(topic_hash) {
+                    if let Some(idx) = index_map.get(&peer) {
+                        if let Some(count_map) = self.message_counts.get_mut(topic_hash) {
+                            if let Some(msg_counts) = count_map.get_mut(idx) {
+                                msg_counts.churn_leave.add_assign(1);
+                            }
+                        }
+                    }
+                }
+
                 // If the peer did not previously exist in any mesh, inform the handler
                 peer_removed_from_mesh(
                     peer,
@@ -2027,6 +2044,15 @@ where
         let mut modified_topics = topics_to_graft.iter().collect::<HashSet<_>>();
         // remove unsubscribed peers from the mesh if it exists
         for (peer_id, topic_hash) in unsubscribed_peers {
+            if let Some(index_map) = self.mesh_indices.get(&topic_hash) {
+                if let Some(idx) = index_map.get(&peer_id) {
+                    if let Some(count_map) = self.message_counts.get_mut(&topic_hash) {
+                        if let Some(msg_counts) = count_map.get_mut(idx) {
+                            msg_counts.churn_unsubscribed.add_assign(1);
+                        }
+                    }
+                }
+            }
             self.remove_peer_from_mesh(&peer_id, &topic_hash, None, false);
             // remove_peer_from_mesh will update the peer indices for us so we don't need to update it
             modified_topics.remove(&topic_hash);
@@ -2145,6 +2171,7 @@ where
             let backoffs = &self.backoffs;
             let topic_peers = &self.topic_peers;
             let outbound_peers = &self.outbound_peers;
+            let mesh_indices = &self.mesh_indices;
 
             // drop all peers with negative score, without PX
             // if there is at some point a stable retain method for BTreeSet the following can be
@@ -2153,10 +2180,17 @@ where
                 .iter()
                 .filter(|&p| {
                     if score(p, topic_hash) < 0.0 {
-                        trace!(
-                            "HEARTBEAT: Prune peer {:?} with negative score [score = {}, topic = \
+                        debug!(
+                            "HEARTBEAT: Prune peer {:?} [mesh index {}] with negative score [score = {}, topic = \
                              {}]",
                             p,
+                            match mesh_indices.get(topic_hash) {
+                                Some(index_map) => match index_map.get(p) {
+                                    Some(idx) => i32::to_string(idx),
+                                    None => "unknown".to_string(),
+                                },
+                                None => "unknown".to_string(),
+                            },
                             score(p, topic_hash),
                             topic_hash
                         );
@@ -2179,10 +2213,9 @@ where
                 if let Some(index_map) = self.mesh_indices.get(topic_hash) {
                     if let Some(mesh_index) = index_map.get(&peer) {
                         if let Some(count_map) = self.message_counts.get_mut(topic_hash) {
-                            count_map.entry(mesh_index.clone())
-                                .or_insert_with(|| MessageCounts::new())
-                                .churn_score_negative
-                                .add_assign(1);
+                            if let Some(msg_count) = count_map.get_mut(mesh_index) {
+                                msg_count.churn_score_negative.add_assign(1);
+                            }
                         }
                     }
                 }
@@ -2263,6 +2296,16 @@ where
                         } else {
                             // an outbound peer gets removed
                             outbound -= 1;
+                        }
+                    }
+
+                    if let Some(index_map) = self.mesh_indices.get(topic_hash) {
+                        if let Some(idx) = index_map.get(&peer) {
+                            if let Some(count_map) = self.message_counts.get_mut(topic_hash) {
+                                if let Some(msg_counts) = count_map.get_mut(idx) {
+                                    msg_counts.churn_pruned.add_assign(1);
+                                }
+                            }
                         }
                     }
 
@@ -3084,18 +3127,13 @@ where
                 if let Some(mesh_peers) = self.mesh.get_mut(&topic) {
                     // check if the peer is in the mesh and remove it
                     if mesh_peers.contains(peer_id) {
-                        if let Some(mesh_index) = self
-                            .mesh_indices
-                            .entry(topic.clone())
-                            .or_insert_with(|| HashMap::new())
-                            .get(peer_id)
-                            .map(|idx| *idx) {
-                            if let Some(peer_map) = self.message_counts.get_mut(topic) {
-                                peer_map
-                                    .entry(mesh_index)
-                                    .or_insert_with(|| MessageCounts::new())
-                                    .churn_disconnected
-                                    .add_assign(1);
+                        if let Some(index_map) = self.mesh_indices.get(topic) {
+                            if let Some(idx) = index_map.get(peer_id) {
+                                if let Some(count_map) = self.message_counts.get_mut(topic) {
+                                    if let Some(msg_counts) = count_map.get_mut(idx) {
+                                        msg_counts.churn_disconnected.add_assign(1);
+                                    }
+                                }
                             }
                         }
                         mesh_peers.remove(peer_id);
