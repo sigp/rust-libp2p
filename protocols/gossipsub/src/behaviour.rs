@@ -547,7 +547,7 @@ where
                             }
                             None => {
                                 greatest_index += 1;
-                                debug!("churn_inspect[{}] assigning peer {} new [index {}]", topic, mesh_peer, greatest_index);
+                                debug!("churn_inspect[{}] [index {}] assigning peer {} to new slot", topic, greatest_index, mesh_peer);
                                 greatest_index
                             }
                         };
