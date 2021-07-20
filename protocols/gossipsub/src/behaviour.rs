@@ -548,6 +548,7 @@ where
                             None => {
                                 greatest_index += 1;
                                 debug!("churn_inspect[{}] [index {}] assigning peer {} to new slot", topic, greatest_index, mesh_peer);
+                                self.message_counts.entry(topic.clone()).or_insert_with(|| BTreeMap::new()).entry(greatest_index).or_insert_with(||MessageCounts::new());
                                 greatest_index
                             }
                         };
