@@ -2064,10 +2064,14 @@ where
         let mut modified_topics = topics_to_graft.iter().collect::<HashSet<_>>();
         // remove unsubscribed peers from the mesh if it exists
         for (peer_id, topic_hash) in unsubscribed_peers {
-            debug!("{}", increment_counter!(self, churn_unsubscribed, topic_hash, peer_id));
-            self.remove_peer_from_mesh(&peer_id, &topic_hash, None, false);
-            // remove_peer_from_mesh will update the peer indices for us so we don't need to update it
-            modified_topics.remove(&topic_hash);
+            if let Some(peers) = self.mesh.get(&topic_hash) {
+                if peers.contains(&peer_id) {
+                    debug!("{}", increment_counter!(self, churn_unsubscribed, topic_hash, peer_id));
+                    self.remove_peer_from_mesh(&peer_id, &topic_hash, None, false);
+                    // remove_peer_from_mesh will update the peer indices for us so we don't need to update it
+                    modified_topics.remove(&topic_hash);
+                }
+            }
         }
 
         for topic in modified_topics {
