@@ -554,19 +554,19 @@ where
                 for mesh_peer in mesh_peers {
                     if !index_map.contains_key(mesh_peer) {
                         let new_index: MeshIndex = match remove_peers.iter().next() {
-                            Some((rm_index, rm_peer)) => {
-                                let result = (*rm_index).clone();
-                                let lg_peer     = rm_peer.clone();
-                                index_map.remove(rm_peer);
-                                remove_peers.remove(&result);
+                            Some((index_ref, peer_ref)) => {
+                                let rm_index = index_ref.clone();
+                                let rm_peer = peer_ref.clone();
+                                remove_peers.remove(&rm_index);
+                                index_map.remove(&rm_peer);
                                 // mark this slot as churned
                                 if let Some(peer_map) = self.message_counts.get_mut(topic) {
-                                    if let Some(msg_count) = peer_map.get_mut(&result) {
-                                        debug!("churn_inspect[{}]: [index {:02}] replacing peer {} with peer {}", topic, result, lg_peer, mesh_peer);
+                                    if let Some(msg_count) = peer_map.get_mut(&rm_index) {
+                                        debug!("churn_inspect[{}]: [index {:02}] replacing peer {} with peer {}", topic, rm_index, rm_peer, mesh_peer);
                                         msg_count.churn_total.add_assign(1);
                                     }
                                 }
-                                result
+                                rm_index
                             }
                             None => {
                                 greatest_index += 1;
