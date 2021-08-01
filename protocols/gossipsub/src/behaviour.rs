@@ -995,6 +995,8 @@ where
 
     /// Updates the mesh indices for a given topic. This should be called whenever the set of
     /// peers in the mesh for the topic changes (whenever a peer enters or exits the mesh).
+    /// NOTE: If the churn_slot! macro is always invoked whenever peers leave the mesh, then
+    /// this function would only need to be called when new peers enter the mesh.
     fn update_mesh_indices_for_topic(&mut self, topic: &TopicHash) {
         let slot_map = self
             .mesh_slots
@@ -1010,7 +1012,11 @@ where
             // the first element in the vector is for peers that aren't in the mesh
             .or_insert_with(|| vec![SlotMetrics::new()]);
         if let Some(mesh_peers) = self.mesh.get(topic) {
-            // iterate over mesh slots and vacate slots assigned to peers that have been removed from the mesh
+            // iterate over mesh slots and vacate slots assigned to peers that have been removed
+            // from them mesh.
+            // NOTE: If the churn_slot! macro is always invoked whenever peers leave the mesh,
+            // this loop could be removed. Leaving this loop here is just a bit of defensive
+            // coding but it could be removed as an optimization.
             for (peer, mesh_slot) in slot_map
                 .iter()
                 .filter(|(peer, ..)| !mesh_peers.contains(peer))
