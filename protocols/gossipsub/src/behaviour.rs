@@ -1694,10 +1694,16 @@ where
             self.score_below_threshold(peer_id, |pst| pst.accept_px_threshold);
         for (topic_hash, px, backoff) in prune_data {
             // increment churn_prune and vacate slot
-            churn_slot!(self, topic_hash, peer_id, churn_prune);
+            let mut mesh_contains_topic = false;
+            if let Some(peers) = self.mesh.get(&topic_hash) {
+                if peers.contains(&peer_id) {
+                    churn_slot!(self, topic_hash, peer_id, churn_prune);
+                }
+                mesh_contains_topic = true;
+            }
             self.remove_peer_from_mesh(peer_id, &topic_hash, backoff, true);
 
-            if self.mesh.contains_key(&topic_hash) {
+            if mesh_contains_topic {
                 //connect to px peers
                 if !px.is_empty() {
                     // we ignore PX from peers with insufficient score
