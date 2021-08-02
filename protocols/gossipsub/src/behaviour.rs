@@ -196,31 +196,57 @@ impl From<MessageAuthenticity> for PublishConfig {
 type GossipsubNetworkBehaviourAction =
     NetworkBehaviourAction<Arc<GossipsubHandlerIn>, GossipsubEvent>;
 
-#[derive(Default)]
+pub const MESH_SLOT_METRICS_LENGTH: usize = 12;
 pub struct MeshSlotMetrics {
-    pub messages_all: u32,
-    pub messages_first: u32,
-    pub messages_ignored: u32,
-    pub messages_rejected: u32,
-    pub messages_validated: u32,
-    pub churn_disconnected: u32,
-    pub churn_excess: u32,
-    pub churn_leave: u32,
-    pub churn_prune: u32,
-    pub churn_score_negative: u32,
-    pub churn_unknown: u32,
-    pub churn_unsubscribed: u32,
+    pub counts: [u32; MESH_SLOT_METRICS_LENGTH],
     pub current_peer: Option<Box<PeerId>>,
 }
 
+// These constants enumerate the indices of the metrics array
+// in MeshSlotMetrics. This allows passing the metric name to
+// functions while retaining fast access (array lookup is
+// significantly faster than map lookup).
+pub const MESSAGES_ALL: usize = 0;
+pub const MESSAGES_FIRST: usize = 1;
+pub const MESSAGES_IGNORED: usize = 2;
+pub const MESSAGES_REJECTED: usize = 3;
+pub const MESSAGES_VALIDATED: usize = 4;
+pub const CHURN_DISCONNECTED: usize = 5;
+pub const CHURN_EXCESS: usize = 6;
+pub const CHURN_LEAVE: usize = 7;
+pub const CHURN_PRUNE: usize = 8;
+pub const CHURN_SCORE: usize = 9;
+pub const CHURN_UNKNOWN: usize = 10;
+pub const CHURN_UNSUBSCRIBED: usize = 11;
+// Reverse map of above
+pub static MESH_SLOT_METRIC_NAMES: [&str; MESH_SLOT_METRICS_LENGTH] = [
+    "MESSAGES_ALL",
+    "MESSAGES_FIRST",
+    "MESSAGES_IGNORED",
+    "MESSAGES_REJECTED",
+    "MESSAGES_VALIDATED",
+    "CHURN_DISCONNECTED",
+    "CHURN_EXCESS",
+    "CHURN_LEAVE",
+    "CHURN_PRUNE",
+    "CHURN_SCORE",
+    "CHURN_UNKNOWN",
+    "CHURN_UNSUBSCRIBED",
+];
+
 impl MeshSlotMetrics {
     fn new() -> Self {
-        MeshSlotMetrics::default()
+        MeshSlotMetrics {
+            counts: [0u32; MESH_SLOT_METRICS_LENGTH],
+            current_peer: None,
+        }
     }
 }
 
 pub type MeshSlot = usize;
 pub struct MeshSlotData {
+    /// The topic this MeshSlotData belongs to (useful for debugging)
+    topic: TopicHash,
     /// Vector of SlotMetrics (vector indexed by MeshSlot)
     metrics_vec: Vec<MeshSlotMetrics>,
     /// Map of PeerId to MeshSlot
@@ -230,93 +256,104 @@ pub struct MeshSlotData {
 }
 
 impl MeshSlotData {
-    fn new() -> Self {
+    fn new(topic: TopicHash) -> Self {
         MeshSlotData {
+            topic,
             // the first element in the vector is for peers that aren't in the mesh
-            metrics_vec: vec![ MeshSlotMetrics::new() ],
+            metrics_vec: vec![MeshSlotMetrics::new()],
             slot_map: HashMap::new(),
             vacant_slots: BTreeSet::new(),
         }
     }
-}
 
-macro_rules! increment_metric {
-    ($self: expr, $topic_hash: expr, $peer_id: ident, $metric: ident) => {{
-        let slot_data = $self
-            .mesh_slot_data
-            .entry($topic_hash.clone())
-            .or_insert_with(|| MeshSlotData::new());
-        let slot = slot_data
+    /// Increments the slot metric for the specified peer, metric_index
+    fn increment_slot_metric(&mut self, peer: &PeerId, metric_index: usize) {
+        debug_assert!(metric_index > 0 && metric_index < MESH_SLOT_METRICS_LENGTH);
+        let slot = self
             .slot_map
-            .get(&$peer_id)
+            .get(peer)
             .map(|s| *s)
             // peers that aren't in the mesh get slot 0
             .unwrap_or(0);
-        match slot_data
+        match self
             .metrics_vec
             .get_mut(slot)
         {
-            Some(slot_metrics) => slot_metrics.$metric.add_assign(1),
+            Some(slot_metrics) => slot_metrics.counts[metric_index].add_assign(1),
             None => error!(
                 "metrics_event[{}]: [slot {:02}] increment {} peer {} FAILURE [mesh_slots contains peer with slot not existing in mesh_slot_metrics!]",
-                $topic_hash,
+                self.topic,
                 slot,
-                stringify!($metric),
-                $peer_id
+                MESH_SLOT_METRIC_NAMES[metric_index],
+                peer,
             ),
         };
-    }};
-}
+    }
 
-macro_rules! churn_slot {
-    ($self: expr, $topic_hash: ident, $peer_id: ident, $metric: ident) => {{
-        match $self.mesh_slot_data.get_mut(&$topic_hash) {
-            Some(slot_data) => match slot_data.slot_map.get(&$peer_id).cloned() {
-                Some(slot) => match slot_data.metrics_vec.get_mut(slot) {
-                    Some(slot_metrics) => {
-                        slot_metrics.$metric.add_assign(1);
-                        slot_metrics.current_peer = None;
-                        slot_data.vacant_slots.insert(slot);
-                        slot_data.slot_map.remove(&$peer_id);
-                        debug!(
-                            "metrics_event[{}]: [slot {:02}] increment {} peer {} SUCCESS",
-                            $topic_hash, slot, stringify!($metric), $peer_id
-                        );
-                    },
-                    None => warn!(
-                        "metrics_event[{}]: [slot {:02}] increment {} peer {} FAILURE [retrieving slot_metrics]",
-                        $topic_hash, slot, stringify!($metric), $peer_id
-                    ),
+    /// Churns the slot in the specified topic occupied by peer
+    fn churn_slot(&mut self, peer: &PeerId, metric_index: usize) {
+        debug_assert!(metric_index > 0 && metric_index < MESH_SLOT_METRICS_LENGTH);
+        match self.slot_map.get(peer).cloned() {
+            Some(slot) => match self.metrics_vec.get_mut(slot) {
+                Some(slot_metrics) => {
+                    slot_metrics.counts[metric_index].add_assign(1);
+                    slot_metrics.current_peer = None;
+                    self.vacant_slots.insert(slot);
+                    self.slot_map.remove(peer);
+                    debug!(
+                        "metrics_event[{}]: [slot {:02}] increment {} peer {} SUCCESS",
+                        self.topic, slot, MESH_SLOT_METRIC_NAMES[metric_index], peer
+                    );
                 },
                 None => warn!(
-                    "metrics_event[{}]: [slot --] increment {} peer {} FAILURE [retrieving slot]",
-                    $topic_hash, stringify!($metric), $peer_id
+                    "metrics_event[{}]: [slot {:02}] increment {} peer {} FAILURE [retrieving slot_metrics]",
+                    self.topic, slot, MESH_SLOT_METRIC_NAMES[metric_index], peer
                 ),
             },
             None => warn!(
+                "metrics_event[{}]: [slot --] increment {} peer {} FAILURE [retrieving slot]",
+                self.topic, MESH_SLOT_METRIC_NAMES[metric_index], peer
+            ),
+        };
+    }
+}
+
+macro_rules! churn_slot {
+    ($self: expr, $topic_hash: expr, $peer_id: ident, $metric_index: ident) => {{
+        match $self
+            .mesh_slot_data
+            .get_mut(&$topic_hash)
+        {
+            Some(slot_data) => slot_data.churn_slot(&$peer_id, $metric_index),
+            None => warn!(
                 "metrics_event[{}]: [slot --] increment {} peer {} FAILURE [retrieving slot_data]",
-                $topic_hash, stringify!($metric), $peer_id
+                $topic_hash, MESH_SLOT_METRIC_NAMES[$metric_index], $peer_id,
             ),
         }
     }};
 }
 
-fn vacate_slots_of_absent_peers(topic: &TopicHash, slot_data: &mut MeshSlotData, mesh_peers: &BTreeSet<PeerId>) {
+fn vacate_slots_of_absent_peers(
+    topic: &TopicHash,
+    slot_data: &mut MeshSlotData,
+    mesh_peers: &BTreeSet<PeerId>,
+) {
     // iterate over slot_map and vacate slots assigned to peers that have been removed from mesh_peers
-    for (peer, mesh_slot) in slot_data.slot_map
+    for (peer, mesh_slot) in slot_data
+        .slot_map
         .iter()
         .filter(|(peer, ..)| !mesh_peers.contains(peer))
         .map(|(p, s)| (p.clone(), s.clone()))
         .collect::<Vec<_>>()
     {
         if let Some(slot_metrics) = slot_data.metrics_vec.get_mut(mesh_slot) {
-            // if churn_slot! is always called properly whenever a peer leaves the mesh, this shouldn't happen
-            warn!("metrics_event[{}]: [slot {:02}] increment churn_unknown peer {} [this shouldn't happen]", topic, mesh_slot, peer);
-            slot_metrics.churn_unknown.add_assign(1);
+            // if churn_slot() is always called properly whenever a peer leaves the mesh, this shouldn't happen
+            warn!("metrics_event[{}]: [slot {:02}] increment CHURN_UNKNOWN peer {} [this shouldn't happen]", topic, mesh_slot, peer);
+            slot_metrics.counts[CHURN_UNKNOWN].add_assign(1);
             slot_metrics.current_peer = None;
         } else {
             error!(
-                "metrics_event[{}]: [slot {:02}] increment churn_unknown peer {} FAILURE [mesh_slots contains peer with slot not existing in mesh_slot_metrics!]",
+                "metrics_event[{}]: [slot {:02}] increment CHURN_UNKNOWN peer {} FAILURE [mesh_slots contains peer with slot not existing in mesh_slot_metrics!]",
                 topic, mesh_slot, peer
             );
         }
@@ -593,10 +630,7 @@ where
     }
 
     pub fn slot_metrics_for_topic(&self, topic: &TopicHash) -> Option<&Vec<MeshSlotMetrics>> {
-        self
-            .mesh_slot_data
-            .get(topic)
-            .map(|s| &s.metrics_vec)
+        self.mesh_slot_data.get(topic).map(|s| &s.metrics_vec)
     }
 
     /// Lists all known peers and their associated protocol.
@@ -883,33 +917,27 @@ where
                     }
                 };
                 self.forward_msg(msg_id, raw_message.clone(), Some(propagation_source))?;
-                increment_metric!(
-                    self,
-                    raw_message.topic,
-                    propagation_source,
-                    messages_validated
-                );
+                self.mesh_slot_data
+                    .entry(raw_message.topic.clone())
+                    .or_insert_with(|| MeshSlotData::new(raw_message.topic.clone()))
+                    .increment_slot_metric(propagation_source, MESSAGES_VALIDATED);
                 return Ok(true);
             }
             MessageAcceptance::Reject => {
                 if let Some(raw_message) = self.mcache.validate(msg_id) {
-                    increment_metric!(
-                        self,
-                        raw_message.topic,
-                        propagation_source,
-                        messages_rejected
-                    );
+                    self.mesh_slot_data
+                        .entry(raw_message.topic.clone())
+                        .or_insert_with(|| MeshSlotData::new(raw_message.topic.clone()))
+                        .increment_slot_metric(propagation_source, MESSAGES_REJECTED);
                 }
                 RejectReason::ValidationFailed
             }
             MessageAcceptance::Ignore => {
                 if let Some(raw_message) = self.mcache.validate(msg_id) {
-                    increment_metric!(
-                        self,
-                        raw_message.topic,
-                        propagation_source,
-                        messages_ignored
-                    );
+                    self.mesh_slot_data
+                        .entry(raw_message.topic.clone())
+                        .or_insert_with(|| MeshSlotData::new(raw_message.topic.clone()))
+                        .increment_slot_metric(propagation_source, MESSAGES_IGNORED);
                 }
                 RejectReason::ValidationIgnored
             }
@@ -1021,19 +1049,18 @@ where
         }
     }
 
-
     /// Updates the mesh indices for a given topic. This should be called whenever the set of
     /// peers in the mesh for the topic changes (whenever a peer enters or exits the mesh).
-    /// NOTE: If the churn_slot! macro is always invoked whenever peers leave the mesh, then
-    /// this function would only need to be called when new peers enter the mesh.
+    /// NOTE: If churn_slot() is always invoked whenever peers leave the mesh, then this
+    /// function would only needs to be called when new peers enter the mesh.
     fn update_mesh_indices_for_topic(&mut self, topic: &TopicHash) {
         let slot_data = self
             .mesh_slot_data
             .entry(topic.clone())
-            .or_insert_with(|| MeshSlotData::new());
+            .or_insert_with(|| MeshSlotData::new(topic.clone()));
         if let Some(mesh_peers) = self.mesh.get(topic) {
-            // NOTE: If the churn_slot! macro is always invoked whenever peers leave the mesh,
-            // this call can be removed. Leaving this here is just a bit of defensive coding
+            // NOTE: If churn_slot() is always invoked whenever peers leave the mesh, this
+            // call can be removed. Leaving this here is just a bit of defensive coding
             vacate_slots_of_absent_peers(topic, slot_data, mesh_peers);
             // iterate over mesh and find new peers that haven't been assigned a mesh slot
             for mesh_peer in mesh_peers {
@@ -1067,9 +1094,9 @@ where
                 }
             }
         } else {
-            // We shouldn't be here as long as churn_slot! was called for all non-vacant slots during LEAVE
+            // We shouldn't be here as long as churn_slot() was called for all non-vacant slots during LEAVE
             error!(
-                "update_mesh_indices_for_topic called with unsubscribed topic {}!",
+                "update_mesh_indices_for_topic() called with unsubscribed topic {}!",
                 topic
             );
         }
@@ -1259,7 +1286,7 @@ where
 
             // Iterate over SlotMetrics vector for this topic and vacate slots that aren't
             // already vacant (while incrementing churn_leave). Also clear slot_map. This loop
-            // is faster than calling churn_slot! for each peer in the previous loop because
+            // is faster than calling churn_slot() for each peer in the previous loop because
             // it minimizes redundant lookups and only traverses a vector.
             if let Some(slot_data) = self.mesh_slot_data.get_mut(topic_hash) {
                 for slot in (1..slot_data.metrics_vec.len())
@@ -1275,7 +1302,7 @@ where
                                     topic_hash, slot
                                 ),
                             };
-                            slot_metrics.churn_leave.add_assign(1);
+                            slot_metrics.counts[CHURN_LEAVE].add_assign(1);
                             slot_metrics.current_peer = None;
                             slot_data.vacant_slots.insert(slot);
                         },
@@ -1637,6 +1664,7 @@ where
         topic_hash: &TopicHash,
         backoff: Option<u64>,
         always_update_backoff: bool,
+        metric_index: usize,
     ) {
         let mut update_backoff = always_update_backoff;
         if let Some(peers) = self.mesh.get_mut(topic_hash) {
@@ -1663,7 +1691,7 @@ where
                     &mut self.events,
                     &self.connected_peers,
                 );
-                self.update_mesh_indices_for_topic(topic_hash);
+                churn_slot!(self, topic_hash, peer_id, metric_index);
             }
         }
         if update_backoff {
@@ -1687,17 +1715,8 @@ where
         let (below_threshold, score) =
             self.score_below_threshold(peer_id, |pst| pst.accept_px_threshold);
         for (topic_hash, px, backoff) in prune_data {
-            // increment churn_prune and vacate slot
-            let mut mesh_contains_topic = false;
-            if let Some(peers) = self.mesh.get(&topic_hash) {
-                if peers.contains(&peer_id) {
-                    churn_slot!(self, topic_hash, peer_id, churn_prune);
-                }
-                mesh_contains_topic = true;
-            }
-            self.remove_peer_from_mesh(peer_id, &topic_hash, backoff, true);
-
-            if mesh_contains_topic {
+            self.remove_peer_from_mesh(peer_id, &topic_hash, backoff, true, CHURN_PRUNE);
+            if self.mesh.contains_key(&topic_hash) {
                 //connect to px peers
                 if !px.is_empty() {
                     // we ignore PX from peers with insufficient score
@@ -1851,7 +1870,11 @@ where
         mut raw_message: RawGossipsubMessage,
         propagation_source: &PeerId,
     ) {
-        increment_metric!(self, &raw_message.topic, propagation_source, messages_all);
+        self.mesh_slot_data
+            .entry(raw_message.topic.clone())
+            .or_insert_with(|| MeshSlotData::new(raw_message.topic.clone()))
+            .increment_slot_metric(propagation_source, MESSAGES_ALL);
+
         let fast_message_id = self.config.fast_message_id(&raw_message);
         if let Some(fast_message_id) = fast_message_id.as_ref() {
             if let Some(msg_id) = self.fast_messsage_id_cache.get(fast_message_id) {
@@ -1902,9 +1925,11 @@ where
                 peer_score.duplicated_message(propagation_source, &msg_id, &message.topic);
             }
             return;
-        } else {
-            increment_metric!(self, &raw_message.topic, propagation_source, messages_first);
         }
+        self.mesh_slot_data
+            .entry(raw_message.topic.clone())
+            .or_insert_with(|| MeshSlotData::new(raw_message.topic.clone()))
+            .increment_slot_metric(propagation_source, MESSAGES_FIRST);
         trace!(
             "Put message {:?} in duplicate_cache and resolve promises",
             msg_id
@@ -2113,22 +2138,9 @@ where
             }
         }
 
-        let mut modified_topics = topics_to_graft.iter().collect::<HashSet<_>>();
         // remove unsubscribed peers from the mesh if it exists
         for (peer_id, topic_hash) in unsubscribed_peers {
-            if let Some(peers) = self.mesh.get(&topic_hash) {
-                if peers.contains(&peer_id) {
-                    // increment churn_unsubscribed and vacate slot
-                    churn_slot!(self, topic_hash, peer_id, churn_unsubscribed);
-                    self.remove_peer_from_mesh(&peer_id, &topic_hash, None, false);
-                    // remove_peer_from_mesh will update the peer indices for us so we don't need to update it
-                    modified_topics.remove(&topic_hash);
-                }
-            }
-        }
-
-        for topic in modified_topics {
-            self.update_mesh_indices_for_topic(topic);
+            self.remove_peer_from_mesh(&peer_id, &topic_hash, None, false, CHURN_UNSUBSCRIBED);
         }
 
         // Potentially inform the handler if we have added this peer to a mesh for the first time.
@@ -2142,6 +2154,10 @@ where
                 &mut self.events,
                 &self.connected_peers,
             );
+        }
+
+        for topic in &topics_to_graft {
+            self.update_mesh_indices_for_topic(topic);
         }
 
         // If we need to send grafts to peer, do so immediately, rather than waiting for the
@@ -2254,13 +2270,9 @@ where
                 })
                 .cloned()
                 .collect();
-
-            if !to_remove.is_empty() {
-                modified_topics.insert(topic_hash.clone());
-            }
             for peer in to_remove {
                 // increment churn_score_negative and vacate slot
-                churn_slot!(self, topic_hash, peer, churn_score_negative);
+                churn_slot!(self, topic_hash, peer, CHURN_SCORE);
                 peers.remove(&peer);
             }
 
@@ -2341,11 +2353,10 @@ where
                         }
                     }
                     // increment churn_excess and vacate slot
-                    churn_slot!(self, topic_hash, peer, churn_excess);
+                    churn_slot!(self, topic_hash, peer, CHURN_EXCESS);
 
                     // remove the peer
                     peers.remove(&peer);
-                    modified_topics.insert(topic_hash.clone());
                     let current_topic = to_prune.entry(peer).or_insert_with(Vec::new);
                     current_topic.push(topic_hash.clone());
                     removed += 1;
@@ -3151,7 +3162,6 @@ where
     fn inject_disconnected(&mut self, peer_id: &PeerId) {
         // remove from mesh, topic_peers, peer_topic and the fanout
         info!("Peer disconnected: {}", peer_id);
-        let mut modified_topics = HashSet::new();
         if let Some(topics) = self.peer_topics.get(peer_id) {
             // remove peer from all mappings
             for topic in topics {
@@ -3160,9 +3170,8 @@ where
                     // check if the peer is in the mesh and remove it
                     if mesh_peers.contains(peer_id) {
                         // increment churn_disconnected and vacate slot
-                        churn_slot!(self, topic, peer_id, churn_disconnected);
+                        churn_slot!(self, topic, peer_id, CHURN_DISCONNECTED);
                         mesh_peers.remove(peer_id);
-                        modified_topics.insert(topic.clone());
                     }
                 }
 
@@ -3192,10 +3201,6 @@ where
                 debug!("Disconnected node, not in connected nodes");
             }
             return;
-        }
-
-        for topic in modified_topics {
-            self.update_mesh_indices_for_topic(&topic);
         }
 
         //forget px and outbound status for this peer
