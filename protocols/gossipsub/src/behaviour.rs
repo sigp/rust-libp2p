@@ -196,9 +196,8 @@ impl From<MessageAuthenticity> for PublishConfig {
 type GossipsubNetworkBehaviourAction =
     NetworkBehaviourAction<Arc<GossipsubHandlerIn>, GossipsubEvent>;
 
-pub type MeshSlot = usize;
 #[derive(Default)]
-pub struct SlotMetrics {
+pub struct MeshSlotMetrics {
     pub messages_all: u32,
     pub messages_first: u32,
     pub messages_ignored: u32,
@@ -214,27 +213,47 @@ pub struct SlotMetrics {
     pub current_peer: Option<Box<PeerId>>,
 }
 
-impl SlotMetrics {
+impl MeshSlotMetrics {
     fn new() -> Self {
-        SlotMetrics::default()
+        MeshSlotMetrics::default()
+    }
+}
+
+pub type MeshSlot = usize;
+pub struct MeshSlotData {
+    /// Vector of SlotMetrics (vector indexed by MeshSlot)
+    metrics_vec: Vec<MeshSlotMetrics>,
+    /// Map of PeerId to MeshSlot
+    slot_map: HashMap<PeerId, MeshSlot>,
+    /// Set of Vacant MeshSlots (due to peers leaving the mesh)
+    vacant_slots: BTreeSet<MeshSlot>,
+}
+
+impl MeshSlotData {
+    fn new() -> Self {
+        MeshSlotData {
+            // the first element in the vector is for peers that aren't in the mesh
+            metrics_vec: vec![ MeshSlotMetrics::new() ],
+            slot_map: HashMap::new(),
+            vacant_slots: BTreeSet::new(),
+        }
     }
 }
 
 macro_rules! increment_metric {
     ($self: expr, $topic_hash: expr, $peer_id: ident, $metric: ident) => {{
-        let slot = $self
-            .mesh_slots
+        let slot_data = $self
+            .mesh_slot_data
             .entry($topic_hash.clone())
-            .or_insert_with(|| HashMap::new())
+            .or_insert_with(|| MeshSlotData::new());
+        let slot = slot_data
+            .slot_map
             .get(&$peer_id)
             .map(|s| *s)
             // peers that aren't in the mesh get slot 0
             .unwrap_or(0);
-        match $self
-            .mesh_slot_metrics
-            .entry($topic_hash.clone())
-            // the first element in the vector is for peers that aren't in the mesh
-            .or_insert_with(|| vec![ SlotMetrics::new() ])
+        match slot_data
+            .metrics_vec
             .get_mut(slot)
         {
             Some(slot_metrics) => slot_metrics.$metric.add_assign(1),
@@ -251,30 +270,21 @@ macro_rules! increment_metric {
 
 macro_rules! churn_slot {
     ($self: expr, $topic_hash: ident, $peer_id: ident, $metric: ident) => {{
-        match $self.mesh_slots.get_mut(&$topic_hash) {
-            Some(slot_map) => match slot_map.get(&$peer_id).cloned() {
-                Some(slot) => match $self.mesh_slot_metrics.get_mut(&$topic_hash) {
-                    Some(metrics_vec) => match metrics_vec.get_mut(slot) {
-                        Some(slot_metrics) => {
-                            slot_metrics.$metric.add_assign(1);
-                            slot_metrics.current_peer = None;
-                            $self.vacant_mesh_slots
-                                .entry($topic_hash.clone())
-                                .or_insert_with(|| BTreeSet::new())
-                                .insert(slot);
-                            slot_map.remove(&$peer_id);
-                            debug!(
-                                "metrics_event[{}]: [slot {:02}] increment {} peer {} SUCCESS",
-                                $topic_hash, slot, stringify!($metric), $peer_id
-                            );
-                        },
-                        None => warn!(
-                            "metrics_event[{}]: [slot {:02}] increment {} peer {} FAILURE [retrieving slot_metrics]",
+        match $self.mesh_slot_data.get_mut(&$topic_hash) {
+            Some(slot_data) => match slot_data.slot_map.get(&$peer_id).cloned() {
+                Some(slot) => match slot_data.metrics_vec.get_mut(slot) {
+                    Some(slot_metrics) => {
+                        slot_metrics.$metric.add_assign(1);
+                        slot_metrics.current_peer = None;
+                        slot_data.vacant_slots.insert(slot);
+                        slot_data.slot_map.remove(&$peer_id);
+                        debug!(
+                            "metrics_event[{}]: [slot {:02}] increment {} peer {} SUCCESS",
                             $topic_hash, slot, stringify!($metric), $peer_id
-                        ),
+                        );
                     },
                     None => warn!(
-                        "metrics_event[{}]: [slot {:02}] increment {} peer {} FAILURE [retrieving metrics_vec]",
+                        "metrics_event[{}]: [slot {:02}] increment {} peer {} FAILURE [retrieving slot_metrics]",
                         $topic_hash, slot, stringify!($metric), $peer_id
                     ),
                 },
@@ -284,11 +294,35 @@ macro_rules! churn_slot {
                 ),
             },
             None => warn!(
-                "metrics_event[{}]: [slot --] increment {} peer {} FAILURE [retrieving slot_map]",
+                "metrics_event[{}]: [slot --] increment {} peer {} FAILURE [retrieving slot_data]",
                 $topic_hash, stringify!($metric), $peer_id
             ),
-        };
+        }
     }};
+}
+
+fn vacate_slots_of_absent_peers(topic: &TopicHash, slot_data: &mut MeshSlotData, mesh_peers: &BTreeSet<PeerId>) {
+    // iterate over slot_map and vacate slots assigned to peers that have been removed from mesh_peers
+    for (peer, mesh_slot) in slot_data.slot_map
+        .iter()
+        .filter(|(peer, ..)| !mesh_peers.contains(peer))
+        .map(|(p, s)| (p.clone(), s.clone()))
+        .collect::<Vec<_>>()
+    {
+        if let Some(slot_metrics) = slot_data.metrics_vec.get_mut(mesh_slot) {
+            // if churn_slot! is always called properly whenever a peer leaves the mesh, this shouldn't happen
+            warn!("metrics_event[{}]: [slot {:02}] increment churn_unknown peer {} [this shouldn't happen]", topic, mesh_slot, peer);
+            slot_metrics.churn_unknown.add_assign(1);
+            slot_metrics.current_peer = None;
+        } else {
+            error!(
+                "metrics_event[{}]: [slot {:02}] increment churn_unknown peer {} FAILURE [mesh_slots contains peer with slot not existing in mesh_slot_metrics!]",
+                topic, mesh_slot, peer
+            );
+        }
+        slot_data.vacant_slots.insert(mesh_slot);
+        slot_data.slot_map.remove(&peer);
+    }
 }
 
 /// Network behaviour that handles the gossipsub protocol.
@@ -343,14 +377,8 @@ pub struct Gossipsub<
     /// Overlay network of connected peers - Maps topics to connected gossipsub peers.
     mesh: HashMap<TopicHash, BTreeSet<PeerId>>,
 
-    /// Map of Topic to Vector of SlotMetrics (vector indexed by MeshSlot)
-    mesh_slot_metrics: HashMap<TopicHash, Vec<SlotMetrics>>,
-
-    /// Map of Topic to PeerId to MeshSlot
-    mesh_slots: HashMap<TopicHash, HashMap<PeerId, MeshSlot>>,
-
-    /// Set of Vacant Mesh Slots (due to peers leaving the mesh)
-    vacant_mesh_slots: HashMap<TopicHash, BTreeSet<MeshSlot>>,
+    /// Map of Topic to MeshSlotData
+    mesh_slot_data: HashMap<TopicHash, MeshSlotData>,
 
     /// Map of topics to list of peers that we publish to, but don't subscribe to.
     fanout: HashMap<TopicHash, BTreeSet<PeerId>>,
@@ -501,9 +529,7 @@ where
             explicit_peers: HashSet::new(),
             blacklisted_peers: HashSet::new(),
             mesh: HashMap::new(),
-            mesh_slot_metrics: HashMap::new(),
-            mesh_slots: HashMap::new(),
-            vacant_mesh_slots: HashMap::new(),
+            mesh_slot_data: HashMap::new(),
             fanout: HashMap::new(),
             fanout_last_pub: HashMap::new(),
             backoffs: BackoffStorage::new(
@@ -566,8 +592,11 @@ where
             .map(|(peer_id, topic_set)| (peer_id, topic_set.iter().collect()))
     }
 
-    pub fn slot_metrics_for_topic(&self, topic: &TopicHash) -> Option<&Vec<SlotMetrics>> {
-        self.mesh_slot_metrics.get(topic)
+    pub fn slot_metrics_for_topic(&self, topic: &TopicHash) -> Option<&Vec<MeshSlotMetrics>> {
+        self
+            .mesh_slot_data
+            .get(topic)
+            .map(|s| &s.metrics_vec)
     }
 
     /// Lists all known peers and their associated protocol.
@@ -992,82 +1021,53 @@ where
         }
     }
 
+
     /// Updates the mesh indices for a given topic. This should be called whenever the set of
     /// peers in the mesh for the topic changes (whenever a peer enters or exits the mesh).
     /// NOTE: If the churn_slot! macro is always invoked whenever peers leave the mesh, then
     /// this function would only need to be called when new peers enter the mesh.
     fn update_mesh_indices_for_topic(&mut self, topic: &TopicHash) {
-        let slot_map = self
-            .mesh_slots
+        let slot_data = self
+            .mesh_slot_data
             .entry(topic.clone())
-            .or_insert_with(|| HashMap::new());
-        let vacant_slots = self
-            .vacant_mesh_slots
-            .entry(topic.clone())
-            .or_insert_with(|| BTreeSet::new());
-        let metrics_vec = self
-            .mesh_slot_metrics
-            .entry(topic.clone())
-            // the first element in the vector is for peers that aren't in the mesh
-            .or_insert_with(|| vec![SlotMetrics::new()]);
+            .or_insert_with(|| MeshSlotData::new());
         if let Some(mesh_peers) = self.mesh.get(topic) {
-            // iterate over mesh slots and vacate slots assigned to peers that have been removed
-            // from them mesh.
             // NOTE: If the churn_slot! macro is always invoked whenever peers leave the mesh,
-            // this loop could be removed. Leaving this loop here is just a bit of defensive
-            // coding but it could be removed as an optimization.
-            for (peer, mesh_slot) in slot_map
-                .iter()
-                .filter(|(peer, ..)| !mesh_peers.contains(peer))
-                .map(|(p, s)| (p.clone(), s.clone()))
-                .collect::<Vec<_>>()
-            {
-                if let Some(slot_metrics) = metrics_vec.get_mut(mesh_slot) {
-                    warn!("metrics_event[{}]: [slot {:02}] increment churn_unknown peer {} [this shouldn't happen]", topic, mesh_slot, peer);
-                    slot_metrics.churn_unknown.add_assign(1);
-                    slot_metrics.current_peer = None;
-                } else {
-                    error!(
-                        "metrics_event[{}]: [slot {:02}] increment churn_unknown peer {} FAILURE [mesh_slots contains peer with slot not existing in mesh_slot_metrics!]",
-                            topic, mesh_slot, peer
-                    );
-                }
-                vacant_slots.insert(mesh_slot);
-                slot_map.remove(&peer);
-            }
+            // this call can be removed. Leaving this here is just a bit of defensive coding
+            vacate_slots_of_absent_peers(topic, slot_data, mesh_peers);
             // iterate over mesh and find new peers that haven't been assigned a mesh slot
             for mesh_peer in mesh_peers {
-                if !slot_map.contains_key(mesh_peer) {
-                    let slot = match vacant_slots.iter().next() {
+                if !slot_data.slot_map.contains_key(mesh_peer) {
+                    let slot = match slot_data.vacant_slots.iter().next() {
                         Some(slot_ref) => {
                             let result = slot_ref.clone();
                             debug!(
                                 "metrics_event[{}]: [slot {:02}] assigning vacant slot to peer {}",
                                 topic, result, mesh_peer
                             );
-                            vacant_slots.remove(&result);
+                            slot_data.vacant_slots.remove(&result);
                             result
                         }
                         None => {
-                            let result = metrics_vec.len();
+                            let result = slot_data.metrics_vec.len();
                             debug!(
                                 "metrics_event[{}]: [slot {:02}] assigning new slot to peer {}",
                                 topic, result, mesh_peer
                             );
-                            metrics_vec.push(SlotMetrics::new());
+                            slot_data.metrics_vec.push(MeshSlotMetrics::new());
                             result
                         }
                     };
-                    if let Some(metrics) = metrics_vec.get_mut(slot) {
+                    if let Some(metrics) = slot_data.metrics_vec.get_mut(slot) {
                         metrics.current_peer = Some(Box::new(mesh_peer.clone()));
                     } else {
                         error!("metrics_event[{}]: [slot {:02}] assigning slot peer {} FAILURE [SlotMetrics doesn't exist in metrics vector!]", topic, slot, mesh_peer);
                     }
-                    slot_map.insert(mesh_peer.clone(), slot);
+                    slot_data.slot_map.insert(mesh_peer.clone(), slot);
                 }
             }
         } else {
-            // We shouldn't be here ever as long as churn_leave was incremented for each slot
+            // We shouldn't be here as long as churn_slot! was called for all non-vacant slots during LEAVE
             error!(
                 "update_mesh_indices_for_topic called with unsubscribed topic {}!",
                 topic
@@ -1258,40 +1258,34 @@ where
             }
 
             // Iterate over SlotMetrics vector for this topic and vacate slots that aren't
-            // already vacant (incrementing churn_leave). Also clear slot_map. This loop is
-            // faster than calling churn_slot! for each peer in the previous loop because
+            // already vacant (while incrementing churn_leave). Also clear slot_map. This loop
+            // is faster than calling churn_slot! for each peer in the previous loop because
             // it minimizes redundant lookups and only traverses a vector.
-            if let Some(metrics_vec) = self.mesh_slot_metrics.get_mut(topic_hash) {
-                let vacant_slots = self
-                    .vacant_mesh_slots
-                    .entry(topic_hash.clone())
-                    .or_insert_with(|| BTreeSet::new());
-                for slot in (1..metrics_vec.len())
-                    .filter(|s| !vacant_slots.contains(s))
+            if let Some(slot_data) = self.mesh_slot_data.get_mut(topic_hash) {
+                for slot in (1..slot_data.metrics_vec.len())
+                    .filter(|s| !slot_data.vacant_slots.contains(s))
                     .collect::<Vec<_>>()
                 {
-                    match metrics_vec.get_mut(slot) {
+                    match slot_data.metrics_vec.get_mut(slot) {
                         Some(slot_metrics) => {
                             match &slot_metrics.current_peer {
                                 Some(peer) => debug!("metrics_event[{}]: [slot {:02}] increment churn_leave peer {} SUCCESS", topic_hash, slot, peer),
                                 None => warn!(
                                     "metrics_event[{}]: [slot {:02}] increment churn_leave WARNING [current_peer not assigned with non-vacant slot!]",
-                                        topic_hash, slot
+                                    topic_hash, slot
                                 ),
                             };
                             slot_metrics.churn_leave.add_assign(1);
                             slot_metrics.current_peer = None;
-                            vacant_slots.insert(slot);
+                            slot_data.vacant_slots.insert(slot);
                         },
                         None => error!(
                             "metrics_event[{}]: [slot {:02}] increment churn_leave FAILURE [mesh_slots contains peer with slot not existing in mesh_slot_metrics!]",
-                                topic_hash, slot
+                            topic_hash, slot
                         ),
                     };
                 }
-                if let Some(slot_map) = self.mesh_slots.get_mut(topic_hash) {
-                    slot_map.clear();
-                }
+                slot_data.slot_map.clear();
             }
         }
         debug!("Completed LEAVE for topic: {:?}", topic_hash);
