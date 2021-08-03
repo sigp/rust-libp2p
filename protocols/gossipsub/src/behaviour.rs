@@ -241,6 +241,13 @@ impl MeshSlotMetrics {
             current_peer: None,
         }
     }
+
+    pub fn with_names(&self) -> impl Iterator<Item=(&str,&u32)> {
+        self.counts
+            .iter()
+            .enumerate()
+            .map(|(i,c)| (MESH_SLOT_METRIC_NAMES[i], c))
+    }
 }
 
 pub type MeshSlot = usize;
