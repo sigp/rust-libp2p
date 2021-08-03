@@ -357,7 +357,7 @@ fn vacate_slots_of_absent_peers(
         .slot_map
         .iter()
         .filter(|(peer, ..)| !mesh_peers.contains(peer))
-        .map(|(p, s)| (p.clone(), s.clone()))
+        .map(|(p, s)| (*p, *s))
         .collect::<Vec<_>>()
     {
         if let Some(slot_metrics) = slot_data.metrics_vec.get_mut(mesh_slot) {
@@ -1081,7 +1081,7 @@ where
                 if !slot_data.slot_map.contains_key(mesh_peer) {
                     let slot = match slot_data.vacant_slots.iter().next() {
                         Some(slot_ref) => {
-                            let result = slot_ref.clone();
+                            let result = *slot_ref;
                             debug!(
                                 "metrics_event[{}]: [slot {:02}] assigning vacant slot to peer {}",
                                 topic, result, mesh_peer
@@ -1100,11 +1100,11 @@ where
                         }
                     };
                     if let Some(metrics) = slot_data.metrics_vec.get_mut(slot) {
-                        metrics.current_peer = Some(Box::new(mesh_peer.clone()));
+                        metrics.current_peer = Some(Box::new(*mesh_peer));
                     } else {
                         error!("metrics_event[{}]: [slot {:02}] assigning slot peer {} FAILURE [SlotMetrics doesn't exist in metrics vector!]", topic, slot, mesh_peer);
                     }
-                    slot_data.slot_map.insert(mesh_peer.clone(), slot);
+                    slot_data.slot_map.insert(*mesh_peer, slot);
                 }
             }
         } else {
