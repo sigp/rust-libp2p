@@ -242,11 +242,11 @@ impl MeshSlotMetrics {
         }
     }
 
-    pub fn with_names(&self) -> impl Iterator<Item=(&str,&u32)> {
+    pub fn with_names(&self) -> impl Iterator<Item = (&str, &u32)> {
         self.counts
             .iter()
             .enumerate()
-            .map(|(i,c)| (MESH_SLOT_METRIC_NAMES[i], c))
+            .map(|(i, c)| (MESH_SLOT_METRIC_NAMES[i], c))
     }
     pub fn churn_sum(&self) -> u32 {
         let mut result = 0;
@@ -3523,9 +3523,13 @@ where
                 NetworkBehaviourAction::ReportObservedAddr { address, score } => {
                     NetworkBehaviourAction::ReportObservedAddr { address, score }
                 }
-                NetworkBehaviourAction::CloseConnection { peer_id, connection } => {
-                    NetworkBehaviourAction::CloseConnection { peer_id, connection }
-                }
+                NetworkBehaviourAction::CloseConnection {
+                    peer_id,
+                    connection,
+                } => NetworkBehaviourAction::CloseConnection {
+                    peer_id,
+                    connection,
+                },
             });
         }
 
