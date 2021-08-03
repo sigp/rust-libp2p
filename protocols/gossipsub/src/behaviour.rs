@@ -248,6 +248,13 @@ impl MeshSlotMetrics {
             .enumerate()
             .map(|(i,c)| (MESH_SLOT_METRIC_NAMES[i], c))
     }
+    pub fn churn_sum(&self) -> u32 {
+        let mut result = 0;
+        for count in &self.counts[5..] {
+            result.add_assign(count);
+        }
+        result
+    }
 }
 
 pub type MeshSlot = usize;
@@ -275,7 +282,7 @@ impl MeshSlotData {
 
     /// Increments the slot metric for the specified peer, metric_index
     fn increment_slot_metric(&mut self, peer: &PeerId, metric_index: usize) {
-        debug_assert!(metric_index > 0 && metric_index < MESH_SLOT_METRICS_LENGTH);
+        debug_assert!(metric_index < MESH_SLOT_METRICS_LENGTH);
         let slot = self
             .slot_map
             .get(peer)
@@ -299,7 +306,7 @@ impl MeshSlotData {
 
     /// Churns the slot in the specified topic occupied by peer
     fn churn_slot(&mut self, peer: &PeerId, metric_index: usize) {
-        debug_assert!(metric_index > 0 && metric_index < MESH_SLOT_METRICS_LENGTH);
+        debug_assert!(metric_index < MESH_SLOT_METRICS_LENGTH);
         match self.slot_map.get(peer).cloned() {
             Some(slot) => match self.metrics_vec.get_mut(slot) {
                 Some(slot_metrics) => {
@@ -3168,7 +3175,7 @@ where
 
     fn inject_disconnected(&mut self, peer_id: &PeerId) {
         // remove from mesh, topic_peers, peer_topic and the fanout
-        info!("Peer disconnected: {}", peer_id);
+        debug!("Peer disconnected: {}", peer_id);
         if let Some(topics) = self.peer_topics.get(peer_id) {
             // remove peer from all mappings
             for topic in topics {
