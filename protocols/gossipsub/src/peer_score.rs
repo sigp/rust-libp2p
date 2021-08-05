@@ -264,7 +264,7 @@ impl PeerScore {
                     let p3 = deficit * deficit;
                     topic_score += p3 * topic_params.mesh_message_deliveries_weight;
                     debug!(
-                        "SCORE_PENALTY: The peer {} has a mesh message deliveries deficit of {} in topic\
+                        "The peer {} has a mesh message deliveries deficit of {} in topic\
                          {} and will get penalized by {}",
                         peer_id,
                         deficit,
