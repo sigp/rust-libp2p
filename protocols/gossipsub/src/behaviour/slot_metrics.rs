@@ -224,7 +224,7 @@ impl MeshSlotData {
 
     /// Assigns a slot to the peer if the peer doesn't already have one.
     pub fn assign_slot_if_unassigned(&mut self, peer: PeerId) {
-        if !self.slot_map.contains_key(&peer) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.slot_map.entry(peer) {
             match self.vacant_slots.iter().next() {
                 Some(slot_ref) => match self.metrics_vec.get_mut(*slot_ref) {
                     Some(slot_metrics) => {
@@ -233,13 +233,13 @@ impl MeshSlotData {
                             "metrics_event[{}]: [slot {:02}] assigning vacant slot to peer {} SUCCESS",
                                 self.topic, slot, peer
                         );
-                        slot_metrics.assign_slot(peer.clone());
+                        slot_metrics.assign_slot(peer);
                         self.vacant_slots.remove(&slot);
-                        self.slot_map.insert(peer, slot);
+                        entry.insert(slot);
                     },
                     None => error!(
                         "metrics_event[{}]: [slot {:02}] assigning vacant slot to peer {} FAILURE [SlotMetrics doesn't exist in metrics vector!]",
-                        self.topic, slot_ref, peer
+                            self.topic, slot_ref, peer
                     ),
                 },
                 None => {
@@ -249,9 +249,9 @@ impl MeshSlotData {
                             self.topic, slot, peer
                     );
                     let mut slot_metrics = SlotMetrics::new();
-                    slot_metrics.assign_slot(peer.clone());
+                    slot_metrics.assign_slot(peer);
                     self.metrics_vec.push(slot_metrics);
-                    self.slot_map.insert(peer, slot);
+                    entry.insert(slot);
                 }
             };
         }
@@ -328,8 +328,8 @@ impl MeshSlotData {
         self.slot_map.clear();
     }
 
-    /// This function verifies that the MeshSlotData is synchronized perfectly with the mesh:
-    pub fn verify_mesh_slots(&self, mesh: &BTreeSet<PeerId>) -> Result<(), String> {
+    /// This function verifies that the MeshSlotData is synchronized perfectly with the mesh
+    pub fn validate_mesh_slots(&self, mesh: &BTreeSet<PeerId>) -> Result<(), String> {
         let mut result = true;
         let mut errors = String::new();
         // No peers are in the slot_map that aren't in the mesh
@@ -358,10 +358,10 @@ impl MeshSlotData {
         }
 
         // vacant_slots.len() + slot_map.len() == metrics_vec.len() + 1
-        if self.vacant_slots.len() + self.slot_map.len() != self.metrics_vec.len() + 1 {
+        if self.vacant_slots.len() + self.slot_map.len() + 1 != self.metrics_vec.len() {
             result = false;
             let message = format!(
-                "metrics_event[{}] vacant_slots.len()[{}] + slot_map.len()[{}] != metrics_vec.len()[{}] + 1",
+                "metrics_event[{}] vacant_slots.len()[{}] + slot_map.len()[{}] + 1 != metrics_vec.len()[{}]",
                     self.topic, self.vacant_slots.len(), self.slot_map.len(), self.metrics_vec.len(),
             );
             errors.push_str(message.as_str());

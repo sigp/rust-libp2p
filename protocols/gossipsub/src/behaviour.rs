@@ -920,10 +920,10 @@ where
 
     /// This is just a utility function to verify everything is in order between the
     /// mesh and the mesh_slot_data. It's only used in debug builds.
-    fn verify_mesh_slots_for_topic(&self, topic: &TopicHash) -> Result<(), String> {
+    fn validate_mesh_slots_for_topic(&self, topic: &TopicHash) -> Result<(), String> {
         match self.mesh_slot_data.get(topic) {
             Some(slot_data) => match self.mesh.get(topic) {
-                Some(mesh_peers) => slot_data.verify_mesh_slots(mesh_peers),
+                Some(mesh_peers) => slot_data.validate_mesh_slots(mesh_peers),
                 None => Err(format!("metrics_event[{}] no mesh_peers for topic", topic)),
             },
             None => Err(format!("metrics_event[{}]: no slot_data for topic", topic)),
@@ -1034,10 +1034,13 @@ where
                 &self.connected_peers,
             );
         }
+
+        #[cfg(debug_assertions)]
+        let validation_result = self.validate_mesh_slots_for_topic(topic_hash);
         debug_assert!(
-            self.verify_mesh_slots_for_topic(topic_hash).is_ok(),
-            "verify_slots_for_mesh({}) failed!",
-            topic_hash
+            validation_result.is_ok(),
+            "metrics_event: validate_mesh_slots_for_topic({}) failed! Err({})",
+            topic_hash, validation_result.err().unwrap()
         );
         trace!("Completed JOIN for topic: {:?}", topic_hash);
     }
@@ -1987,7 +1990,7 @@ where
             self.mesh_slot_data
                 .entry(topic.clone())
                 .or_insert_with(|| MeshSlotData::new(topic.clone()))
-                .assign_slot_if_unassigned(propagation_source.clone());
+                .assign_slot_if_unassigned(*propagation_source);
         }
 
         // If we need to send grafts to peer, do so immediately, rather than waiting for the
@@ -2420,10 +2423,11 @@ where
 
         #[cfg(debug_assertions)]
         for topic in modified_topics {
+            let validation_result = self.validate_mesh_slots_for_topic(&topic);
             debug_assert!(
-                self.verify_mesh_slots_for_topic(&topic).is_ok(),
-                "verify_mesh_slots_for_topic({}) failed!",
-                topic
+                validation_result.is_ok(),
+                "metrics_event: validate_mesh_slots_for_topic({}) failed! Err({})",
+                topic, validation_result.err().unwrap()
             );
         }
 
