@@ -328,7 +328,9 @@ impl MeshSlotData {
         self.slot_map.clear();
     }
 
-    /// This function verifies that the MeshSlotData is synchronized perfectly with the mesh
+    /// This function verifies that the MeshSlotData is synchronized perfectly with the mesh.
+    /// It's useful for debugging.
+    #[allow(dead_code)]
     pub fn validate_mesh_slots(&self, mesh: &BTreeSet<PeerId>) -> Result<(), String> {
         let mut result = true;
         let mut errors = String::new();
