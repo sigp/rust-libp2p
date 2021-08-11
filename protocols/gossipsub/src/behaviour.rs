@@ -3021,7 +3021,17 @@ where
     fn inject_disconnected(&mut self, peer_id: &PeerId) {
         // remove from mesh, topic_peers, peer_topic and the fanout
         debug!("Peer disconnected: {}", peer_id);
-        if let Some(topics) = self.peer_topics.get(peer_id) {
+        {
+            let topics = match self.peer_topics.get(peer_id) {
+                Some(topics) => (topics),
+                None => {
+                    if !self.blacklisted_peers.contains(peer_id) {
+                        debug!("Disconnected node, not in connected nodes");
+                    }
+                    return;
+                }
+            };
+
             // remove peer from all mappings
             for topic in topics {
                 // check the mesh for the topic
@@ -3055,16 +3065,11 @@ where
                     .get_mut(&topic)
                     .map(|peers| peers.remove(peer_id));
             }
-        } else {
-            if !self.blacklisted_peers.contains(peer_id) {
-                debug!("Disconnected node, not in connected nodes");
-            }
-            return;
-        }
 
-        //forget px and outbound status for this peer
-        self.px_peers.remove(peer_id);
-        self.outbound_peers.remove(peer_id);
+            //forget px and outbound status for this peer
+            self.px_peers.remove(peer_id);
+            self.outbound_peers.remove(peer_id);
+        }
 
         // Remove peer from peer_topics and connected_peers
         // NOTE: It is possible the peer has already been removed from all mappings if it does not
