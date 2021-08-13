@@ -29,6 +29,7 @@ use strum_macros::{EnumIter, IntoStaticStr};
 
 #[derive(Default)]
 pub struct SlotMetrics {
+    assign_sum: u32,
     messages_all: u32,
     messages_first: u32,
     messages_ignored: u32,
@@ -69,6 +70,7 @@ pub enum SlotMetricType {
     MessageMetric(SlotMessageMetric),
     ChurnMetric(SlotChurnMetric),
     ChurnSum,
+    AssignSum,
 }
 
 impl SlotMetricType {
@@ -80,6 +82,7 @@ impl SlotMetricType {
                     .map(|churn_metric| SlotMetricType::ChurnMetric(churn_metric)),
             )
             .chain(std::iter::once(SlotMetricType::ChurnSum))
+            .chain(std::iter::once( SlotMetricType::AssignSum))
     }
 }
 
@@ -139,6 +142,7 @@ impl SlotMetrics {
 
     pub fn assign_slot(&mut self, peer: PeerId) {
         self.current_peer = Some(Box::new(peer));
+        self.assign_sum.add_assign(1);
     }
 
     pub fn get_slot_metric(&self, metric_type: SlotMetricType) -> u32 {
@@ -148,6 +152,7 @@ impl SlotMetrics {
             }
             SlotMetricType::ChurnMetric(churn_reason) => self.get_churn_metric(churn_reason),
             SlotMetricType::ChurnSum => self.churn_sum,
+            SlotMetricType::AssignSum => self.assign_sum,
         }
     }
 
@@ -167,6 +172,7 @@ impl SlotMetrics {
                     self.get_churn_metric(churn_reason),
                 ),
                 SlotMetricType::ChurnSum => ("ChurnSum", self.churn_sum),
+                SlotMetricType::AssignSum => ("AssignSum", self.assign_sum),
             })
             .collect()
     }
