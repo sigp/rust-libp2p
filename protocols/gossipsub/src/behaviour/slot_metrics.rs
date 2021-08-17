@@ -82,7 +82,7 @@ impl SlotMetricType {
                     .map(|churn_metric| SlotMetricType::ChurnMetric(churn_metric)),
             )
             .chain(std::iter::once(SlotMetricType::ChurnSum))
-            .chain(std::iter::once( SlotMetricType::AssignSum))
+            .chain(std::iter::once(SlotMetricType::AssignSum))
     }
 }
 
@@ -122,7 +122,7 @@ impl SlotMetrics {
         }
     }
 
-    pub fn churn_slot(&mut self, churn_reason: SlotChurnMetric) {
+    pub fn churn_slot(&mut self, churn_reason: SlotChurnMetric) -> u32 {
         self.current_peer = None;
         self.churn_sum.add_assign(1);
         match churn_reason {
@@ -134,15 +134,17 @@ impl SlotMetrics {
             SlotChurnMetric::ChurnUnknown => self.churn_unknown.add_assign(1),
             SlotChurnMetric::ChurnUnsubscribed => self.churn_unsubscribed.add_assign(1),
         };
+        self.churn_sum
     }
 
     pub fn current_peer(&self) -> &Option<Box<PeerId>> {
         &self.current_peer
     }
 
-    pub fn assign_slot(&mut self, peer: PeerId) {
+    pub fn assign_slot(&mut self, peer: PeerId) -> u32 {
         self.current_peer = Some(Box::new(peer));
         self.assign_sum.add_assign(1);
+        self.assign_sum
     }
 
     pub fn get_slot_metric(&self, metric_type: SlotMetricType) -> u32 {
@@ -235,13 +237,13 @@ impl MeshSlotData {
                 Some(slot_ref) => match self.metrics_vec.get_mut(*slot_ref) {
                     Some(slot_metrics) => {
                         let slot = *slot_ref;
-                        debug!(
-                            "metrics_event[{}]: [slot {:02}] assigning vacant slot to peer {} SUCCESS",
-                                self.topic, slot, peer
-                        );
-                        slot_metrics.assign_slot(peer);
+                        let assign_sum = slot_metrics.assign_slot(peer);
                         self.vacant_slots.remove(&slot);
                         entry.insert(slot);
+                        debug!(
+                            "metrics_event[{}]: [slot {:02}] assigning vacant slot to peer {} SUCCESS AssignSum[{}]",
+                                self.topic, slot, peer, assign_sum,
+                        );
                     },
                     None => error!(
                         "metrics_event[{}]: [slot {:02}] assigning vacant slot to peer {} FAILURE [SlotMetrics doesn't exist in metrics vector!]",
@@ -250,14 +252,14 @@ impl MeshSlotData {
                 },
                 None => {
                     let slot = self.metrics_vec.len();
-                    debug!(
-                        "metrics_event[{}]: [slot {:02}] assigning new slot to peer {} SUCCESS",
-                            self.topic, slot, peer
-                    );
                     let mut slot_metrics = SlotMetrics::new();
-                    slot_metrics.assign_slot(peer);
+                    let assign_sum = slot_metrics.assign_slot(peer);
                     self.metrics_vec.push(slot_metrics);
                     entry.insert(slot);
+                    debug!(
+                        "metrics_event[{}]: [slot {:02}] assigning new slot to peer {} SUCCESS AssignSum[{}]",
+                            self.topic, slot, peer, assign_sum,
+                    );
                 }
             };
         }
@@ -281,12 +283,12 @@ impl MeshSlotData {
                         "metrics_event[{}] [slot {:02}] increment {} peer {} FAILURE [vacant slots already contains this slot!]",
                             self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), peer
                     );
-                    slot_metrics.churn_slot(churn_reason);
+                    let churn_sum = slot_metrics.churn_slot(churn_reason);
                     self.vacant_slots.insert(slot);
                     self.slot_map.remove(peer);
                     debug!(
-                        "metrics_event[{}]: [slot {:02}] increment {} peer {} SUCCESS",
-                            self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), peer
+                        "metrics_event[{}]: [slot {:02}] increment {} peer {} SUCCESS ChurnSum[{}]",
+                            self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), peer, churn_sum,
                     );
                 },
                 None => warn!(
@@ -312,18 +314,19 @@ impl MeshSlotData {
         {
             match self.metrics_vec.get_mut(slot) {
                 Some(slot_metrics) => {
-                    match slot_metrics.current_peer() {
+                    let previous = slot_metrics.current_peer().as_ref().map(|p| **p);
+                    let churn_sum = slot_metrics.churn_slot(churn_reason);
+                    self.vacant_slots.insert(slot);
+                    match previous {
                         Some(peer) => debug!(
-                            "metrics_event[{}]: [slot {:02}] increment {} peer {} SUCCESS",
-                                self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), peer
+                            "metrics_event[{}]: [slot {:02}] increment {} peer {} SUCCESS ChurnSum[{}]",
+                                self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), peer, churn_sum,
                         ),
                         None => warn!(
-                            "metrics_event[{}]: [slot {:02}] increment {} WARNING [current_peer not assigned with non-vacant slot!]",
-                                self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason),
+                            "metrics_event[{}]: [slot {:02}] increment {} WARNING [current_peer not assigned with non-vacant slot!] ChurnSum[{}]",
+                                self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), churn_sum,
                         ),
                     };
-                    slot_metrics.churn_slot(churn_reason);
-                    self.vacant_slots.insert(slot);
                 },
                 None => error!(
                     "metrics_event[{}]: [slot {:02}] increment {} FAILURE [mesh_slots contains peer with slot not existing in mesh_slot_metrics!]",

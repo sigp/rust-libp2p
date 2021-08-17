@@ -461,6 +461,9 @@ where
         self.mesh.keys()
     }
 
+    /// Lists the hashes of the topics we have slot metrics for (regardless of whether or not we're subscribed)
+    pub fn slot_metrics_topics(&self) -> impl Iterator<Item = &TopicHash> { self.mesh_slot_data.keys() }
+
     /// Lists all mesh peers for a certain topic hash.
     pub fn mesh_peers(&self, topic_hash: &TopicHash) -> impl Iterator<Item = &PeerId> {
         self.mesh
