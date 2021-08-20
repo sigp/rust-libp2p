@@ -68,6 +68,7 @@ use crate::types::{
 };
 use crate::types::{GossipsubRpc, PeerConnections, PeerKind};
 use crate::{rpc_proto, TopicScoreParams};
+use std::cell::RefCell;
 use std::{cmp::Ordering::Equal, fmt::Debug};
 
 #[cfg(test)]
@@ -274,6 +275,9 @@ pub struct Gossipsub<
     /// Map of Topic to MeshSlotData
     mesh_slot_data: HashMap<TopicHash, MeshSlotData>,
 
+    /// Map of Topics that have been left since the last call to slot_metrics_topics()
+    recently_left_topics: RefCell<HashSet<TopicHash>>,
+
     /// Map of topics to list of peers that we publish to, but don't subscribe to.
     fanout: HashMap<TopicHash, BTreeSet<PeerId>>,
 
@@ -424,6 +428,7 @@ where
             blacklisted_peers: HashSet::new(),
             mesh: HashMap::new(),
             mesh_slot_data: HashMap::new(),
+            recently_left_topics: RefCell::new(HashSet::new()),
             fanout: HashMap::new(),
             fanout_last_pub: HashMap::new(),
             backoffs: BackoffStorage::new(
@@ -461,8 +466,31 @@ where
         self.mesh.keys()
     }
 
-    /// Lists the hashes of the topics we have slot metrics for (regardless of whether or not we're subscribed)
-    pub fn slot_metrics_topics(&self) -> impl Iterator<Item = &TopicHash> { self.mesh_slot_data.keys() }
+    /// Lists the hashes of the topics we are currently subscribed to or have recently left since the last time this function was called.
+    pub fn slot_metrics_topics(&self) -> impl Iterator<Item = TopicHash> {
+        match self.recently_left_topics.try_borrow_mut() {
+            Ok(mut left_topics) => self
+                .mesh
+                .keys()
+                .cloned()
+                // It's possible that it's been a long time since this function was called,
+                // in which case we might have resubscribed to topics we previously left
+                .chain(left_topics.drain().filter(|t| !self.mesh.contains_key(t)))
+                .collect::<Vec<_>>()
+                .into_iter(),
+            Err(e) => {
+                error!(
+                    "slot_metric_topics(): Unable to borrow_mut recently_left_topics! Err({:?})",
+                    e
+                );
+                self.mesh_slot_data
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+            }
+        }
+    }
 
     /// Lists all mesh peers for a certain topic hash.
     pub fn mesh_peers(&self, topic_hash: &TopicHash) -> impl Iterator<Item = &PeerId> {
@@ -1135,6 +1163,9 @@ where
             if let Some(slot_data) = self.mesh_slot_data.get_mut(topic_hash) {
                 slot_data.churn_all_slots(SlotChurnMetric::ChurnLeave);
             }
+            self.recently_left_topics
+                .get_mut()
+                .insert(topic_hash.clone());
         }
         debug!("Completed LEAVE for topic: {:?}", topic_hash);
     }
