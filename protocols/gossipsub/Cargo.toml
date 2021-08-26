@@ -29,6 +29,7 @@ hex_fmt = "0.3.0"
 regex = "1.4.0"
 strum = "0.21"
 strum_macros = "0.21"
+ttl_cache = "0.5.1"
 
 [dev-dependencies]
 async-std = "1.6.3"

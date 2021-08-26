@@ -36,6 +36,7 @@ use futures::StreamExt;
 use log::{debug, error, trace, warn};
 use prost::Message;
 use rand::{seq::SliceRandom, thread_rng};
+use ttl_cache::TtlCache;
 use wasm_timer::{Instant, Interval};
 
 use libp2p_core::{
@@ -73,6 +74,9 @@ use std::{cmp::Ordering::Equal, fmt::Debug};
 
 #[cfg(test)]
 mod tests;
+
+const RECENTLY_LEFT_TOPICS_CACHE_CAPACITY: usize = 128;
+const RECENTLY_LEFT_TOPICS_TTL_SECONDS: u64 = 60;
 
 /// Determines if published messages should be signed or not.
 ///
@@ -275,8 +279,8 @@ pub struct Gossipsub<
     /// Map of Topic to MeshSlotData
     mesh_slot_data: HashMap<TopicHash, MeshSlotData>,
 
-    /// Map of Topics that have been left since the last call to slot_metrics_topics()
-    recently_left_topics: RefCell<HashSet<TopicHash>>,
+    /// TTL cache of topics that were recently left
+    recently_left_topics: RefCell<TtlCache<TopicHash, ()>>,
 
     /// Map of topics to list of peers that we publish to, but don't subscribe to.
     fanout: HashMap<TopicHash, BTreeSet<PeerId>>,
@@ -428,7 +432,7 @@ where
             blacklisted_peers: HashSet::new(),
             mesh: HashMap::new(),
             mesh_slot_data: HashMap::new(),
-            recently_left_topics: RefCell::new(HashSet::new()),
+            recently_left_topics: RefCell::new(TtlCache::new(RECENTLY_LEFT_TOPICS_CACHE_CAPACITY)),
             fanout: HashMap::new(),
             fanout_last_pub: HashMap::new(),
             backoffs: BackoffStorage::new(
@@ -466,16 +470,15 @@ where
         self.mesh.keys()
     }
 
-    /// Lists the hashes of the topics we are currently subscribed to or have recently left since the last time this function was called.
-    pub fn slot_metrics_topics(&self) -> impl Iterator<Item = TopicHash> {
+    /// Lists the hashes of the topics we are currently subscribed to or
+    /// have been subscribed to in the last `RECENTLY_LEFT_TOPICS_TTL_SECONDS`
+    pub fn recently_touched_topics(&self) -> impl Iterator<Item = TopicHash> {
         match self.recently_left_topics.try_borrow_mut() {
             Ok(mut left_topics) => self
                 .mesh
                 .keys()
+                .chain(left_topics.iter().map(|(t,..)| t).filter(|t| !self.mesh.contains_key(*t)))
                 .cloned()
-                // It's possible that it's been a long time since this function was called,
-                // in which case we might have resubscribed to topics we previously left
-                .chain(left_topics.drain().filter(|t| !self.mesh.contains_key(t)))
                 .collect::<Vec<_>>()
                 .into_iter(),
             Err(e) => {
@@ -483,7 +486,8 @@ where
                     "slot_metric_topics(): Unable to borrow_mut recently_left_topics! Err({:?})",
                     e
                 );
-                self.mesh_slot_data
+                self
+                    .mesh_slot_data
                     .keys()
                     .cloned()
                     .collect::<Vec<_>>()
@@ -1165,7 +1169,7 @@ where
             }
             self.recently_left_topics
                 .get_mut()
-                .insert(topic_hash.clone());
+                .insert(topic_hash.clone(), (), Duration::from_secs(RECENTLY_LEFT_TOPICS_TTL_SECONDS));
         }
         debug!("Completed LEAVE for topic: {:?}", topic_hash);
     }
