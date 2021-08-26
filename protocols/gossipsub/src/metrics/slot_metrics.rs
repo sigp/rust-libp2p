@@ -27,7 +27,7 @@ use libp2p_core::PeerId;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, IntoStaticStr};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct SlotMetrics {
     assign_sum: u32,
     messages_all: u32,
@@ -87,7 +87,6 @@ impl SlotMetricType {
 }
 
 impl SlotMetrics {
-    #[inline]
     fn get_message_metric(&self, message_metric: SlotMessageMetric) -> u32 {
         match message_metric {
             SlotMessageMetric::MessagesAll => self.messages_all,
@@ -98,7 +97,6 @@ impl SlotMetrics {
         }
     }
 
-    #[inline]
     fn increment_message_metric(&mut self, message_metric: SlotMessageMetric) {
         match message_metric {
             SlotMessageMetric::MessagesAll => self.messages_all.add_assign(1),
@@ -109,7 +107,6 @@ impl SlotMetrics {
         };
     }
 
-    #[inline]
     fn get_churn_metric(&self, churn_reason: SlotChurnMetric) -> u32 {
         match churn_reason {
             SlotChurnMetric::ChurnDisconnected => self.churn_disconnected,
@@ -339,7 +336,7 @@ impl MeshSlotData {
 
     /// This function verifies that the MeshSlotData is synchronized perfectly with the mesh.
     /// It's useful for debugging.
-    #[allow(dead_code)]
+    #[cfg(debug_assertions)]
     pub fn validate_mesh_slots(&self, mesh: &BTreeSet<PeerId>) -> Result<(), String> {
         let mut result = true;
         let mut errors = String::new();
@@ -386,7 +383,7 @@ impl MeshSlotData {
         }
     }
 
-    pub fn slot_iter(&self) -> impl Iterator<Item = &SlotMetrics> {
-        self.metrics_vec.iter()
+    pub fn slot_metrics(&self) -> Vec<SlotMetrics> {
+        self.metrics_vec.clone()
     }
 }
