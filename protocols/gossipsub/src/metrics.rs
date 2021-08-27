@@ -28,7 +28,7 @@ use libp2p_core::PeerId;
 use log::warn;
 use std::collections::HashMap;
 
-use self::slot_metrics::{MeshSlotData, SlotChurnMetric, SlotMetrics};
+use self::slot_metrics::{MeshSlotData, SlotChurnMetric, SlotMessageMetric, SlotMetrics};
 
 /// A collection of metrics used throughout the gossipsub behaviour.
 pub struct InternalMetrics {
@@ -59,6 +59,7 @@ impl Default for InternalMetrics {
             broken_promises: 0,
             iwant_requests: 0,
             memcache_misses: 0,
+            messages_received_on_invalid_topic: 0,
             duplicates_filtered: HashMap::new(),
         }
     }
@@ -96,7 +97,20 @@ impl InternalMetrics {
         }
     }
 
-    /// Assign slots to peers.
+    /// Increment a MessageMetric in the mesh_slot_data for peer in topic.
+    pub fn increment_message_metric(
+        &mut self,
+        topic: &TopicHash,
+        peer: &PeerId,
+        message_metric: SlotMessageMetric,
+    ) {
+        self.mesh_slot_data
+            .entry(topic.clone())
+            .or_insert_with(|| MeshSlotData::new(topic.clone()))
+            .increment_message_metric(peer, message_metric);
+    }
+
+    /// Assign slots in topic to peers.
     pub fn assign_slots_to_peers<U>(&mut self, topic: &TopicHash, peer_list: U)
     where
         U: Iterator<Item = PeerId>,
@@ -105,5 +119,13 @@ impl InternalMetrics {
             .entry(topic.clone())
             .or_insert_with(|| MeshSlotData::new(topic.clone()))
             .assign_slots_to_peers(peer_list);
+    }
+
+    /// Assigns a slot in topic to the peer if the peer doesn't already have one.
+    pub fn assign_slot_if_unassigned(&mut self, topic: &TopicHash, peer: &PeerId) {
+        self.mesh_slot_data
+            .entry(topic.clone())
+            .or_insert_with(|| MeshSlotData::new(topic.clone()))
+            .assign_slot_if_unassigned(*peer);
     }
 }
