@@ -383,7 +383,7 @@ impl MeshSlotData {
         }
     }
 
-    pub fn slot_metrics(&self) -> Vec<SlotMetrics> {
-        self.metrics_vec.clone()
+    pub fn slot_iter(&self) -> impl Iterator<Item = &SlotMetrics> {
+        self.metrics_vec.iter()
     }
 }

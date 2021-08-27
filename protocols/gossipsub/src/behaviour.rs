@@ -71,10 +71,8 @@ mod tests;
 #[cfg(feature = "metrics")]
 use crate::metrics::{
     slot_metrics::{MeshSlotData, SlotChurnMetric, SlotMessageMetric},
-    METRICS,
+    InternalMetrics,
 };
-#[cfg(feature = "metrics")]
-use std::sync::atomic::Ordering;
 
 /// Determines if published messages should be signed or not.
 ///
@@ -218,6 +216,10 @@ pub struct Gossipsub<
     D: DataTransform = IdentityTransform,
     F: TopicSubscriptionFilter = AllowAllSubscriptionFilter,
 > {
+    /// If metrics are enabled, keep track of a set of internal metrics relating to gossipsub.
+    #[cfg(feature = "metrics")]
+    metrics: InternalMetrics,
+
     /// Configuration providing gossipsub performance parameters.
     config: GossipsubConfig,
 
@@ -394,6 +396,8 @@ where
         // Set up message publishing parameters.
 
         Ok(Gossipsub {
+            #[cfg(feature = "metrics")]
+            metrics: InternalMetrics::default(),
             events: VecDeque::new(),
             control_pool: HashMap::new(),
             publish_config: privacy.into(),
@@ -480,8 +484,8 @@ where
 
     // If metrics are enabled, obtain a static reference to them.
     #[cfg(feature = "metrics")]
-    pub fn metrics() -> &'static METRICS {
-        &METRICS
+    pub fn metrics(&self) -> &InternalMetrics {
+        &self.metrics
     }
 
     /// Subscribe to a topic.
@@ -754,7 +758,9 @@ where
                         );
 
                         #[cfg(feature = "metrics")]
-                        METRICS.memcache_misses.fetch_add(1, Ordering::Relaxed);
+                        {
+                            self.metrics.memcache_misses += 1;
+                        }
 
                         return Ok(false);
                     }
@@ -763,9 +769,8 @@ where
 
                 // Metrics: Report validation result
                 #[cfg(feature = "metrics")]
-                METRICS
+                self.metrics
                     .mesh_slot_data
-                    .write()
                     .entry(raw_message.topic.clone())
                     .or_insert_with(|| MeshSlotData::new(raw_message.topic.clone()))
                     .increment_message_metric(
@@ -779,9 +784,8 @@ where
                 #[cfg(feature = "metrics")]
                 if let Some(raw_message) = self.mcache.get(msg_id) {
                     // Increment metrics
-                    METRICS
+                    self.metrics
                         .mesh_slot_data
-                        .write()
                         .entry(raw_message.topic.clone())
                         .or_insert_with(|| MeshSlotData::new(raw_message.topic.clone()))
                         .increment_message_metric(
@@ -796,9 +800,8 @@ where
                 #[cfg(feature = "metrics")]
                 if let Some(raw_message) = self.mcache.get(msg_id) {
                     // Increment metrics
-                    METRICS
+                    self.metrics
                         .mesh_slot_data
-                        .write()
                         .entry(raw_message.topic.clone())
                         .or_insert_with(|| MeshSlotData::new(raw_message.topic.clone()))
                         .increment_message_metric(
@@ -825,7 +828,9 @@ where
             warn!("Rejected message not in cache. Message Id: {}", msg_id);
 
             #[cfg(feature = "metrics")]
-            METRICS.memcache_misses.fetch_add(1, Ordering::Relaxed);
+            {
+                self.metrics.memcache_misses += 1;
+            }
 
             Ok(false)
         }
@@ -924,7 +929,7 @@ where
     /// mesh and the mesh_slot_data. It's useful for debugging.
     #[cfg(all(feature = "metrics", debug_assertions))]
     fn validate_mesh_slots_for_topic(&self, topic: &TopicHash) -> Result<(), String> {
-        match METRICS.mesh_slot_data.read().get(topic) {
+        match self.metrics.mesh_slot_data.get(topic) {
             Some(slot_data) => match self.mesh.get(topic) {
                 Some(mesh_peers) => slot_data.validate_mesh_slots(mesh_peers),
                 None => Err(format!("metrics_event[{}] no mesh_peers for topic", topic)),
@@ -1009,9 +1014,8 @@ where
         }
 
         #[cfg(feature = "metrics")]
-        METRICS
+        self.metrics
             .mesh_slot_data
-            .write()
             .entry(topic_hash.clone())
             .or_insert_with(|| MeshSlotData::new(topic_hash.clone()))
             .assign_slots_to_peers(added_peers.iter().cloned());
@@ -1041,8 +1045,7 @@ where
             );
         }
 
-        #[cfg(debug_assertions)]
-        #[cfg(feature = "metrics")]
+        #[cfg(all(feature = "metrics", debug_assertions))]
         {
             let validation_result = self.validate_mesh_slots_for_topic(topic_hash);
             debug_assert!(
@@ -1136,7 +1139,7 @@ where
             }
 
             #[cfg(feature = "metrics")]
-            if let Some(slot_data) = METRICS.mesh_slot_data.write().get_mut(topic_hash) {
+            if let Some(slot_data) = self.metrics.mesh_slot_data.get_mut(topic_hash) {
                 slot_data.churn_all_slots(SlotChurnMetric::ChurnLeave);
             }
         }
@@ -1276,9 +1279,9 @@ where
 
             // Metrics: Add IWANT requests
             #[cfg(feature = "metrics")]
-            METRICS
-                .iwant_requests
-                .fetch_add(message_ids.len(), Ordering::Relaxed);
+            {
+                self.metrics.iwant_requests += message_ids.len();
+            }
 
             Self::control_pool_add(
                 &mut self.control_pool,
@@ -1443,9 +1446,8 @@ where
                     peers.insert(*peer_id);
 
                     #[cfg(feature = "metrics")]
-                    METRICS
+                    self.metrics
                         .mesh_slot_data
-                        .write()
                         .entry(topic_hash.clone())
                         .or_insert_with(|| MeshSlotData::new(topic_hash.clone()))
                         .assign_slot_if_unassigned(*peer_id);
@@ -1561,8 +1563,6 @@ where
         let (below_threshold, score) =
             self.score_below_threshold(peer_id, |pst| pst.accept_px_threshold);
         for (topic_hash, px, backoff) in prune_data {
-            self.remove_peer_from_mesh(peer_id, &topic_hash, backoff, true);
-
             #[cfg(feature = "metrics")]
             // Increment prune metrics if in the mesh
             if self
@@ -1571,11 +1571,14 @@ where
                 .map(|peers| peers.contains(peer_id))
                 .unwrap_or(false)
             {
-                METRICS.churn_slot(&topic_hash, peer_id, SlotChurnMetric::ChurnPrune);
+                self.metrics
+                    .churn_slot(&topic_hash, peer_id, SlotChurnMetric::ChurnPrune);
             }
 
+            self.remove_peer_from_mesh(peer_id, &topic_hash, backoff, true);
+
             if self.mesh.contains_key(&topic_hash) {
-                //connect to px peers
+                // connect to px peers
                 if !px.is_empty() {
                     // we ignore PX from peers with insufficient score
                     if below_threshold {
@@ -1732,9 +1735,8 @@ where
         // ignore it.
         #[cfg(feature = "metrics")]
         if self.mesh.contains_key(&raw_message.topic) {
-            METRICS
+            self.metrics
                 .mesh_slot_data
-                .write()
                 .entry(raw_message.topic.clone())
                 .or_insert_with(|| MeshSlotData::new(raw_message.topic.clone()))
                 .increment_message_metric(propagation_source, SlotMessageMetric::MessagesAll);
@@ -1756,9 +1758,9 @@ where
                     #[cfg(feature = "metrics")]
                     if self.mesh.contains_key(&raw_message.topic) {
                         // NOTE: Allow overflowing of a usize
-                        *METRICS
+                        *self
+                            .metrics
                             .duplicates_filtered
-                            .write()
                             .entry(raw_message.topic)
                             .or_insert_with(|| 0) += 1
                     }
@@ -1809,9 +1811,9 @@ where
             #[cfg(feature = "metrics")]
             if self.mesh.contains_key(&raw_message.topic) {
                 // NOTE: Allow overflowing of a usize here
-                *METRICS
+                *self
+                    .metrics
                     .duplicates_filtered
-                    .write()
                     .entry(raw_message.topic)
                     .or_insert_with(|| 0) += 1;
             }
@@ -1825,9 +1827,8 @@ where
         // Increment the first message topic, if its in our mesh.
         #[cfg(feature = "metrics")]
         if self.mesh.contains_key(&raw_message.topic) {
-            METRICS
+            self.metrics
                 .mesh_slot_data
-                .write()
                 .entry(raw_message.topic.clone())
                 .or_insert_with(|| MeshSlotData::new(raw_message.topic.clone()))
                 .increment_message_metric(propagation_source, SlotMessageMetric::MessagesFirst);
@@ -2038,8 +2039,6 @@ where
 
         // remove unsubscribed peers from the mesh if it exists
         for (peer_id, topic_hash) in unsubscribed_peers {
-            self.remove_peer_from_mesh(&peer_id, &topic_hash, None, false);
-
             #[cfg(feature = "metrics")]
             // Increment prune metrics if in the mesh
             if self
@@ -2048,8 +2047,11 @@ where
                 .map(|peers| peers.contains(&peer_id))
                 .unwrap_or(false)
             {
-                METRICS.churn_slot(&topic_hash, &peer_id, SlotChurnMetric::ChurnUnsubscribed);
+                self.metrics
+                    .churn_slot(&topic_hash, &peer_id, SlotChurnMetric::ChurnUnsubscribed);
             }
+
+            self.remove_peer_from_mesh(&peer_id, &topic_hash, None, false);
         }
 
         // Potentially inform the handler if we have added this peer to a mesh for the first time.
@@ -2067,9 +2069,8 @@ where
 
         #[cfg(feature = "metrics")]
         for topic in &topics_to_graft {
-            METRICS
+            self.metrics
                 .mesh_slot_data
-                .write()
                 .entry(topic.clone())
                 .or_insert_with(|| MeshSlotData::new(topic.clone()))
                 .assign_slot_if_unassigned(*propagation_source);
@@ -2115,7 +2116,9 @@ where
 
                 // Metrics: Increment broken promises
                 #[cfg(feature = "metrics")]
-                METRICS.broken_promises.fetch_add(count, Ordering::Relaxed);
+                {
+                    self.metrics.broken_promises += 1;
+                }
             }
         }
     }
@@ -2194,7 +2197,8 @@ where
 
                 // Increment ChurnScore and remove peer from slot
                 #[cfg(feature = "metrics")]
-                METRICS.new_churn_slot(&topic_hash, &peer, SlotChurnMetric::ChurnScore);
+                self.metrics
+                    .churn_slot(&topic_hash, &peer, SlotChurnMetric::ChurnScore);
                 #[cfg(all(debug_assertions, feature = "metrics"))]
                 modified_topics.insert(topic_hash.clone());
             }
@@ -2226,16 +2230,19 @@ where
                     current_topic.push(topic_hash.clone());
                 }
                 // update the mesh
-                trace!("Updating mesh, adding to mesh: {:?}", peer_list);
+                if !peer_list.is_empty() {
+                    trace!("Updating mesh, adding to mesh: {:?}", peer_list);
 
-                // Metrics: Update mesh peers
-                #[cfg(feature = "metrics")]
-                METRICS.assign_slots_to_peers(topic_hash, peer_list.iter().cloned());
-                #[cfg(all(debug_assertions, feature = "metrics"))]
-                modified_topics.insert(topic_hash.clone());
+                    // Metrics: Update mesh peers
+                    #[cfg(feature = "metrics")]
+                    self.metrics
+                        .assign_slots_to_peers(topic_hash, peer_list.iter().cloned());
+                    #[cfg(all(debug_assertions, feature = "metrics"))]
+                    modified_topics.insert(topic_hash.clone());
 
-                // add the peers
-                peers.extend(peer_list);
+                    // add the peers
+                    peers.extend(peer_list);
+                }
             }
 
             // too many peers - remove some
@@ -2287,7 +2294,8 @@ where
                     }
                     // Metrics: increment ChurnExcess and vacate slot
                     #[cfg(feature = "metrics")]
-                    METRICS.new_churn_slot(topic_hash, &peer, SlotChurnMetric::ChurnExcess);
+                    self.metrics
+                        .churn_slot(topic_hash, &peer, SlotChurnMetric::ChurnExcess);
                     #[cfg(all(debug_assertions, feature = "metrics"))]
                     modified_topics.insert(topic_hash.clone());
 
@@ -2324,16 +2332,19 @@ where
                         let current_topic = to_graft.entry(*peer).or_insert_with(Vec::new);
                         current_topic.push(topic_hash.clone());
                     }
-                    // update the mesh
-                    trace!("Updating mesh, adding to mesh: {:?}", peer_list);
+                    if !peer_list.is_empty() {
+                        // update the mesh
+                        trace!("Updating mesh, adding to mesh: {:?}", peer_list);
 
-                    #[cfg(feature = "metrics")]
-                    METRICS.assign_slots_to_peers(topic_hash, peer_list.iter().cloned());
-                    #[cfg(all(debug_assertions, feature = "metrics"))]
-                    modified_topics.insert(topic_hash.clone());
+                        #[cfg(feature = "metrics")]
+                        self.metrics
+                            .assign_slots_to_peers(topic_hash, peer_list.iter().cloned());
+                        #[cfg(all(debug_assertions, feature = "metrics"))]
+                        modified_topics.insert(topic_hash.clone());
 
-                    // add the peers
-                    peers.extend(peer_list);
+                        // add the peers
+                        peers.extend(peer_list);
+                    }
                 }
             }
 
@@ -2387,20 +2398,24 @@ where
                             let current_topic = to_graft.entry(*peer).or_insert_with(Vec::new);
                             current_topic.push(topic_hash.clone());
                         }
-                        // update the mesh
-                        debug!(
-                            "Opportunistically graft in topic {} with peers {:?}",
-                            topic_hash, peer_list
-                        );
 
-                        // Metrics: Update mesh peers
-                        #[cfg(feature = "metrics")]
-                        METRICS.assign_slots_to_peers(topic_hash, peer_list.iter().cloned());
-                        #[cfg(all(debug_assertions, feature = "metrics"))]
-                        modified_topics.insert(topic_hash.clone());
+                        if !peer_list.is_empty() {
+                            // update the mesh
+                            debug!(
+                                "Opportunistically graft in topic {} with peers {:?}",
+                                topic_hash, peer_list
+                            );
 
-                        // add the peers
-                        peers.extend(peer_list);
+                            // Metrics: Update mesh peers
+                            #[cfg(feature = "metrics")]
+                            self.metrics
+                                .assign_slots_to_peers(topic_hash, peer_list.iter().cloned());
+                            #[cfg(all(debug_assertions, feature = "metrics"))]
+                            modified_topics.insert(topic_hash.clone());
+
+                            // add the peers
+                            peers.extend(peer_list);
+                        }
                     }
                 }
             }
@@ -2523,7 +2538,7 @@ where
         // shift the memcache
         self.mcache.shift();
 
-        #[cfg(all(debug_assertions, feature = "metrics"))]
+        #[cfg(all(feature = "metrics", debug_assertions))]
         for topic in modified_topics {
             let validation_result = self.validate_mesh_slots_for_topic(&topic);
             debug_assert!(
@@ -3135,7 +3150,8 @@ where
 
                         // increment churn_disconnected and vacate slot
                         #[cfg(feature = "metrics")]
-                        METRICS.churn_slot(topic, peer_id, SlotChurnMetric::ChurnDisconnected);
+                        self.metrics
+                            .churn_slot(topic, peer_id, SlotChurnMetric::ChurnDisconnected);
                     }
                 }
 

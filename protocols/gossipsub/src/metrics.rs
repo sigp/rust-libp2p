@@ -26,78 +26,78 @@ pub mod slot_metrics;
 use crate::topic::TopicHash;
 use libp2p_core::PeerId;
 use log::warn;
-use parking_lot::RwLock;
-use std::{
-    collections::HashMap,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::collections::HashMap;
 
 use self::slot_metrics::{MeshSlotData, SlotChurnMetric, SlotMetrics};
-
-lazy_static! {
-    pub static ref METRICS: InternalMetrics = InternalMetrics::default();
-}
 
 /// A collection of metrics used throughout the gossipsub behaviour.
 pub struct InternalMetrics {
     /// Current metrics for all known mesh data. See [`MeshSlotData`] for further information.
-    pub mesh_slot_data: RwLock<HashMap<TopicHash, MeshSlotData>>,
+    pub mesh_slot_data: HashMap<TopicHash, MeshSlotData>,
     /// The number of broken promises (this metric is indicative of nodes with invalid message-ids)
-    pub broken_promises: AtomicUsize,
+    pub broken_promises: usize,
     /// The number of messages requested via IWANT (this metric indicates the mesh isn't performing
     /// as optimally as we would like, we have had to request for extra messages via gossip)
-    pub iwant_requests: AtomicUsize,
+    pub iwant_requests: usize,
     /// When the user validates a message, it tries to re propagate it to its mesh peers. If the
     /// message expires from the memcache before it can be validated, we count this a cache miss
     /// and it is an indicator that the memcache size should be increased.
-    pub memcache_misses: AtomicUsize,
+    pub memcache_misses: usize,
     /// The number of duplicate messages we are receiving and filtering. A large number could
     /// indicate a large amplification on a specific topic. Lowering the gossip_D parameter could
     /// help minimize duplicates.
-    pub duplicates_filtered: RwLock<HashMap<TopicHash, usize>>,
+    pub duplicates_filtered: HashMap<TopicHash, usize>,
 }
 
 impl Default for InternalMetrics {
     fn default() -> Self {
         InternalMetrics {
-            mesh_slot_data: RwLock::new(HashMap::new()),
-            broken_promises: AtomicUsize::new(0),
-            iwant_requests: AtomicUsize::new(0),
-            memcache_misses: AtomicUsize::new(0),
-            duplicates_filtered: RwLock::new(HashMap::new()),
+            mesh_slot_data: HashMap::new(),
+            broken_promises: 0,
+            iwant_requests: 0,
+            memcache_misses: 0,
+            duplicates_filtered: HashMap::new(),
         }
     }
 }
 
 impl InternalMetrics {
     /// Returns the slot metrics for a given topic
-    pub fn slot_metrics_for_topic(&self, topic: &TopicHash) -> Option<Vec<SlotMetrics>> {
-        Some(self.mesh_slot_data.read().get(topic)?.slot_metrics())
+    pub fn slot_metrics_for_topic(
+        &self,
+        topic: &TopicHash,
+    ) -> Option<impl Iterator<Item = &SlotMetrics>> {
+        Some(self.mesh_slot_data.get(topic)?.slot_iter())
     }
 
     /// Returns the current number of broken promises.
     pub fn broken_promises(&self) -> usize {
-        self.broken_promises.load(Ordering::Relaxed)
+        self.broken_promises
     }
 
     /// Returns the current number of IWANT requests.
     pub fn iwant_requests(&self) -> usize {
-        self.iwant_requests.load(Ordering::Relaxed)
+        self.iwant_requests
     }
 
     /// Returns the current number of memcache misses.
     pub fn memcache_misses(&self) -> usize {
-        self.memcache_misses.load(Ordering::Relaxed)
+        self.memcache_misses
     }
 
     /// Returns the current number of duplicates filtered, for a given topic.
-    pub fn duplicates_filtered(&self, topic: &TopicHash) -> Option<usize> {
-        Some(self.duplicates_filtered.read().get(topic)?.clone())
+    pub fn duplicates_filtered(&self, topic: &TopicHash) -> Option<&usize> {
+        self.duplicates_filtered.get(topic)
     }
 
     /// Churns a slot in the mesh_slot_data. This assumes the peer is in the mesh.
-    pub fn churn_slot(&self, topic: &TopicHash, peer_id: &PeerId, churn_reason: SlotChurnMetric) {
-        match self.mesh_slot_data.write().get_mut(topic) {
+    pub fn churn_slot(
+        &mut self,
+        topic: &TopicHash,
+        peer_id: &PeerId,
+        churn_reason: SlotChurnMetric,
+    ) {
+        match self.mesh_slot_data.get_mut(topic) {
             Some(slot_data) => slot_data.churn_slot(peer_id, churn_reason),
             None => {
                 warn!(
@@ -108,30 +108,14 @@ impl InternalMetrics {
         }
     }
 
-    /// Churn the slot for a peer, this may be a new topic so we add the topic if it does not
-    /// already exist.
-    pub fn new_churn_slot(
-        &self,
-        topic: &TopicHash,
-        peer_id: &PeerId,
-        churn_reason: SlotChurnMetric,
-    ) {
-        let mut write_lock = self.mesh_slot_data.write();
-        let slot_data = write_lock
-            .entry(topic.clone())
-            .or_insert_with(|| MeshSlotData::new(topic.clone()));
-        slot_data.churn_slot(peer_id, churn_reason);
-    }
-
     /// Assign slots to peers.
-    pub fn assign_slots_to_peers<U>(&self, topic: &TopicHash, peer_list: U)
+    pub fn assign_slots_to_peers<U>(&mut self, topic: &TopicHash, peer_list: U)
     where
         U: Iterator<Item = PeerId>,
     {
-        let mut write_lock = self.mesh_slot_data.write();
-        let slot_data = write_lock
+        self.mesh_slot_data
             .entry(topic.clone())
-            .or_insert_with(|| MeshSlotData::new(topic.clone()));
-        slot_data.assign_slots_to_peers(peer_list);
+            .or_insert_with(|| MeshSlotData::new(topic.clone()))
+            .assign_slots_to_peers(peer_list);
     }
 }

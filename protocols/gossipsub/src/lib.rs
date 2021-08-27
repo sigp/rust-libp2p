@@ -127,9 +127,6 @@ pub mod protocol;
 
 #[cfg(feature = "metrics")]
 pub mod metrics;
-#[cfg(feature = "metrics")]
-#[macro_use]
-extern crate lazy_static;
 
 mod backoff;
 mod behaviour;
