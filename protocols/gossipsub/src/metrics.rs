@@ -43,6 +43,9 @@ pub struct InternalMetrics {
     /// message expires from the memcache before it can be validated, we count this a cache miss
     /// and it is an indicator that the memcache size should be increased.
     pub memcache_misses: usize,
+    /// Keeps track of the number of messages we have received on topics we are not subscribed
+    /// to.
+    pub messages_received_on_invalid_topic: usize,
     /// The number of duplicate messages we are receiving and filtering. A large number could
     /// indicate a large amplification on a specific topic. Lowering the gossip_D parameter could
     /// help minimize duplicates.
@@ -68,21 +71,6 @@ impl InternalMetrics {
         topic: &TopicHash,
     ) -> Option<impl Iterator<Item = &SlotMetrics>> {
         Some(self.mesh_slot_data.get(topic)?.slot_iter())
-    }
-
-    /// Returns the current number of broken promises.
-    pub fn broken_promises(&self) -> usize {
-        self.broken_promises
-    }
-
-    /// Returns the current number of IWANT requests.
-    pub fn iwant_requests(&self) -> usize {
-        self.iwant_requests
-    }
-
-    /// Returns the current number of memcache misses.
-    pub fn memcache_misses(&self) -> usize {
-        self.memcache_misses
     }
 
     /// Returns the current number of duplicates filtered, for a given topic.

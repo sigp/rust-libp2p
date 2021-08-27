@@ -1859,6 +1859,11 @@ where
                 "Received message on a topic we are not subscribed to: {:?}",
                 message.topic
             );
+
+            #[cfg(feature = "metrics")]
+            {
+                self.metrics.messages_received_on_invalid_topic += 1;
+            }
             return;
         }
 
