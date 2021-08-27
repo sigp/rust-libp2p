@@ -59,6 +59,7 @@ impl Default for InternalMetrics {
             broken_promises: 0,
             iwant_requests: 0,
             memcache_misses: 0,
+            messages_received_on_invalid_topic: 0,
             duplicates_filtered: HashMap::new(),
         }
     }
@@ -87,12 +88,10 @@ impl InternalMetrics {
     ) {
         match self.mesh_slot_data.get_mut(topic) {
             Some(slot_data) => slot_data.churn_slot(peer_id, churn_reason),
-            None => {
-                warn!(
+            None => warn!(
                 "metrics_event[{}]: [slot --] increment {} peer {} FAILURE [retrieving slot_data]",
                 topic, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), peer_id,
             )
-            }
         }
     }
 

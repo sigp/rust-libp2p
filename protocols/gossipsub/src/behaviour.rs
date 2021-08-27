@@ -482,7 +482,7 @@ where
             .map(|(score, ..)| score.score(peer_id))
     }
 
-    // If metrics are enabled, obtain a static reference to them.
+    // If metrics are enabled, obtain a shared reference to them.
     #[cfg(feature = "metrics")]
     pub fn metrics(&self) -> &InternalMetrics {
         &self.metrics
@@ -1514,6 +1514,8 @@ where
         topic_hash: &TopicHash,
         backoff: Option<u64>,
         always_update_backoff: bool,
+        #[cfg(feature = "metrics")]
+        churn_reason: SlotChurnMetric,
     ) {
         let mut update_backoff = always_update_backoff;
         if let Some(peers) = self.mesh.get_mut(topic_hash) {
@@ -1540,6 +1542,8 @@ where
                     &mut self.events,
                     &self.connected_peers,
                 );
+                #[cfg(feature = "metrics")]
+                self.metrics.churn_slot(topic_hash, peer_id, churn_reason);
             }
         }
         if update_backoff {
@@ -1563,19 +1567,14 @@ where
         let (below_threshold, score) =
             self.score_below_threshold(peer_id, |pst| pst.accept_px_threshold);
         for (topic_hash, px, backoff) in prune_data {
-            #[cfg(feature = "metrics")]
-            // Increment prune metrics if in the mesh
-            if self
-                .mesh
-                .get(&topic_hash)
-                .map(|peers| peers.contains(peer_id))
-                .unwrap_or(false)
-            {
-                self.metrics
-                    .churn_slot(&topic_hash, peer_id, SlotChurnMetric::ChurnPrune);
-            }
-
-            self.remove_peer_from_mesh(peer_id, &topic_hash, backoff, true);
+            self.remove_peer_from_mesh(
+                peer_id,
+                &topic_hash,
+                backoff,
+                true,
+                #[cfg(feature = "metrics")]
+                SlotChurnMetric::ChurnPrune,
+            );
 
             if self.mesh.contains_key(&topic_hash) {
                 // connect to px peers
@@ -2044,19 +2043,14 @@ where
 
         // remove unsubscribed peers from the mesh if it exists
         for (peer_id, topic_hash) in unsubscribed_peers {
-            #[cfg(feature = "metrics")]
-            // Increment prune metrics if in the mesh
-            if self
-                .mesh
-                .get(&topic_hash)
-                .map(|peers| peers.contains(&peer_id))
-                .unwrap_or(false)
-            {
-                self.metrics
-                    .churn_slot(&topic_hash, &peer_id, SlotChurnMetric::ChurnUnsubscribed);
-            }
-
-            self.remove_peer_from_mesh(&peer_id, &topic_hash, None, false);
+            self.remove_peer_from_mesh(
+                &peer_id,
+                &topic_hash,
+                None,
+                false,
+                #[cfg(feature = "metrics")]
+                SlotChurnMetric::ChurnUnsubscribed,
+            );
         }
 
         // Potentially inform the handler if we have added this peer to a mesh for the first time.
