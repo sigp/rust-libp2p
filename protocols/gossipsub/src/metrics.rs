@@ -28,7 +28,7 @@ use libp2p_core::PeerId;
 use log::warn;
 use std::collections::HashMap;
 
-use self::slot_metrics::{MeshSlotData, SlotChurnMetric, SlotMessageMetric, SlotMetrics};
+use self::slot_metrics::{MeshSlotData, SlotChurnMetric, SlotMessageMetric, SlotMetricCounts};
 
 /// A collection of metrics used throughout the gossipsub behaviour.
 pub struct InternalMetrics {
@@ -70,7 +70,7 @@ impl InternalMetrics {
     pub fn slot_metrics_for_topic(
         &self,
         topic: &TopicHash,
-    ) -> Option<impl Iterator<Item = &SlotMetrics>> {
+    ) -> Option<impl Iterator<Item = &SlotMetricCounts>> {
         Some(self.mesh_slot_data.get(topic)?.slot_iter())
     }
 
