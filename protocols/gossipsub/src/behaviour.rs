@@ -765,12 +765,15 @@ where
                         return Ok(false);
                     }
                 };
-                self.forward_msg(msg_id, raw_message.clone(), Some(propagation_source))?;
+                #[cfg(feature = "metrics")]
+                let topic = raw_message.topic.clone();
+
+                self.forward_msg(msg_id, raw_message, Some(propagation_source))?;
 
                 // Metrics: Report validation result
                 #[cfg(feature = "metrics")]
                 self.metrics.increment_message_metric(
-                    &raw_message.topic,
+                    &topic,
                     propagation_source,
                     SlotMessageMetric::MessagesValidated,
                 );
