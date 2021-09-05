@@ -924,11 +924,14 @@ where
     #[cfg(all(feature = "metrics", debug_assertions))]
     fn validate_mesh_slots_for_topic(&self, topic: &TopicHash) -> Result<(), String> {
         match self.metrics.topic_metrics.get(topic) {
-            Some(slot_data) => match self.mesh.get(topic) {
-                Some(mesh_peers) => slot_data.validate_mesh_slots(mesh_peers),
+            Some(topic_metrics) => match self.mesh.get(topic) {
+                Some(mesh_peers) => topic_metrics.validate_mesh_slots(mesh_peers),
                 None => Err(format!("metrics_event[{}] no mesh_peers for topic", topic)),
             },
-            None => Err(format!("metrics_event[{}]: no slot_data for topic", topic)),
+            None => Err(format!(
+                "metrics_event[{}]: no topic_metrics for topic",
+                topic
+            )),
         }
     }
 
@@ -1130,8 +1133,8 @@ where
             }
 
             #[cfg(feature = "metrics")]
-            if let Some(slot_data) = self.metrics.topic_metrics.get_mut(topic_hash) {
-                slot_data.churn_all_slots(SlotChurnMetric::ChurnLeave);
+            if let Some(topic_metrics) = self.metrics.topic_metrics.get_mut(topic_hash) {
+                topic_metrics.churn_all_slots(SlotChurnMetric::ChurnLeave);
             }
         }
         debug!("Completed LEAVE for topic: {:?}", topic_hash);
@@ -2156,7 +2159,7 @@ where
             let topic_peers = &self.topic_peers;
             let outbound_peers = &self.outbound_peers;
             #[cfg(feature = "metrics")]
-            let slot_data = self
+            let topic_metrics = self
                 .metrics
                 .topic_metrics
                 .entry(topic_hash.clone())
@@ -2192,7 +2195,7 @@ where
 
                 // Increment ChurnScore and remove peer from slot
                 #[cfg(feature = "metrics")]
-                slot_data.churn_slot(&peer, SlotChurnMetric::ChurnScore);
+                topic_metrics.churn_slot(&peer, SlotChurnMetric::ChurnScore);
                 #[cfg(all(debug_assertions, feature = "metrics"))]
                 modified_topics.insert(topic_hash.clone());
             }
@@ -2229,7 +2232,7 @@ where
 
                     // Metrics: Update mesh peers
                     #[cfg(feature = "metrics")]
-                    slot_data.assign_slots_to_peers(peer_list.iter().cloned());
+                    topic_metrics.assign_slots_to_peers(peer_list.iter().cloned());
                     #[cfg(all(debug_assertions, feature = "metrics"))]
                     modified_topics.insert(topic_hash.clone());
 
@@ -2287,7 +2290,7 @@ where
                     }
                     // Metrics: increment ChurnExcess and vacate slot
                     #[cfg(feature = "metrics")]
-                    slot_data.churn_slot(&peer, SlotChurnMetric::ChurnExcess);
+                    topic_metrics.churn_slot(&peer, SlotChurnMetric::ChurnExcess);
                     #[cfg(all(debug_assertions, feature = "metrics"))]
                     modified_topics.insert(topic_hash.clone());
 
@@ -2329,7 +2332,7 @@ where
                         trace!("Updating mesh, adding to mesh: {:?}", peer_list);
 
                         #[cfg(feature = "metrics")]
-                        slot_data.assign_slots_to_peers(peer_list.iter().cloned());
+                        topic_metrics.assign_slots_to_peers(peer_list.iter().cloned());
                         #[cfg(all(debug_assertions, feature = "metrics"))]
                         modified_topics.insert(topic_hash.clone());
 
@@ -2399,7 +2402,7 @@ where
 
                             // Metrics: Update mesh peers
                             #[cfg(feature = "metrics")]
-                            slot_data.assign_slots_to_peers(peer_list.iter().cloned());
+                            topic_metrics.assign_slots_to_peers(peer_list.iter().cloned());
                             #[cfg(all(debug_assertions, feature = "metrics"))]
                             modified_topics.insert(topic_hash.clone());
 
