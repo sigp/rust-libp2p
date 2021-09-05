@@ -70,7 +70,7 @@ mod tests;
 
 #[cfg(feature = "metrics")]
 use crate::metrics::{
-    slot_metrics::{MeshSlotData, SlotChurnMetric, SlotMessageMetric},
+    topic_metrics::{SlotChurnMetric, SlotMessageMetric, TopicMetrics},
     InternalMetrics,
 };
 
@@ -917,10 +917,10 @@ where
     }
 
     /// This is just a utility function to verify everything is in order between the
-    /// mesh and the mesh_slot_data. It's useful for debugging.
+    /// mesh and the topic_metrics. It's useful for debugging.
     #[cfg(all(feature = "metrics", debug_assertions))]
     fn validate_mesh_slots_for_topic(&self, topic: &TopicHash) -> Result<(), String> {
-        match self.metrics.mesh_slot_data.get(topic) {
+        match self.metrics.topic_metrics.get(topic) {
             Some(slot_data) => match self.mesh.get(topic) {
                 Some(mesh_peers) => slot_data.validate_mesh_slots(mesh_peers),
                 None => Err(format!("metrics_event[{}] no mesh_peers for topic", topic)),
@@ -1127,7 +1127,7 @@ where
             }
 
             #[cfg(feature = "metrics")]
-            if let Some(slot_data) = self.metrics.mesh_slot_data.get_mut(topic_hash) {
+            if let Some(slot_data) = self.metrics.topic_metrics.get_mut(topic_hash) {
                 slot_data.churn_all_slots(SlotChurnMetric::ChurnLeave);
             }
         }
@@ -1209,7 +1209,7 @@ where
         debug!("Handling IHAVE for peer: {:?}", peer_id);
 
         // use a hashset to avoid duplicates efficiently
-        let mut iwant_ids = HashSet::new();
+        let mut iwant_ids = HashMap::new();
 
         for (topic, ids) in ihave_msgs {
             // only process the message if we are subscribed
@@ -1224,7 +1224,7 @@ where
             for id in ids {
                 if !self.duplicate_cache.contains(&id) {
                     // have not seen this message, request it
-                    iwant_ids.insert(id);
+                    iwant_ids.insert(id, topic.clone());
                 }
             }
         }
@@ -1245,7 +1245,7 @@ where
             );
 
             //ask in random order
-            let mut iwant_ids_vec: Vec<_> = iwant_ids.iter().collect();
+            let mut iwant_ids_vec: Vec<_> = iwant_ids.keys().collect();
             let mut rng = thread_rng();
             iwant_ids_vec.partial_shuffle(&mut rng, iask as usize);
 
@@ -1268,7 +1268,15 @@ where
             // Metrics: Add IWANT requests
             #[cfg(feature = "metrics")]
             {
-                self.metrics.iwant_requests += message_ids.len();
+                for id in &message_ids {
+                    if let Some(topic) = iwant_ids.get(id) {
+                        self.metrics
+                            .topic_metrics
+                            .entry(topic.clone())
+                            .or_insert_with(|| TopicMetrics::new(topic.clone()))
+                            .iwant_requests += 1;
+                    }
+                }
             }
 
             Self::control_pool_add(
@@ -1739,12 +1747,11 @@ where
                     // Metrics: Report the duplicate message, for mesh topics
                     #[cfg(feature = "metrics")]
                     if self.mesh.contains_key(&raw_message.topic) {
-                        // NOTE: Allow overflowing of a usize
-                        *self
-                            .metrics
-                            .duplicates_filtered
-                            .entry(raw_message.topic)
-                            .or_insert_with(|| 0) += 1
+                        self.metrics.increment_message_metric(
+                            &raw_message.topic,
+                            propagation_source,
+                            SlotMessageMetric::MessagesDuplicates,
+                        );
                     }
                 }
                 return;
@@ -1793,11 +1800,11 @@ where
             #[cfg(feature = "metrics")]
             if self.mesh.contains_key(&raw_message.topic) {
                 // NOTE: Allow overflowing of a usize here
-                *self
-                    .metrics
-                    .duplicates_filtered
-                    .entry(raw_message.topic)
-                    .or_insert_with(|| 0) += 1;
+                self.metrics.increment_message_metric(
+                    &message.topic,
+                    propagation_source,
+                    SlotMessageMetric::MessagesDuplicates,
+                );
             }
             return;
         }
@@ -2148,9 +2155,9 @@ where
             #[cfg(feature = "metrics")]
             let slot_data = self
                 .metrics
-                .mesh_slot_data
+                .topic_metrics
                 .entry(topic_hash.clone())
-                .or_insert_with(|| MeshSlotData::new(topic_hash.clone()));
+                .or_insert_with(|| TopicMetrics::new(topic_hash.clone()));
 
             // drop all peers with negative score, without PX
             // if there is at some point a stable retain method for BTreeSet the following can be

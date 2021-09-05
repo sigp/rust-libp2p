@@ -29,14 +29,18 @@ use strum_macros::{EnumIter, IntoStaticStr};
 
 #[derive(Default, Clone)]
 /// This struct stores all the metrics for a given mesh slot.
-/// NOTE: all the `message_*` counters refer to messages received from a peer assigned to
-/// this mesh slot on the topic this slot is associated with. See [`MeshSlotData`] for more
+/// NOTE: all the `message_*` counters refer to messages received from peers assigned to
+/// this mesh slot on the topic this slot is associated with. See [`TopicMetrics`] for more
 /// information.
 pub struct SlotMetricCounts {
     /// The number of times this slot has been assigned to a peer
     assign_sum: u32,
     /// The total number of messages received
     messages_all: u32,
+    /// The number of duplicate (already seen) messages
+    /// A large number across peers on this topic could indicate a large amplification on
+    /// the topic. Lowering the gossip_D parameter could help minimize duplicates.
+    messages_duplicates: u32,
     /// The number of never before seen messages
     messages_first: u32,
     /// The number of messages that returned [`MessageAcceptance::Ignore`] from validation
@@ -54,6 +58,8 @@ pub struct SlotMetricCounts {
     /// The number of times this slot was churned because the peer sent us a PRUNE message
     churn_prune: u32,
     /// The number of times this slot was churned because the peer score was too low
+    /// A large number could indicate the network is being attacked or the peer scoring
+    /// parameters are too restrictive and need to be adjusted.
     churn_score: u32,
     /// The total number of times this slot was churned for any reason
     churn_sum: u32,
@@ -68,6 +74,8 @@ pub struct SlotMetricCounts {
 pub enum SlotMessageMetric {
     /// Total messages received
     MessagesAll,
+    /// Number of duplicate (already seen) messages
+    MessagesDuplicates,
     /// Never before seen messages
     MessagesFirst,
     /// Messages that returned [`MessageAcceptance::Ignore`] from validation
@@ -127,6 +135,7 @@ impl SlotMetricCounts {
     fn get_message_metric(&self, message_metric: SlotMessageMetric) -> u32 {
         match message_metric {
             SlotMessageMetric::MessagesAll => self.messages_all,
+            SlotMessageMetric::MessagesDuplicates => self.messages_duplicates,
             SlotMessageMetric::MessagesFirst => self.messages_first,
             SlotMessageMetric::MessagesIgnored => self.messages_ignored,
             SlotMessageMetric::MessagesRejected => self.messages_rejected,
@@ -138,6 +147,7 @@ impl SlotMetricCounts {
     fn increment_message_metric(&mut self, message_metric: SlotMessageMetric) {
         match message_metric {
             SlotMessageMetric::MessagesAll => self.messages_all.add_assign(1),
+            SlotMessageMetric::MessagesDuplicates => self.messages_duplicates.add_assign(1),
             SlotMessageMetric::MessagesFirst => self.messages_first.add_assign(1),
             SlotMessageMetric::MessagesIgnored => self.messages_ignored.add_assign(1),
             SlotMessageMetric::MessagesRejected => self.messages_rejected.add_assign(1),
@@ -194,7 +204,7 @@ impl SlotMetricCounts {
         }
     }
 
-    /// returns a vector of pairs of all metric names and their corresponding counts
+    /// returns a vector of pairs of all slot metric names and their corresponding counts
     pub fn with_names(&self) -> Vec<(&'static str, u32)> {
         SlotMetric::iter()
             .map(|t| match t {
@@ -214,50 +224,55 @@ impl SlotMetricCounts {
 }
 
 pub type MeshSlot = usize;
-/// This structure stores all the metrics data for the state of the mesh for a single
-/// topic. This introduces the concept of a mesh slot. When a peer is added to the
-/// mesh for this topic, it is assigned to a mesh slot. All the metrics relating to
-/// messages received from that peer on this topic are then associated to that slot.
-/// See the [`SlotMetrics`] struct for more information. When a peer exits the mesh,
+/// This structure stores all metrics associated with a single topic.
+/// This introduces the concept of a mesh slot. When a peer is added to the mesh for
+/// this topic, it is assigned to a mesh slot. All the metrics relating to messages
+/// received from that peer on this topic are then associated to that slot. See the
+/// [`SlotMetricCounts`] struct for more information. When a peer exits the mesh,
 /// the slot it occupies is 'churned' and becomes vacant. Vacant slots are later
-/// re-assigned when a new peer enters the mesh.
-pub struct MeshSlotData {
-    /// The topic this MeshSlotData is associated with (useful for debugging)
+/// re-assigned when a new peer enters the mesh for this topic.
+pub struct TopicMetrics {
+    /// The topic this is associated with (useful for debugging)
     topic: TopicHash,
     /// Vector of SlotMetricCounts (indexed by MeshSlot)
-    metrics_vec: Vec<SlotMetricCounts>,
+    slot_metrics: Vec<SlotMetricCounts>,
     /// Map of PeerId to MeshSlot
-    slot_map: HashMap<PeerId, MeshSlot>,
+    peer_slots: HashMap<PeerId, MeshSlot>,
     /// Set of Vacant MeshSlots (due to peers leaving the mesh)
     vacant_slots: BTreeSet<MeshSlot>,
+    /// The number of messages requested via IWANT
+    /// A large value indicates the mesh isn't performing as optimally as we would
+    /// like and we have had to request extra messages via gossip
+    pub iwant_requests: u32,
 }
 
-impl MeshSlotData {
+impl TopicMetrics {
     pub fn new(topic: TopicHash) -> Self {
-        MeshSlotData {
+        TopicMetrics {
             topic,
             // the first element in the vector is for peers that aren't in the mesh
-            metrics_vec: vec![SlotMetricCounts::new()],
-            slot_map: HashMap::new(),
+            slot_metrics: vec![SlotMetricCounts::new()],
+            peer_slots: HashMap::new(),
             vacant_slots: BTreeSet::new(),
+            iwant_requests: 0,
         }
     }
 
     /// Increments the message metric for the specified peer
     pub fn increment_message_metric(&mut self, peer: &PeerId, message_metric: SlotMessageMetric) {
         let slot = self
-            .slot_map
+            .peer_slots
             .get(peer)
             .map(|s| *s)
             // peers that aren't in the mesh get slot 0
             .unwrap_or(0);
         match self
-            .metrics_vec
+            .slot_metrics
             .get_mut(slot)
         {
-            Some(slot_metrics) => slot_metrics.increment_message_metric(message_metric),
+            Some(metric_counts) => metric_counts.increment_message_metric(message_metric),
             None => error!(
-                "metrics_event[{}]: [slot {:02}] increment {} peer {} FAILURE [mesh_slots contains peer with slot not existing in mesh_slot_metrics!]",
+                "metrics_event[{}]: [slot {:02}] increment {} peer {} FAILURE [peer_slots contains peer with slot not existing in slot_metrics!]",
                 self.topic,
                 slot,
                 <SlotMessageMetric as Into<&'static str>>::into(message_metric),
@@ -266,16 +281,17 @@ impl MeshSlotData {
         };
     }
 
-    /// Assigns a slot to the peer if the peer doesn't already have one. Note that the lowest vacant slots are
-    /// assigned first. If all slots are occupied, a new slot will be allocated.
+    /// Assigns a slot to the peer if the peer doesn't already have one. Note that the
+    /// lowest vacant slots are assigned first. If all slots are occupied, a new slot
+    /// will be allocated.
     pub fn assign_slot_if_unassigned(&mut self, peer: PeerId) {
-        if let std::collections::hash_map::Entry::Vacant(entry) = self.slot_map.entry(peer) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.peer_slots.entry(peer) {
             match self.vacant_slots.iter().next() {
-                Some(slot_ref) => match self.metrics_vec.get_mut(*slot_ref) {
+                Some(slot_ref) => match self.slot_metrics.get_mut(*slot_ref) {
                     // vacant slot available, assign new peer to this slot
-                    Some(slot_metrics) => {
+                    Some(metric_counts) => {
                         let slot = *slot_ref;
-                        let assign_sum = slot_metrics.assign_slot(peer);
+                        let assign_sum = metric_counts.assign_slot(peer);
                         self.vacant_slots.remove(&slot);
                         entry.insert(slot);
                         debug!(
@@ -284,16 +300,16 @@ impl MeshSlotData {
                         );
                     },
                     None => error!(
-                        "metrics_event[{}]: [slot {:02}] assigning vacant slot to peer {} FAILURE [SlotMetrics doesn't exist in metrics vector!]",
+                        "metrics_event[{}]: [slot {:02}] assigning vacant slot to peer {} FAILURE [SlotMetricCounts doesn't exist in slot_metrics vector!]",
                             self.topic, slot_ref, peer
                     ),
                 },
                 None => {
                     // No vacant slots available, allocate a new slot
-                    let slot = self.metrics_vec.len();
-                    let mut slot_metrics = SlotMetricCounts::new();
-                    let assign_sum = slot_metrics.assign_slot(peer);
-                    self.metrics_vec.push(slot_metrics);
+                    let slot = self.slot_metrics.len();
+                    let mut metric_counts = SlotMetricCounts::new();
+                    let assign_sum = metric_counts.assign_slot(peer);
+                    self.slot_metrics.push(metric_counts);
                     entry.insert(slot);
                     debug!(
                         "metrics_event[{}]: [slot {:02}] assigning new slot to peer {} SUCCESS AssignSum[{}]",
@@ -316,23 +332,23 @@ impl MeshSlotData {
 
     /// Churns the slot occupied by peer.
     pub fn churn_slot(&mut self, peer: &PeerId, churn_reason: SlotChurnMetric) {
-        match self.slot_map.get(peer).cloned() {
-            Some(slot) => match self.metrics_vec.get_mut(slot) {
-                Some(slot_metrics) => {
+        match self.peer_slots.get(peer).cloned() {
+            Some(slot) => match self.slot_metrics.get_mut(slot) {
+                Some(metric_counts) => {
                     debug_assert!(!self.vacant_slots.contains(&slot),
                         "metrics_event[{}] [slot {:02}] increment {} peer {} FAILURE [vacant slots already contains this slot!]",
                             self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), peer
                     );
-                    let churn_sum = slot_metrics.churn_slot(churn_reason);
+                    let churn_sum = metric_counts.churn_slot(churn_reason);
                     self.vacant_slots.insert(slot);
-                    self.slot_map.remove(peer);
+                    self.peer_slots.remove(peer);
                     debug!(
                         "metrics_event[{}]: [slot {:02}] increment {} peer {} SUCCESS ChurnSum[{}]",
                             self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), peer, churn_sum,
                     );
                 },
                 None => warn!(
-                    "metrics_event[{}]: [slot {:02}] increment {} peer {} FAILURE [retrieving slot_metrics]",
+                    "metrics_event[{}]: [slot {:02}] increment {} peer {} FAILURE [retrieving metric_counts]",
                         self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), peer
                 ),
             },
@@ -344,76 +360,73 @@ impl MeshSlotData {
     }
 
     /// Churns all slots in this topic that aren't already vacant (while incrementing
-    /// churn_reason). Also clears the slot_map. This loop is faster than doing this individually
-    /// for each peer in the topic because it minimizes redundant lookups and only traverses
-    /// a vector.
+    /// churn_reason). Also clears the peer_slots. This loop is faster than calling
+    /// churn_slot() for each peer in the topic because it minimizes redundant lookups
+    /// and only traverses a vector.
     pub fn churn_all_slots(&mut self, churn_reason: SlotChurnMetric) {
-        for slot in (1..self.metrics_vec.len())
+        for slot in (1..self.slot_metrics.len())
             .filter(|s| !self.vacant_slots.contains(s))
             .collect::<Vec<_>>()
         {
-            match self.metrics_vec.get_mut(slot) {
-                Some(slot_metrics) => {
-                    let previous = slot_metrics.current_peer().as_ref().map(|p| **p);
-                    let churn_sum = slot_metrics.churn_slot(churn_reason);
-                    self.vacant_slots.insert(slot);
-                    match previous {
-                        Some(peer) => debug!(
-                            "metrics_event[{}]: [slot {:02}] increment {} peer {} SUCCESS ChurnSum[{}]",
-                                self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), peer, churn_sum,
-                        ),
-                        None => warn!(
-                            "metrics_event[{}]: [slot {:02}] increment {} WARNING [current_peer not assigned with non-vacant slot!] ChurnSum[{}]",
-                                self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), churn_sum,
-                        ),
-                    };
-                },
-                None => error!(
-                    "metrics_event[{}]: [slot {:02}] increment {} FAILURE [mesh_slots contains peer with slot not existing in mesh_slot_metrics!]",
-                    self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason),
-                ),
-            };
+            if let Some(metric_counts) = self.slot_metrics.get_mut(slot) {
+                let previous = metric_counts.current_peer().as_ref().map(|p| **p);
+                let churn_sum = metric_counts.churn_slot(churn_reason);
+                self.vacant_slots.insert(slot);
+                match previous {
+                    Some(peer) => debug!(
+                        "metrics_event[{}]: [slot {:02}] increment {} peer {} SUCCESS ChurnSum[{}]",
+                        self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), peer, churn_sum,
+                    ),
+                    None => warn!(
+                        "metrics_event[{}]: [slot {:02}] increment {} WARNING [current_peer not assigned with non-vacant slot!] ChurnSum[{}]",
+                        self.topic, slot, <SlotChurnMetric as Into<&'static str>>::into(churn_reason), churn_sum,
+                    ),
+                };
+            }
         }
-        self.slot_map.clear();
+        self.peer_slots.clear();
     }
 
-    /// This function verifies that the MeshSlotData is synchronized perfectly with the mesh.
+    /// This function verifies that the TopicMetrics is synchronized perfectly with the mesh.
     /// It's useful for debugging.
     #[cfg(debug_assertions)]
     pub fn validate_mesh_slots(&self, mesh: &BTreeSet<PeerId>) -> Result<(), String> {
         let mut result = true;
         let mut errors = String::new();
-        // No peers are in the slot_map that aren't in the mesh
+        // No peers are in the peer_slots that aren't in the mesh
         for (peer, slot) in self
-            .slot_map
+            .peer_slots
             .iter()
             .filter(|(peer, ..)| !mesh.contains(peer))
         {
             result = false;
             let message = format!(
-                "metrics_event[{}]: [slot {:02}] peer {} exists in slot_map but not in the mesh!\n",
+                "metrics_event[{}]: [slot {:02}] peer {} exists in peer_slots but not in the mesh!\n",
                 self.topic, slot, peer
             );
             errors.push_str(message.as_str());
             error!("{}", message);
         }
-        // No peers are in the mesh that aren't in the slot_map
-        for peer in mesh.iter().filter(|peer| !self.slot_map.contains_key(peer)) {
+        // No peers are in the mesh that aren't in the peer_slots
+        for peer in mesh
+            .iter()
+            .filter(|peer| !self.peer_slots.contains_key(peer))
+        {
             result = false;
             let message = format!(
-                "metrics_event[{}]: [slot --] peer {} exists in mesh but not in the slot_map!\n",
+                "metrics_event[{}]: [slot --] peer {} exists in mesh but not in the peer_slots!\n",
                 self.topic, peer
             );
             errors.push_str(message.as_str());
             error!("{}", message);
         }
 
-        // vacant_slots.len() + slot_map.len() == metrics_vec.len() + 1
-        if self.vacant_slots.len() + self.slot_map.len() + 1 != self.metrics_vec.len() {
+        // vacant_slots.len() + peer_slots.len() == slot_metrics.len() + 1
+        if self.vacant_slots.len() + self.peer_slots.len() + 1 != self.slot_metrics.len() {
             result = false;
             let message = format!(
-                "metrics_event[{}] vacant_slots.len()[{}] + slot_map.len()[{}] + 1 != metrics_vec.len()[{}]",
-                    self.topic, self.vacant_slots.len(), self.slot_map.len(), self.metrics_vec.len(),
+                "metrics_event[{}] vacant_slots.len()[{}] + peer_slots.len()[{}] + 1 != slot_metrics.len()[{}]",
+                    self.topic, self.vacant_slots.len(), self.peer_slots.len(), self.slot_metrics.len(),
             );
             errors.push_str(message.as_str());
             error!("{}", message);
@@ -426,7 +439,7 @@ impl MeshSlotData {
         }
     }
 
-    pub fn slot_iter(&self) -> impl Iterator<Item = &SlotMetricCounts> {
-        self.metrics_vec.iter()
+    pub fn slot_metrics_iter(&self) -> impl Iterator<Item = &SlotMetricCounts> {
+        self.slot_metrics.iter()
     }
 }
