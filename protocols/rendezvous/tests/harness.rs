@@ -29,9 +29,7 @@ use libp2p::core::upgrade::SelectUpgrade;
 use libp2p::core::{identity, Multiaddr, PeerId, Transport};
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{Keypair, NoiseConfig, X25519Spec};
-use libp2p::swarm::{
-    dial_opts::DialOpts, AddressScore, NetworkBehaviour, Swarm, SwarmBuilder, SwarmEvent,
-};
+use libp2p::swarm::{AddressScore, NetworkBehaviour, Swarm, SwarmBuilder, SwarmEvent};
 use libp2p::yamux::YamuxConfig;
 use std::fmt::Debug;
 use std::time::Duration;
@@ -142,7 +140,7 @@ pub trait SwarmExt {
     /// Establishes a connection to the given [`Swarm`], polling both of them until the connection is established.
     async fn block_on_connection<T>(&mut self, other: &mut Swarm<T>)
     where
-        T: NetworkBehaviour,
+        T: NetworkBehaviour + Send,
         <T as NetworkBehaviour>::OutEvent: Debug;
 
     /// Listens on a random memory address, polling the [`Swarm`] until the transport is ready to accept connections.
@@ -155,12 +153,12 @@ pub trait SwarmExt {
 #[async_trait]
 impl<B> SwarmExt for Swarm<B>
 where
-    B: NetworkBehaviour,
+    B: NetworkBehaviour + Send,
     <B as NetworkBehaviour>::OutEvent: Debug,
 {
     async fn block_on_connection<T>(&mut self, other: &mut Swarm<T>)
     where
-        T: NetworkBehaviour,
+        T: NetworkBehaviour + Send,
         <T as NetworkBehaviour>::OutEvent: Debug,
     {
         let addr_to_dial = other.external_addresses().next().unwrap().addr.clone();

@@ -19,10 +19,14 @@
 // DEALINGS IN THE SOFTWARE.
 
 use crate::PublicKey;
+use multiaddr::{Multiaddr, Protocol};
 use multihash::{Code, Error, Multihash, MultihashDigest};
 use rand::Rng;
 use std::{convert::TryFrom, fmt, str::FromStr};
 use thiserror::Error;
+
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 
 /// Public keys with byte-lengths smaller than `MAX_INLINE_KEY_LENGTH` will be
 /// automatically used as the peer id using an identity multihash.
@@ -83,6 +87,17 @@ impl PeerId {
             }
             _ => Err(multihash),
         }
+    }
+
+    /// Tries to extract a [`PeerId`] from the given [`Multiaddr`].
+    ///
+    /// In case the given [`Multiaddr`] ends with `/p2p/<peer-id>`, this function
+    /// will return the encapsulated [`PeerId`], otherwise it will return `None`.
+    pub fn try_from_multiaddr(address: &Multiaddr) -> Option<PeerId> {
+        address.iter().last().map_or(None, |p| match p {
+            Protocol::P2p(hash) => PeerId::from_multihash(hash).ok(),
+            _ => None,
+        })
     }
 
     /// Generates a random peer ID from a cryptographically secure PRNG.
@@ -164,6 +179,60 @@ impl From<PeerId> for Vec<u8> {
     }
 }
 
+#[cfg(feature = "serde")]
+impl Serialize for PeerId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: _serde::Serializer,
+    {
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&self.to_base58())
+        } else {
+            serializer.serialize_bytes(&self.to_bytes()[..])
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for PeerId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::*;
+
+        struct PeerIdVisitor;
+
+        impl<'de> Visitor<'de> for PeerIdVisitor {
+            type Value = PeerId;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "valid peer id")
+            }
+
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                PeerId::from_bytes(v).map_err(|_| Error::invalid_value(Unexpected::Bytes(v), &self))
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                PeerId::from_str(v).map_err(|_| Error::invalid_value(Unexpected::Str(v), &self))
+            }
+        }
+
+        if deserializer.is_human_readable() {
+            deserializer.deserialize_str(PeerIdVisitor)
+        } else {
+            deserializer.deserialize_bytes(PeerIdVisitor)
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ParseError {
     #[error("base-58 decode error: {0}")]
@@ -213,5 +282,31 @@ mod tests {
             let peer_id = PeerId::random();
             assert_eq!(peer_id, PeerId::from_bytes(&peer_id.to_bytes()).unwrap());
         }
+    }
+
+    #[test]
+    fn extract_peer_id_from_multi_address() {
+        let address =
+            format!("/memory/1234/p2p/12D3KooWGQmdpzHXCqLno4mMxWXKNFQHASBeF99gTm2JR8Vu5Bdc")
+                .parse()
+                .unwrap();
+
+        let peer_id = PeerId::try_from_multiaddr(&address).unwrap();
+
+        assert_eq!(
+            peer_id,
+            "12D3KooWGQmdpzHXCqLno4mMxWXKNFQHASBeF99gTm2JR8Vu5Bdc"
+                .parse()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn no_panic_on_extract_peer_id_from_multi_address_if_not_present() {
+        let address = format!("/memory/1234").parse().unwrap();
+
+        let maybe_empty = PeerId::try_from_multiaddr(&address);
+
+        assert!(maybe_empty.is_none());
     }
 }

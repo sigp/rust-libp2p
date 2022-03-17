@@ -33,7 +33,11 @@
 //!
 
 use futures::{future::Ready, prelude::*};
-use libp2p_core::{transport::ListenerEvent, transport::TransportError, Multiaddr, Transport};
+use libp2p_core::{
+    connection::Endpoint,
+    transport::{ListenerEvent, TransportError},
+    Multiaddr, Transport,
+};
 use parity_send_wrapper::SendWrapper;
 use std::{collections::VecDeque, error, fmt, io, mem, pin::Pin, task::Context, task::Poll};
 use wasm_bindgen::{prelude::*, JsCast};
@@ -61,7 +65,11 @@ pub mod ffi {
         /// If the multiaddress is not supported, you should return an instance of `Error` whose
         /// `name` property has been set to the string `"NotSupportedError"`.
         #[wasm_bindgen(method, catch)]
-        pub fn dial(this: &Transport, multiaddr: &str) -> Result<js_sys::Promise, JsValue>;
+        pub fn dial(
+            this: &Transport,
+            multiaddr: &str,
+            _role_override: bool,
+        ) -> Result<js_sys::Promise, JsValue>;
 
         /// Start listening on the given multiaddress.
         ///
@@ -148,6 +156,29 @@ impl ExtTransport {
             inner: SendWrapper::new(transport),
         }
     }
+    fn do_dial(
+        self,
+        addr: Multiaddr,
+        role_override: Endpoint,
+    ) -> Result<<Self as Transport>::Dial, TransportError<<Self as Transport>::Error>> {
+        let promise = self
+            .inner
+            .dial(
+                &addr.to_string(),
+                matches!(role_override, Endpoint::Listener),
+            )
+            .map_err(|err| {
+                if is_not_supported_error(&err) {
+                    TransportError::MultiaddrNotSupported(addr)
+                } else {
+                    TransportError::Other(JsErr::from(err))
+                }
+            })?;
+
+        Ok(Dial {
+            inner: SendWrapper::new(promise.into()),
+        })
+    }
 }
 
 impl fmt::Debug for ExtTransport {
@@ -187,18 +218,18 @@ impl Transport for ExtTransport {
         })
     }
 
-    fn dial(self, addr: Multiaddr) -> Result<Self::Dial, TransportError<Self::Error>> {
-        let promise = self.inner.dial(&addr.to_string()).map_err(|err| {
-            if is_not_supported_error(&err) {
-                TransportError::MultiaddrNotSupported(addr)
-            } else {
-                TransportError::Other(JsErr::from(err))
-            }
-        })?;
+    fn dial(self, addr: Multiaddr) -> Result<Self::Dial, TransportError<Self::Error>>
+    where
+        Self: Sized,
+    {
+        self.do_dial(addr, Endpoint::Dialer)
+    }
 
-        Ok(Dial {
-            inner: SendWrapper::new(promise.into()),
-        })
+    fn dial_as_listener(self, addr: Multiaddr) -> Result<Self::Dial, TransportError<Self::Error>>
+    where
+        Self: Sized,
+    {
+        self.do_dial(addr, Endpoint::Listener)
     }
 
     fn address_translation(&self, _server: &Multiaddr, _observed: &Multiaddr) -> Option<Multiaddr> {
@@ -280,39 +311,33 @@ impl Stream for Listen {
                 return Poll::Ready(None);
             };
 
-            for addr in event
-                .new_addrs()
-                .into_iter()
-                .flat_map(|e| e.to_vec().into_iter())
-            {
-                let addr = js_value_to_addr(&addr)?;
-                self.pending_events
-                    .push_back(ListenerEvent::NewAddress(addr));
+            if let Some(addrs) = event.new_addrs() {
+                for addr in addrs.into_iter() {
+                    let addr = js_value_to_addr(&addr)?;
+                    self.pending_events
+                        .push_back(ListenerEvent::NewAddress(addr));
+                }
             }
 
-            for upgrade in event
-                .new_connections()
-                .into_iter()
-                .flat_map(|e| e.to_vec().into_iter())
-            {
-                let upgrade: ffi::ConnectionEvent = upgrade.into();
-                self.pending_events.push_back(ListenerEvent::Upgrade {
-                    local_addr: upgrade.local_addr().parse()?,
-                    remote_addr: upgrade.observed_addr().parse()?,
-                    upgrade: futures::future::ok(Connection::new(upgrade.connection())),
-                });
+            if let Some(upgrades) = event.new_connections() {
+                for upgrade in upgrades.into_iter().cloned() {
+                    let upgrade: ffi::ConnectionEvent = upgrade.into();
+                    self.pending_events.push_back(ListenerEvent::Upgrade {
+                        local_addr: upgrade.local_addr().parse()?,
+                        remote_addr: upgrade.observed_addr().parse()?,
+                        upgrade: futures::future::ok(Connection::new(upgrade.connection())),
+                    });
+                }
             }
 
-            for addr in event
-                .expired_addrs()
-                .into_iter()
-                .flat_map(|e| e.to_vec().into_iter())
-            {
-                match js_value_to_addr(&addr) {
-                    Ok(addr) => self
-                        .pending_events
-                        .push_back(ListenerEvent::NewAddress(addr)),
-                    Err(err) => self.pending_events.push_back(ListenerEvent::Error(err)),
+            if let Some(addrs) = event.expired_addrs() {
+                for addr in addrs.into_iter() {
+                    match js_value_to_addr(&addr) {
+                        Ok(addr) => self
+                            .pending_events
+                            .push_back(ListenerEvent::NewAddress(addr)),
+                        Err(err) => self.pending_events.push_back(ListenerEvent::Error(err)),
+                    }
                 }
             }
         }

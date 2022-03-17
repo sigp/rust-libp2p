@@ -50,9 +50,9 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
     let net_behv_event_proc = quote! {::libp2p::swarm::NetworkBehaviourEventProcess};
     let either_ident = quote! {::libp2p::core::either::EitherOutput};
     let network_behaviour_action = quote! {::libp2p::swarm::NetworkBehaviourAction};
-    let into_protocols_handler = quote! {::libp2p::swarm::IntoProtocolsHandler};
-    let protocols_handler = quote! {::libp2p::swarm::ProtocolsHandler};
-    let into_proto_select_ident = quote! {::libp2p::swarm::IntoProtocolsHandlerSelect};
+    let into_protocols_handler = quote! {::libp2p::swarm::IntoConnectionHandler};
+    let protocols_handler = quote! {::libp2p::swarm::ConnectionHandler};
+    let into_proto_select_ident = quote! {::libp2p::swarm::IntoConnectionHandlerSelect};
     let peer_id = quote! {::libp2p::core::PeerId};
     let connection_id = quote! {::libp2p::core::connection::ConnectionId};
     let dial_errors = quote! {Option<&Vec<::libp2p::core::Multiaddr>>};
@@ -163,40 +163,6 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
             })
     };
 
-    // Build the list of statements to put in the body of `inject_connected()`.
-    let inject_connected_stmts = {
-        data_struct
-            .fields
-            .iter()
-            .enumerate()
-            .filter_map(move |(field_n, field)| {
-                if is_ignored(field) {
-                    return None;
-                }
-                Some(match field.ident {
-                    Some(ref i) => quote! { self.#i.inject_connected(peer_id); },
-                    None => quote! { self.#field_n.inject_connected(peer_id); },
-                })
-            })
-    };
-
-    // Build the list of statements to put in the body of `inject_disconnected()`.
-    let inject_disconnected_stmts = {
-        data_struct
-            .fields
-            .iter()
-            .enumerate()
-            .filter_map(move |(field_n, field)| {
-                if is_ignored(field) {
-                    return None;
-                }
-                Some(match field.ident {
-                    Some(ref i) => quote! { self.#i.inject_disconnected(peer_id); },
-                    None => quote! { self.#field_n.inject_disconnected(peer_id); },
-                })
-            })
-    };
-
     // Build the list of statements to put in the body of `inject_connection_established()`.
     let inject_connection_established_stmts = {
         data_struct.fields.iter().enumerate().filter_map(move |(field_n, field)| {
@@ -204,8 +170,8 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
                 return None;
             }
             Some(match field.ident {
-                Some(ref i) => quote!{ self.#i.inject_connection_established(peer_id, connection_id, endpoint, errors); },
-                None => quote!{ self.#field_n.inject_connection_established(peer_id, connection_id, endpoint, errors); },
+                Some(ref i) => quote!{ self.#i.inject_connection_established(peer_id, connection_id, endpoint, errors, other_established); },
+                None => quote!{ self.#field_n.inject_connection_established(peer_id, connection_id, endpoint, errors, other_established); },
             })
         })
     };
@@ -243,8 +209,8 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
                     }
                 };
                 let inject = match field.ident {
-                    Some(ref i) => quote!{ self.#i.inject_connection_closed(peer_id, connection_id, endpoint, handler) },
-                    None => quote!{ self.#enum_n.inject_connection_closed(peer_id, connection_id, endpoint, handler) },
+                    Some(ref i) => quote!{ self.#i.inject_connection_closed(peer_id, connection_id, endpoint, handler, remaining_established) },
+                    None => quote!{ self.#enum_n.inject_connection_closed(peer_id, connection_id, endpoint, handler, remaining_established) },
                 };
 
                 quote! {
@@ -465,7 +431,7 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
         })
     });
 
-    // The `ProtocolsHandler` associated type.
+    // The [`ConnectionHandler`] associated type.
     let protocols_handler_ty = {
         let mut ph_ty = None;
         for field in data_struct.fields.iter() {
@@ -473,7 +439,7 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
                 continue;
             }
             let ty = &field.ty;
-            let field_info = quote! { <#ty as #trait_to_impl>::ProtocolsHandler };
+            let field_info = quote! { <#ty as #trait_to_impl>::ConnectionHandler };
             match ph_ty {
                 Some(ev) => ph_ty = Some(quote! { #into_proto_select_ident<#ev, #field_info> }),
                 ref mut ev @ None => *ev = Some(field_info),
@@ -635,10 +601,10 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
         impl #impl_generics #trait_to_impl for #name #ty_generics
         #where_clause
         {
-            type ProtocolsHandler = #protocols_handler_ty;
+            type ConnectionHandler = #protocols_handler_ty;
             type OutEvent = #out_event;
 
-            fn new_handler(&mut self) -> Self::ProtocolsHandler {
+            fn new_handler(&mut self) -> Self::ConnectionHandler {
                 use #into_protocols_handler;
                 #new_handler
             }
@@ -649,15 +615,7 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
                 out
             }
 
-            fn inject_connected(&mut self, peer_id: &#peer_id) {
-                #(#inject_connected_stmts);*
-            }
-
-            fn inject_disconnected(&mut self, peer_id: &#peer_id) {
-                #(#inject_disconnected_stmts);*
-            }
-
-            fn inject_connection_established(&mut self, peer_id: &#peer_id, connection_id: &#connection_id, endpoint: &#connected_point, errors: #dial_errors) {
+            fn inject_connection_established(&mut self, peer_id: &#peer_id, connection_id: &#connection_id, endpoint: &#connected_point, errors: #dial_errors, other_established: usize) {
                 #(#inject_connection_established_stmts);*
             }
 
@@ -665,15 +623,15 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
                 #(#inject_address_change_stmts);*
             }
 
-            fn inject_connection_closed(&mut self, peer_id: &#peer_id, connection_id: &#connection_id, endpoint: &#connected_point, handlers: <Self::ProtocolsHandler as #into_protocols_handler>::Handler) {
+            fn inject_connection_closed(&mut self, peer_id: &#peer_id, connection_id: &#connection_id, endpoint: &#connected_point, handlers: <Self::ConnectionHandler as #into_protocols_handler>::Handler, remaining_established: usize) {
                 #(#inject_connection_closed_stmts);*
             }
 
-            fn inject_dial_failure(&mut self, peer_id: Option<#peer_id>, handlers: Self::ProtocolsHandler, error: &#dial_error) {
+            fn inject_dial_failure(&mut self, peer_id: Option<#peer_id>, handlers: Self::ConnectionHandler, error: &#dial_error) {
                 #(#inject_dial_failure_stmts);*
             }
 
-            fn inject_listen_failure(&mut self, local_addr: &#multiaddr, send_back_addr: &#multiaddr, handlers: Self::ProtocolsHandler) {
+            fn inject_listen_failure(&mut self, local_addr: &#multiaddr, send_back_addr: &#multiaddr, handlers: Self::ConnectionHandler) {
                 #(#inject_listen_failure_stmts);*
             }
 
@@ -709,17 +667,17 @@ fn build_struct(ast: &DeriveInput, data_struct: &DataStruct) -> TokenStream {
                 &mut self,
                 peer_id: #peer_id,
                 connection_id: #connection_id,
-                event: <<Self::ProtocolsHandler as #into_protocols_handler>::Handler as #protocols_handler>::OutEvent
+                event: <<Self::ConnectionHandler as #into_protocols_handler>::Handler as #protocols_handler>::OutEvent
             ) {
                 match event {
                     #(#inject_node_event_stmts),*
                 }
             }
 
-            fn poll(&mut self, cx: &mut std::task::Context, poll_params: &mut impl #poll_parameters) -> std::task::Poll<#network_behaviour_action<Self::OutEvent, Self::ProtocolsHandler>> {
+            fn poll(&mut self, cx: &mut std::task::Context, poll_params: &mut impl #poll_parameters) -> std::task::Poll<#network_behaviour_action<Self::OutEvent, Self::ConnectionHandler>> {
                 use libp2p::futures::prelude::*;
                 #(#poll_stmts)*
-                let f: std::task::Poll<#network_behaviour_action<Self::OutEvent, Self::ProtocolsHandler>> = #poll_method;
+                let f: std::task::Poll<#network_behaviour_action<Self::OutEvent, Self::ConnectionHandler>> = #poll_method;
                 f
             }
         }

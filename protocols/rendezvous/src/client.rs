@@ -22,11 +22,12 @@ use crate::codec::{Cookie, ErrorCode, Namespace, NewRegistration, Registration, 
 use crate::handler;
 use crate::handler::outbound;
 use crate::handler::outbound::OpenInfo;
-use crate::substream_handler::SubstreamProtocolsHandler;
+use crate::substream_handler::SubstreamConnectionHandler;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
+use instant::Duration;
 use libp2p_core::connection::ConnectionId;
 use libp2p_core::identity::error::SigningError;
 use libp2p_core::identity::Keypair;
@@ -37,13 +38,12 @@ use libp2p_swarm::{
 use std::collections::{HashMap, VecDeque};
 use std::iter::FromIterator;
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 pub struct Behaviour {
     events: VecDeque<
         NetworkBehaviourAction<
             Event,
-            SubstreamProtocolsHandler<void::Void, outbound::Stream, outbound::OpenInfo>,
+            SubstreamConnectionHandler<void::Void, outbound::Stream, outbound::OpenInfo>,
         >,
     >,
     keypair: Keypair,
@@ -164,14 +164,14 @@ pub enum Event {
 }
 
 impl NetworkBehaviour for Behaviour {
-    type ProtocolsHandler =
-        SubstreamProtocolsHandler<void::Void, outbound::Stream, outbound::OpenInfo>;
+    type ConnectionHandler =
+        SubstreamConnectionHandler<void::Void, outbound::Stream, outbound::OpenInfo>;
     type OutEvent = Event;
 
-    fn new_handler(&mut self) -> Self::ProtocolsHandler {
+    fn new_handler(&mut self) -> Self::ConnectionHandler {
         let initial_keep_alive = Duration::from_secs(30);
 
-        SubstreamProtocolsHandler::new_outbound_only(initial_keep_alive)
+        SubstreamConnectionHandler::new_outbound_only(initial_keep_alive)
     }
 
     fn addresses_of_peer(&mut self, peer: &PeerId) -> Vec<Multiaddr> {
@@ -215,7 +215,7 @@ impl NetworkBehaviour for Behaviour {
         &mut self,
         cx: &mut Context<'_>,
         poll_params: &mut impl PollParameters,
-    ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ProtocolsHandler>> {
+    ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
         if let Some(event) = self.events.pop_front() {
             return Poll::Ready(event);
         }
@@ -234,7 +234,7 @@ impl NetworkBehaviour for Behaviour {
                 ));
             }
 
-            let action = match PeerRecord::new(self.keypair.clone(), external_addresses) {
+            let action = match PeerRecord::new(&self.keypair, external_addresses) {
                 Ok(peer_record) => NetworkBehaviourAction::NotifyHandler {
                     peer_id: rendezvous_node,
                     event: handler::OutboundInEvent::NewSubstream {
@@ -275,7 +275,7 @@ fn handle_outbound_event(
 ) -> Vec<
     NetworkBehaviourAction<
         Event,
-        SubstreamProtocolsHandler<void::Void, outbound::Stream, outbound::OpenInfo>,
+        SubstreamConnectionHandler<void::Void, outbound::Stream, outbound::OpenInfo>,
     >,
 > {
     match event {
