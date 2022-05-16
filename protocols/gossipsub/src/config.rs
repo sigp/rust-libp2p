@@ -60,7 +60,7 @@ pub struct GossipsubConfig {
     mesh_n_high: usize,
     mesh_non_choke: usize,
     mesh_max_fanout_addition: usize,
-    choke_heartbeat_interval: usize,
+    choke_heartbeat_interval: u64,
     choke_duplicates_threshold: u8,
     choke_churn: usize,
     unchoke_threshold: u8,
@@ -156,7 +156,7 @@ impl GossipsubConfig {
 
     /// The number of heartbeats required to form a `choke_heartbeat_interval`. This interval
     /// determines the frequency peers are choked/unchoked.
-    pub fn choke_heartbeat_interval(&self) -> usize {
+    pub fn choke_heartbeat_interval(&self) -> u64 {
         self.choke_heartbeat_interval
     }
 
@@ -580,7 +580,7 @@ impl GossipsubConfigBuilder {
 
     /// The number of heartbeats required to form a `choke_heartbeat_interval`. This interval
     /// determines the frequency peers are choked/unchoked. Default value is 20.
-    pub fn choke_heartbeat_interval(&mut self, choke_heartbeat_interval: usize) -> &mut Self {
+    pub fn choke_heartbeat_interval(&mut self, choke_heartbeat_interval: u64) -> &mut Self {
         self.config.choke_heartbeat_interval = choke_heartbeat_interval;
         self
     }
