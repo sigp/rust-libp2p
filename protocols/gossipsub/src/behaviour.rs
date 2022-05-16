@@ -2123,6 +2123,10 @@ where
 
         self.heartbeat_ticks += 1;
 
+        if self.heartbeat_ticks % self.config.choke_heartbeat_ticks() == 0 {
+            // TODO: EPISUB heartbeat
+        }
+
         let mut to_graft = HashMap::new();
         let mut to_prune = HashMap::new();
         let mut no_px = HashSet::new();
