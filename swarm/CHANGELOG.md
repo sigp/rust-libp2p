@@ -1,7 +1,23 @@
-# 0.35.0 [unreleased]
+# 0.36.0 [unreleased]
 
+- Don't require `Transport` to be `Clone`. See [PR 2529].
+
+- Update to `libp2p-core` `v0.33.0`.
+
+- Make `behaviour::either` module private. See [PR 2610]
+
+- Rename `IncomingInfo::to_connected_point` to `IncomingInfo::create_connected_point`. See [PR 2620].
+
+[PR 2529]: https://github.com/libp2p/rust-libp2p/pull/2529
+[PR 2610]: https://github.com/libp2p/rust-libp2p/pull/2610
+[PR 2620]: https://github.com/libp2p/rust-libp2p/pull/2620
+
+# 0.35.0
+
+- Add impl `IntoIterator` for `MultiHandler`. See [PR 2572].
 - Remove `Send` bound from `NetworkBehaviour`. See [PR 2535].
 
+[PR 2572]: https://github.com/libp2p/rust-libp2p/pull/2572/
 [PR 2535]: https://github.com/libp2p/rust-libp2p/pull/2535/
 
 # 0.34.0 [2022-02-22]

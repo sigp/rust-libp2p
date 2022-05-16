@@ -19,14 +19,13 @@
 // DEALINGS IN THE SOFTWARE.
 
 use crate::protocol::{
-    IdentifyInfo, IdentifyProtocol, IdentifyPushProtocol, InboundPush, OutboundPush, ReplySubstream,
+    IdentifyInfo, IdentifyProtocol, IdentifyPushProtocol, InboundPush, OutboundPush,
+    ReplySubstream, UpgradeError,
 };
 use futures::prelude::*;
 use futures_timer::Delay;
 use libp2p_core::either::{EitherError, EitherOutput};
-use libp2p_core::upgrade::{
-    EitherUpgrade, InboundUpgrade, OutboundUpgrade, SelectUpgrade, UpgradeError,
-};
+use libp2p_core::upgrade::{EitherUpgrade, InboundUpgrade, OutboundUpgrade, SelectUpgrade};
 use libp2p_swarm::{
     ConnectionHandler, ConnectionHandlerEvent, ConnectionHandlerUpgrErr, KeepAlive,
     NegotiatedSubstream, SubstreamProtocol,
@@ -51,12 +50,12 @@ pub struct IdentifyHandler {
     >,
 
     /// Future that fires when we need to identify the node again.
-    next_id: Delay,
+    trigger_next_identify: Delay,
 
     /// Whether the handler should keep the connection alive.
     keep_alive: KeepAlive,
 
-    /// The interval of `next_id`, i.e. the recurrent delay.
+    /// The interval of `trigger_next_identify`, i.e. the recurrent delay.
     interval: Duration,
 }
 
@@ -70,7 +69,7 @@ pub enum IdentifyHandlerEvent {
     /// We received a request for identification.
     Identify(ReplySubstream<NegotiatedSubstream>),
     /// Failed to identify the remote.
-    IdentificationError(ConnectionHandlerUpgrErr<io::Error>),
+    IdentificationError(ConnectionHandlerUpgrErr<UpgradeError>),
 }
 
 /// Identifying information of the local node that is pushed to a remote.
@@ -82,7 +81,7 @@ impl IdentifyHandler {
     pub fn new(initial_delay: Duration, interval: Duration) -> Self {
         IdentifyHandler {
             events: SmallVec::new(),
-            next_id: Delay::new(initial_delay),
+            trigger_next_identify: Delay::new(initial_delay),
             keep_alive: KeepAlive::Yes,
             interval,
         }
@@ -155,6 +154,8 @@ impl ConnectionHandler for IdentifyHandler {
             <Self::OutboundProtocol as OutboundUpgrade<NegotiatedSubstream>>::Error,
         >,
     ) {
+        use libp2p_core::upgrade::UpgradeError;
+
         let err = err.map_upgrade_err(|e| match e {
             UpgradeError::Select(e) => UpgradeError::Select(e),
             UpgradeError::Apply(EitherError::A(ioe)) => UpgradeError::Apply(ioe),
@@ -164,7 +165,7 @@ impl ConnectionHandler for IdentifyHandler {
             IdentifyHandlerEvent::IdentificationError(err),
         ));
         self.keep_alive = KeepAlive::No;
-        self.next_id.reset(self.interval);
+        self.trigger_next_identify.reset(self.interval);
     }
 
     fn connection_keep_alive(&self) -> KeepAlive {
@@ -187,10 +188,10 @@ impl ConnectionHandler for IdentifyHandler {
         }
 
         // Poll the future that fires when we need to identify the node again.
-        match Future::poll(Pin::new(&mut self.next_id), cx) {
+        match Future::poll(Pin::new(&mut self.trigger_next_identify), cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(()) => {
-                self.next_id.reset(self.interval);
+                self.trigger_next_identify.reset(self.interval);
                 let ev = ConnectionHandlerEvent::OutboundSubstreamRequest {
                     protocol: SubstreamProtocol::new(EitherUpgrade::A(IdentifyProtocol), ()),
                 };

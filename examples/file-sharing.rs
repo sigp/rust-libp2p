@@ -79,18 +79,18 @@
 
 use async_std::io;
 use async_std::task::spawn;
+use clap::Parser;
 use futures::prelude::*;
 use libp2p::core::{Multiaddr, PeerId};
 use libp2p::multiaddr::Protocol;
 use std::error::Error;
 use std::path::PathBuf;
-use structopt::StructOpt;
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
-    let opt = Opt::from_args();
+    let opt = Opt::parse();
 
     let (mut network_client, mut network_events, network_event_loop) =
         network::new(opt.secret_key_seed).await?;
@@ -138,7 +138,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             network_client.respond_file(file_content, channel).await;
                         }
                     }
-                    _ => todo!(),
+                    e => todo!("{:?}", e),
                 }
             }
         }
@@ -170,33 +170,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[derive(Debug, StructOpt)]
-#[structopt(name = "libp2p file sharing example")]
+#[derive(Parser, Debug)]
+#[clap(name = "libp2p file sharing example")]
 struct Opt {
     /// Fixed value to generate deterministic peer ID.
-    #[structopt(long)]
+    #[clap(long)]
     secret_key_seed: Option<u8>,
 
-    #[structopt(long)]
+    #[clap(long)]
     peer: Option<Multiaddr>,
 
-    #[structopt(long)]
+    #[clap(long)]
     listen_address: Option<Multiaddr>,
 
-    #[structopt(subcommand)]
+    #[clap(subcommand)]
     argument: CliArgument,
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
 enum CliArgument {
     Provide {
-        #[structopt(long)]
+        #[clap(long)]
         path: PathBuf,
-        #[structopt(long)]
+        #[clap(long)]
         name: String,
     },
     Get {
-        #[structopt(long)]
+        #[clap(long)]
         name: String,
     },
 }
@@ -499,6 +499,8 @@ mod network {
                         }
                     }
                 }
+                SwarmEvent::IncomingConnectionError { .. } => {}
+                SwarmEvent::Dialing(peer_id) => println!("Dialing {}", peer_id),
                 e => panic!("{:?}", e),
             }
         }
@@ -631,6 +633,7 @@ mod network {
         },
     }
 
+    #[derive(Debug)]
     pub enum Event {
         InboundRequest {
             request: String,
