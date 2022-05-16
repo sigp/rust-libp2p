@@ -2123,8 +2123,10 @@ where
 
         self.heartbeat_ticks += 1;
 
-        if self.heartbeat_ticks % self.config.choke_heartbeat_ticks() == 0 {
-            // TODO: EPISUB heartbeat
+        if !self.config.disable_episub()
+            && self.heartbeat_ticks % self.config.episub_heartbeat_ticks() == 0
+        {
+            self.episub_heartbeat()
         }
 
         let mut to_graft = HashMap::new();
@@ -2521,6 +2523,10 @@ where
             let duration = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
             metrics.observe_heartbeat_duration(duration);
         }
+    }
+
+    fn episub_heartbeat(&mut self) {
+        // TODO: EPISUB heartbeat
     }
 
     /// Emits gossip - Send IHAVE messages to a random set of gossip peers. This is applied to mesh

@@ -60,7 +60,7 @@ pub struct GossipsubConfig {
     mesh_n_high: usize,
     mesh_non_choke: usize,
     mesh_max_fanout_addition: usize,
-    choke_heartbeat_ticks: u64,
+    episub_heartbeat_ticks: u64,
     choke_duplicates_threshold: u8,
     choke_churn: usize,
     unchoke_threshold: u8,
@@ -149,37 +149,37 @@ impl GossipsubConfig {
     }
 
     /// The maximum number of peers that can be added into the mesh from fanout if deemed
-    /// to be more efficient per choke_heartbeat_interval. Ignored if `disable_episub` is set.
+    /// to be more efficient per episub_heartbeat_interval. Ignored if `disable_episub` is set.
     pub fn mesh_max_fanout_addition(&self) -> usize {
         self.mesh_max_fanout_addition
     }
 
-    /// The number of heartbeats required to form a `choke_heartbeat_interval`. This interval
+    /// The number of heartbeats required to form a `episub_heartbeat_interval`. This interval
     /// determines the frequency peers are choked/unchoked.
-    pub fn choke_heartbeat_ticks(&self) -> u64 {
-        self.choke_heartbeat_ticks
+    pub fn episub_heartbeat_ticks(&self) -> u64 {
+        self.episub_heartbeat_ticks
     }
 
-    /// The percentage of duplicates a peer must send us within a `choke_heartbeat_interval` before
+    /// The percentage of duplicates a peer must send us within a `episub_heartbeat_interval` before
     /// being considered for choking.
     pub fn choke_duplicates_threshold(&self) -> u8 {
         self.choke_duplicates_threshold
     }
 
     /// The maximum number of peers that can be separately choke'd or unchoke'd in a given
-    /// `choke_heartbeat_interval`.
+    /// `episub_heartbeat_interval`.
     pub fn choke_churn(&self) -> usize {
         self.choke_churn
     }
 
     /// The percentage of messages we receive via gossip from a choked peer in a
-    /// `choke_heartbeat_interval` before we consider the peer for unchoking.
+    /// `episub_heartbeat_interval` before we consider the peer for unchoking.
     pub fn unchoke_threshold(&self) -> u8 {
         self.unchoke_threshold
     }
 
     /// The percentage of messages we receive via a gossip from a fanout peer in a
-    /// `choke_heartbeat_interval` before we consider it for addition into a mesh.
+    /// `episub_heartbeat_interval` before we consider it for addition into a mesh.
     pub fn fanout_addition_threshold(&self) -> u8 {
         self.fanout_addition_threshold
     }
@@ -461,7 +461,7 @@ impl Default for GossipsubConfigBuilder {
                 mesh_n_high: 12,
                 mesh_non_choke: 2,
                 mesh_max_fanout_addition: 1,
-                choke_heartbeat_ticks: 20,
+                episub_heartbeat_ticks: 20,
                 choke_duplicates_threshold: 60,
                 choke_churn: 2,
                 unchoke_threshold: 50,
@@ -571,21 +571,21 @@ impl GossipsubConfigBuilder {
     }
 
     /// The maximum number of peers that can be added into the mesh from fanout if deemed
-    /// to be more efficient per choke_heartbeat_interval. Ignored if `disable_episub` is set.
+    /// to be more efficient per episub_heartbeat_interval. Ignored if `disable_episub` is set.
     /// Default value is 1.
     pub fn mesh_max_fanout_addition(&mut self, mesh_max_fanout_addition: usize) -> &mut Self {
         self.config.mesh_max_fanout_addition = mesh_max_fanout_addition;
         self
     }
 
-    /// The number of heartbeats required to form a `choke_heartbeat_interval`. This interval
+    /// The number of heartbeats required to form a `episub_heartbeat_interval`. This interval
     /// determines the frequency peers are choked/unchoked. Default value is 20.
-    pub fn choke_heartbeat_ticks(&mut self, choke_heartbeat_ticks: u64) -> &mut Self {
-        self.config.choke_heartbeat_ticks = choke_heartbeat_ticks;
+    pub fn episub_heartbeat_ticks(&mut self, episub_heartbeat_ticks: u64) -> &mut Self {
+        self.config.episub_heartbeat_ticks = episub_heartbeat_ticks;
         self
     }
 
-    /// The percentage of duplicates a peer must send us within a `choke_heartbeat_interval` before
+    /// The percentage of duplicates a peer must send us within a `episub_heartbeat_interval` before
     /// being considered for choking. Default value is 60.
     pub fn choke_duplicates_threshold(&mut self, choke_duplicates_threshold: u8) -> &mut Self {
         self.config.choke_duplicates_threshold = choke_duplicates_threshold;
@@ -593,21 +593,21 @@ impl GossipsubConfigBuilder {
     }
 
     /// The maximum number of peers that can be separately choke'd or unchoke'd in a given
-    /// `choke_heartbeat_interval`. Default value is 2;
+    /// `episub_heartbeat_interval`. Default value is 2;
     pub fn choke_churn(&mut self, choke_churn: usize) -> &mut Self {
         self.config.choke_churn = choke_churn;
         self
     }
 
     /// The percentage of messages we receive via gossip from a choked peer in a
-    /// `choke_heartbeat_interval` before we consider the peer for unchoking. Default value is 50.
+    /// `episub_heartbeat_interval` before we consider the peer for unchoking. Default value is 50.
     pub fn unchoke_threshold(&mut self, unchoke_threshold: u8) -> &mut Self {
         self.config.unchoke_threshold = unchoke_threshold;
         self
     }
 
     /// The percentage of messages we receive via a gossip from a fanout peer in a
-    /// `choke_heartbeat_interval` before we consider it for addition into a mesh. Default value
+    /// `episub_heartbeat_interval` before we consider it for addition into a mesh. Default value
     /// is 10.
     pub fn fanout_addition_threshold(&mut self, fanout_addition_threshold: u8) -> &mut Self {
         self.config.fanout_addition_threshold = fanout_addition_threshold;
