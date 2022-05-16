@@ -233,6 +233,16 @@ pub enum GossipsubControlAction {
         /// The backoff time in seconds before we allow to reconnect
         backoff: Option<u64>,
     },
+    /// Requests the recipient to stop propagating messages in the mesh to the originating node.
+    Choke {
+        /// The topic hash of the mesh to action.
+        topic_hash: TopicHash,
+    },
+    /// Requests the recipient to resume propagating messages in the mesh to the originating node.
+    UnChoke {
+        /// The topic hash of the mesh to action.
+        topic_hash: TopicHash,
+    },
 }
 
 /// An RPC received/sent.
@@ -289,6 +299,8 @@ impl From<GossipsubRpc> for rpc_proto::Rpc {
             iwant: Vec::new(),
             graft: Vec::new(),
             prune: Vec::new(),
+            choke: Vec::new(),
+            unchoke: Vec::new(),
         };
 
         let empty_control_msg = rpc.control_msgs.is_empty();
@@ -336,6 +348,18 @@ impl From<GossipsubRpc> for rpc_proto::Rpc {
                         backoff,
                     };
                     control.prune.push(rpc_prune);
+                }
+                GossipsubControlAction::Choke { topic_hash } => {
+                    let rpc_choke = rpc_proto::ControlChoke {
+                        topic_id: Some(topic_hash.into_string()),
+                    };
+                    control.choke.push(rpc_choke);
+                }
+                GossipsubControlAction::UnChoke { topic_hash } => {
+                    let rpc_unchoke = rpc_proto::ControlUnChoke {
+                        topic_id: Some(topic_hash.into_string()),
+                    };
+                    control.unchoke.push(rpc_unchoke);
                 }
             }
         }

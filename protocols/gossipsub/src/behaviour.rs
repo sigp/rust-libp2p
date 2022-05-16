@@ -1528,6 +1528,14 @@ where
         debug!("Completed GRAFT handling for peer: {}", peer_id);
     }
 
+    fn handle_choke(&mut self, peer_id: &PeerId, topics: Vec<TopicHash>) {
+        // TODO: Implement
+    }
+
+    fn handle_unchoke(&mut self, peer_id: &PeerId, topics: Vec<TopicHash>) {
+        // TODO: Implement
+    }
+
     fn remove_peer_from_mesh(
         &mut self,
         peer_id: &PeerId,
@@ -3399,9 +3407,12 @@ where
 
                 // Handle control messages
                 // group some control messages, this minimises SendEvents (code is simplified to handle each event at a time however)
-                let mut ihave_msgs = vec![];
-                let mut graft_msgs = vec![];
-                let mut prune_msgs = vec![];
+                let mut ihave_msgs = Vec::new();
+                let mut iwant_ids = Vec::new();
+                let mut graft_topics = Vec::new();
+                let mut prune_msgs = Vec::new();
+                let mut choke_topics = Vec::new();
+                let mut unchoke_topics = Vec::new();
                 for control_msg in rpc.control_msgs {
                     match control_msg {
                         GossipsubControlAction::IHave {
@@ -3410,25 +3421,42 @@ where
                         } => {
                             ihave_msgs.push((topic_hash, message_ids));
                         }
-                        GossipsubControlAction::IWant { message_ids } => {
-                            self.handle_iwant(&propagation_source, message_ids)
+                        GossipsubControlAction::IWant { mut message_ids } => {
+                            iwant_ids.append(&mut message_ids);
                         }
-                        GossipsubControlAction::Graft { topic_hash } => graft_msgs.push(topic_hash),
+                        GossipsubControlAction::Graft { topic_hash } => {
+                            graft_topics.push(topic_hash)
+                        }
                         GossipsubControlAction::Prune {
                             topic_hash,
                             peers,
                             backoff,
                         } => prune_msgs.push((topic_hash, peers, backoff)),
+                        GossipsubControlAction::Choke { topic_hash } => {
+                            choke_topics.push(topic_hash)
+                        }
+                        GossipsubControlAction::UnChoke { topic_hash } => {
+                            unchoke_topics.push(topic_hash)
+                        }
                     }
                 }
                 if !ihave_msgs.is_empty() {
                     self.handle_ihave(&propagation_source, ihave_msgs);
                 }
-                if !graft_msgs.is_empty() {
-                    self.handle_graft(&propagation_source, graft_msgs);
+                if !iwant_ids.is_empty() {
+                    self.handle_iwant(&propagation_source, iwant_ids)
+                }
+                if !graft_topics.is_empty() {
+                    self.handle_graft(&propagation_source, graft_topics);
                 }
                 if !prune_msgs.is_empty() {
                     self.handle_prune(&propagation_source, prune_msgs);
+                }
+                if !choke_topics.is_empty() {
+                    self.handle_choke(&propagation_source, choke_topics);
+                }
+                if !unchoke_topics.is_empty() {
+                    self.handle_unchoke(&propagation_source, unchoke_topics);
                 }
             }
         }

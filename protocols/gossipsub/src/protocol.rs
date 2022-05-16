@@ -520,10 +520,28 @@ impl Decoder for GossipsubCodec {
                 });
             }
 
+            let choke_msgs: Vec<GossipsubControlAction> = rpc_control
+                .choke
+                .into_iter()
+                .map(|choke| GossipsubControlAction::Choke {
+                    topic_hash: TopicHash::from_raw(choke.topic_id.unwrap_or_default()),
+                })
+                .collect();
+
+            let unchoke_msgs: Vec<GossipsubControlAction> = rpc_control
+                .unchoke
+                .into_iter()
+                .map(|unchoke| GossipsubControlAction::UnChoke {
+                    topic_hash: TopicHash::from_raw(unchoke.topic_id.unwrap_or_default()),
+                })
+                .collect();
+
             control_msgs.extend(ihave_msgs);
             control_msgs.extend(iwant_msgs);
             control_msgs.extend(graft_msgs);
             control_msgs.extend(prune_msgs);
+            control_msgs.extend(choke_msgs);
+            control_msgs.extend(unchoke_msgs);
         }
 
         Ok(Some(HandlerEvent::Message {
