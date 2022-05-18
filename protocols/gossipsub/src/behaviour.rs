@@ -21,7 +21,7 @@
 use std::{
     cmp::{max, Ordering},
     collections::HashSet,
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     collections::{BTreeSet, HashMap},
     fmt,
     net::IpAddr,
@@ -202,6 +202,17 @@ impl From<MessageAuthenticity> for PublishConfig {
 type GossipsubNetworkBehaviourAction =
     NetworkBehaviourAction<GossipsubEvent, GossipsubHandler, Arc<GossipsubHandlerIn>>;
 
+type Mesh = HashMap<TopicHash, BTreeMap<PeerId, ChokeState>>;
+
+/// (Episub) the choke status of a peer
+#[derive(Default, PartialEq, Debug, Clone)]
+struct ChokeState {
+    /// Whether we have choked this peer.
+    peer_is_choked: bool,
+    /// Whether this peer has choked us.
+    choked_by_peer: bool,
+}
+
 /// Network behaviour that handles the gossipsub protocol.
 ///
 /// NOTE: Initialisation requires a [`MessageAuthenticity`] and [`GossipsubConfig`] instance. If
@@ -252,7 +263,7 @@ pub struct Gossipsub<
     blacklisted_peers: HashSet<PeerId>,
 
     /// Overlay network of connected peers - Maps topics to connected gossipsub peers.
-    mesh: HashMap<TopicHash, BTreeSet<PeerId>>,
+    mesh: HashMap<TopicHash, BTreeMap<PeerId, ChokeState>>,
 
     /// Map of topics to list of peers that we publish to, but don't subscribe to.
     fanout: HashMap<TopicHash, BTreeSet<PeerId>>,
@@ -473,13 +484,16 @@ where
 
     /// Lists all mesh peers for a certain topic hash.
     pub fn mesh_peers(&self, topic_hash: &TopicHash) -> impl Iterator<Item = &PeerId> {
-        self.mesh.get(topic_hash).into_iter().flat_map(|x| x.iter())
+        self.mesh
+            .get(topic_hash)
+            .into_iter()
+            .flat_map(|mesh_peers| mesh_peers.iter().map(|(peer, _)| peer))
     }
 
     pub fn all_mesh_peers(&self) -> impl Iterator<Item = &PeerId> {
         let mut res = BTreeSet::new();
-        for peers in self.mesh.values() {
-            res.extend(peers);
+        for topic_peers in self.mesh.values() {
+            res.extend(topic_peers.keys());
         }
         res.into_iter()
     }
@@ -965,7 +979,11 @@ where
 
             self.mesh.insert(
                 topic_hash.clone(),
-                peers.into_iter().take(add_peers).collect(),
+                peers
+                    .into_iter()
+                    .take(add_peers)
+                    .map(|peer| (peer, ChokeState::default()))
+                    .collect(),
             );
 
             // remove the last published time
@@ -1002,7 +1020,13 @@ where
                 .mesh
                 .entry(topic_hash.clone())
                 .or_insert_with(Default::default);
-            mesh_peers.extend(new_peers);
+            // TODO: check that new_peers won't contain mesh peers, effectively overwriting the
+            // choke state
+            mesh_peers.extend(
+                new_peers
+                    .into_iter()
+                    .map(|peer| (peer, ChokeState::default())),
+            );
         }
 
         let random_added = added_peers.len() - fanaout_added;
@@ -1114,7 +1138,7 @@ where
             if let Some(m) = self.metrics.as_mut() {
                 m.left(topic_hash)
             }
-            for peer in peers {
+            for (peer, _choke_state) in peers {
                 // Send a PRUNE control message
                 debug!("LEAVE: Sending PRUNE to peer: {:?}", peer);
                 let on_unsubscribe = true;
@@ -1401,7 +1425,7 @@ where
             for topic_hash in topics {
                 if let Some(peers) = self.mesh.get_mut(&topic_hash) {
                     // if the peer is already in the mesh ignore the graft
-                    if peers.contains(peer_id) {
+                    if peers.contains_key(peer_id) {
                         debug!(
                             "GRAFT: Received graft for peer {:?} that is already in topic {:?}",
                             peer_id, &topic_hash
@@ -1471,7 +1495,7 @@ where
                         peer_id, &topic_hash
                     );
 
-                    if peers.insert(*peer_id) {
+                    if peers.insert(*peer_id, ChokeState::default()).is_none() {
                         if let Some(m) = self.metrics.as_mut() {
                             m.peers_included(&topic_hash, Inclusion::Subscribed, 1)
                         }
@@ -1553,7 +1577,7 @@ where
         let mut update_backoff = always_update_backoff;
         if let Some(peers) = self.mesh.get_mut(topic_hash) {
             // remove the peer if it exists in the mesh
-            if peers.remove(peer_id) {
+            if peers.remove(peer_id).is_some() {
                 debug!(
                     "PRUNE: Removing peer: {} from the mesh for topic: {}",
                     peer_id.to_string(),
@@ -1996,7 +2020,9 @@ where
                     {
                         if let Some(peers) = self.mesh.get_mut(topic_hash) {
                             if peers.len() < self.config.mesh_n_low()
-                                && peers.insert(*propagation_source)
+                                && peers
+                                    .insert(*propagation_source, ChokeState::default())
+                                    .is_none()
                             {
                                 debug!(
                                     "SUBSCRIPTION: Adding peer {} to the mesh for topic {:?}",
@@ -2171,7 +2197,7 @@ where
             // if there is at some point a stable retain method for BTreeSet the following can be
             // written more efficiently with retain.
             let mut to_remove_peers = Vec::new();
-            for peer_id in peers.iter() {
+            for (peer_id, _choke_state) in peers.iter() {
                 let peer_score = *scores.get(peer_id).unwrap_or(&0.0);
 
                 // Record the score per mesh
@@ -2217,7 +2243,7 @@ where
                     topic_hash,
                     desired_peers,
                     |peer| {
-                        !peers.contains(peer)
+                        !peers.contains_key(peer)
                             && !explicit_peers.contains(peer)
                             && !backoffs.is_backoff_with_slack(topic_hash, peer)
                             && *scores.get(peer).unwrap_or(&0.0) >= 0.0
@@ -2232,7 +2258,12 @@ where
                 if let Some(m) = self.metrics.as_mut() {
                     m.peers_included(topic_hash, Inclusion::Random, peer_list.len())
                 }
-                peers.extend(peer_list);
+                // TODO: also check this does not include mesh peers
+                peers.extend(
+                    peer_list
+                        .into_iter()
+                        .map(|peer| (peer, ChokeState::default())),
+                );
             }
 
             // too many peers - remove some
@@ -2247,7 +2278,11 @@ where
 
                 // shuffle the peers and then sort by score ascending beginning with the worst
                 let mut rng = thread_rng();
-                let mut shuffled = peers.iter().cloned().collect::<Vec<_>>();
+                let mut shuffled = peers
+                    .iter()
+                    .map(|(peer, _choke_state)| peer)
+                    .cloned()
+                    .collect::<Vec<_>>();
                 shuffled.shuffle(&mut rng);
                 shuffled.sort_by(|p1, p2| {
                     let score_p1 = *scores.get(p1).unwrap_or(&0.0);
@@ -2299,7 +2334,12 @@ where
             // do we have enough outbound peers?
             if peers.len() >= self.config.mesh_n_low() {
                 // count number of outbound peers we have
-                let outbound = { peers.iter().filter(|p| outbound_peers.contains(*p)).count() };
+                let outbound = {
+                    peers
+                        .iter()
+                        .filter(|p| outbound_peers.contains(p.0))
+                        .count()
+                };
 
                 // if we have not enough outbound peers, graft to some new outbound peers
                 if outbound < self.config.mesh_outbound_min() {
@@ -2310,7 +2350,7 @@ where
                         topic_hash,
                         needed,
                         |peer| {
-                            !peers.contains(peer)
+                            !peers.contains_key(peer)
                                 && !explicit_peers.contains(peer)
                                 && !backoffs.is_backoff_with_slack(topic_hash, peer)
                                 && *scores.get(peer).unwrap_or(&0.0) >= 0.0
@@ -3511,7 +3551,7 @@ where
 fn peer_added_to_mesh(
     peer_id: PeerId,
     new_topics: Vec<&TopicHash>,
-    mesh: &HashMap<TopicHash, BTreeSet<PeerId>>,
+    mesh: &Mesh,
     known_topics: Option<&BTreeSet<TopicHash>>,
     events: &mut VecDeque<GossipsubNetworkBehaviourAction>,
     connections: &HashMap<PeerId, PeerConnections>,
@@ -3552,7 +3592,7 @@ fn peer_added_to_mesh(
 fn peer_removed_from_mesh(
     peer_id: PeerId,
     old_topic: &TopicHash,
-    mesh: &HashMap<TopicHash, BTreeSet<PeerId>>,
+    mesh: &Mesh,
     known_topics: Option<&BTreeSet<TopicHash>>,
     events: &mut VecDeque<GossipsubNetworkBehaviourAction>,
     connections: &HashMap<PeerId, PeerConnections>,
