@@ -1,4 +1,29 @@
-# 0.9.0 [unreleased]
+# 0.10.0 [unreleased]
+
+- Update to `libp2p-core` `v0.34.0`.
+
+- Update to `libp2p-swarm` `v0.37.0`.
+
+- Do not duplicate the p2p/xxx component with the relay PeerId when a client requests a reservation. See [PR 2701].
+
+- Drive the `RelayListener`s within the `ClientTransport`. Add `Transport::poll` and `Transport::remove_listener`
+  for `ClientTransport`. See [PR 2652].
+
+[PR 2701]: https://github.com/libp2p/rust-libp2p/pull/2701/
+[PR 2652]: https://github.com/libp2p/rust-libp2p/pull/2652
+
+# 0.9.1
+
+- Respond to at most one incoming reservation request. Deny <= 8 incoming
+  circuit requests with one per peer. And deny new circuits before accepting new
+  circuits. See [PR 2698].
+
+- Expose explicits errors via `UpgradeError` instead of generic `io::Error`. See
+  [PR 2698].
+
+[PR 2698]: https://github.com/libp2p/rust-libp2p/pull/2698/
+
+# 0.9.0
 
 - Update to `libp2p-core` `v0.33.0`.
 

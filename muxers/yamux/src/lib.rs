@@ -31,7 +31,7 @@ use libp2p_core::muxing::{StreamMuxer, StreamMuxerEvent};
 use libp2p_core::upgrade::{InboundUpgrade, OutboundUpgrade, UpgradeInfo};
 use parking_lot::Mutex;
 use std::{
-    fmt, io, iter,
+    fmt, io, iter, mem,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -137,63 +137,24 @@ where
         self.0.lock().control.abort_open_stream()
     }
 
-    fn read_substream(
-        &self,
-        c: &mut Context<'_>,
-        s: &mut Self::Substream,
-        b: &mut [u8],
-    ) -> Poll<YamuxResult<usize>> {
-        Pin::new(s)
-            .poll_read(c, b)
-            .map_err(|e| YamuxError(e.into()))
-    }
-
-    fn write_substream(
-        &self,
-        c: &mut Context<'_>,
-        s: &mut Self::Substream,
-        b: &[u8],
-    ) -> Poll<YamuxResult<usize>> {
-        Pin::new(s)
-            .poll_write(c, b)
-            .map_err(|e| YamuxError(e.into()))
-    }
-
-    fn flush_substream(
-        &self,
-        c: &mut Context<'_>,
-        s: &mut Self::Substream,
-    ) -> Poll<YamuxResult<()>> {
-        Pin::new(s).poll_flush(c).map_err(|e| YamuxError(e.into()))
-    }
-
-    fn shutdown_substream(
-        &self,
-        c: &mut Context<'_>,
-        s: &mut Self::Substream,
-    ) -> Poll<YamuxResult<()>> {
-        Pin::new(s).poll_close(c).map_err(|e| YamuxError(e.into()))
-    }
-
-    fn destroy_substream(&self, _: Self::Substream) {}
-
-    fn close(&self, c: &mut Context<'_>) -> Poll<YamuxResult<()>> {
+    fn poll_close(&self, c: &mut Context<'_>) -> Poll<YamuxResult<()>> {
         let mut inner = self.0.lock();
-        if let std::task::Poll::Ready(x) = Pin::new(&mut inner.control).poll_close(c) {
-            return Poll::Ready(x.map_err(YamuxError));
+
+        if let Poll::Ready(()) = Pin::new(&mut inner.control)
+            .poll_close(c)
+            .map_err(YamuxError)?
+        {
+            return Poll::Ready(Ok(()));
         }
-        while let std::task::Poll::Ready(x) = inner.incoming.poll_next_unpin(c) {
-            match x {
-                Some(Ok(_)) => {} // drop inbound stream
-                Some(Err(e)) => return Poll::Ready(Err(e)),
+
+        while let Poll::Ready(maybe_inbound_stream) = inner.incoming.poll_next_unpin(c)? {
+            match maybe_inbound_stream {
+                Some(inbound_stream) => mem::drop(inbound_stream),
                 None => return Poll::Ready(Ok(())),
             }
         }
-        Poll::Pending
-    }
 
-    fn flush_all(&self, _: &mut Context<'_>) -> Poll<YamuxResult<()>> {
-        Poll::Ready(Ok(()))
+        Poll::Pending
     }
 }
 
@@ -426,10 +387,7 @@ impl<T> fmt::Debug for LocalIncoming<T> {
 impl<T> Stream for Incoming<T> {
     type Item = Result<yamux::Stream, YamuxError>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.stream.as_mut().poll_next_unpin(cx)
     }
 
@@ -443,10 +401,7 @@ impl<T> Unpin for Incoming<T> {}
 impl<T> Stream for LocalIncoming<T> {
     type Item = Result<yamux::Stream, YamuxError>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.stream.as_mut().poll_next_unpin(cx)
     }
 

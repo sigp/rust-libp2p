@@ -1,8 +1,31 @@
-# 0.33.0 [unreleased]
+# 0.34.0 - unreleased
+
+- Introduce `StreamMuxerEvent::map_inbound_stream`. See [PR 2691].
+- Remove `{read,write,flush,shutdown,destroy}_substream` functions from `StreamMuxer` trait
+  in favor of forcing `StreamMuxer::Substream` to implement `AsyncRead + AsyncWrite`. See [PR 2707].
+- Replace `Into<std::io::Error>` bound on `StreamMuxer::Error` with `std::error::Error`. See [PR 2710].
+
+- Remove the concept of individual `Transport::Listener` streams from `Transport`.
+  Instead the `Transport` is polled directly via `Transport::poll`. The
+  `Transport` is now responsible for driving its listeners. See [PR 2652].
+
+[PR 2691]: https://github.com/libp2p/rust-libp2p/pull/2691
+[PR 2707]: https://github.com/libp2p/rust-libp2p/pull/2707
+[PR 2710]: https://github.com/libp2p/rust-libp2p/pull/2710
+[PR 2652]: https://github.com/libp2p/rust-libp2p/pull/2652
+
+# 0.33.0
 
 - Have methods on `Transport` take `&mut self` instead of `self`. See [PR 2529].
+- Remove `StreamMuxer::flush_all`. See [PR 2669].
+- Rename `StreamMuxer::close` to `StreamMuxer::poll_close`. See [PR 2666].
+- Remove deprecated function `StreamMuxer::is_remote_acknowledged`. See [PR 2665].
 
 [PR 2529]: https://github.com/libp2p/rust-libp2p/pull/2529
+[PR 2666]: https://github.com/libp2p/rust-libp2p/pull/2666
+[PR 2665]: https://github.com/libp2p/rust-libp2p/pull/2665
+[PR 2669]: https://github.com/libp2p/rust-libp2p/pull/2669
+
 
 # 0.32.1
 

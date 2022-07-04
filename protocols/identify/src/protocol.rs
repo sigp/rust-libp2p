@@ -20,7 +20,7 @@
 
 use crate::structs_proto;
 use asynchronous_codec::{FramedRead, FramedWrite};
-use futures::prelude::*;
+use futures::{future::BoxFuture, prelude::*};
 use libp2p_core::{
     identity, multiaddr,
     upgrade::{InboundUpgrade, OutboundUpgrade, UpgradeInfo},
@@ -30,6 +30,7 @@ use log::trace;
 use std::convert::TryFrom;
 use std::{fmt, io, iter, pin::Pin};
 use thiserror::Error;
+use void::Void;
 
 const MAX_MESSAGE_SIZE_BYTES: usize = 4096;
 
@@ -143,12 +144,13 @@ impl<C> InboundUpgrade<C> for IdentifyPushProtocol<InboundPush>
 where
     C: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    type Output = IdentifyInfo;
-    type Error = UpgradeError;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Output, Self::Error>> + Send>>;
+    type Output = BoxFuture<'static, Result<IdentifyInfo, UpgradeError>>;
+    type Error = Void;
+    type Future = future::Ready<Result<Self::Output, Self::Error>>;
 
     fn upgrade_inbound(self, socket: C, _: Self::Info) -> Self::Future {
-        recv(socket).boxed()
+        // Lazily upgrade stream, thus allowing upgrade to happen within identify's handler.
+        future::ok(recv(socket).boxed())
     }
 }
 
@@ -285,12 +287,12 @@ pub enum UpgradeError {
 mod tests {
     use super::*;
     use futures::channel::oneshot;
+    use libp2p::tcp::TcpTransport;
     use libp2p_core::{
         identity,
         upgrade::{self, apply_inbound, apply_outbound},
         Transport,
     };
-    use libp2p_tcp::TcpConfig;
 
     #[test]
     fn correct_transfer() {
@@ -302,27 +304,25 @@ mod tests {
         let (tx, rx) = oneshot::channel();
 
         let bg_task = async_std::task::spawn(async move {
-            let mut transport = TcpConfig::new();
+            let mut transport = TcpTransport::default().boxed();
 
-            let mut listener = transport
+            transport
                 .listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                 .unwrap();
 
-            let addr = listener
+            let addr = transport
                 .next()
                 .await
                 .expect("some event")
-                .expect("no error")
                 .into_new_address()
                 .expect("listen address");
             tx.send(addr).unwrap();
 
-            let socket = listener
+            let socket = transport
                 .next()
                 .await
-                .unwrap()
-                .unwrap()
-                .into_upgrade()
+                .expect("some event")
+                .into_incoming()
                 .unwrap()
                 .0
                 .await
@@ -347,7 +347,7 @@ mod tests {
         });
 
         async_std::task::block_on(async move {
-            let mut transport = TcpConfig::new();
+            let mut transport = TcpTransport::default();
 
             let socket = transport.dial(rx.await.unwrap()).unwrap().await.unwrap();
             let info = apply_outbound(socket, IdentifyProtocol, upgrade::Version::V1)

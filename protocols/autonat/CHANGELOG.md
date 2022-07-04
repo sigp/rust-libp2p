@@ -1,10 +1,27 @@
-# 0.4.0 [unreleased]
+# 0.5.0 [unreleased]
+
+- Update to `libp2p-core` `v0.34.0`.
+
+- Update to `libp2p-swarm` `v0.37.0`.
+
+- Update to `libp2p-request-response` `v0.19.0`.
+
+# 0.4.1
+
+- Export `DEFAULT_PROTOCOL_NAME`.
+
+# 0.4.0
 
 - Update to `libp2p-core` `v0.33.0`.
 
 - Update to `libp2p-swarm` `v0.36.0`.
 
 - Update to `libp2p-request-response` `v0.18.0`.
+
+- Add `Config::only_global_ips` to skip peers that are observed at a private IP-address
+  (see [PR 2618]).
+
+[PR 2618]: https://github.com/libp2p/rust-libp2p/pull/2618
 
 # 0.3.0
 
