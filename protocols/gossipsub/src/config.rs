@@ -52,8 +52,12 @@ pub enum ValidationMode {
 /// Selector for custom Protocol Id
 #[derive(Clone, Debug, PartialEq)]
 pub enum GossipsubVersion {
+    /// Gossipsub v1.0
     V1_0,
+    /// Gossipsub v1.1 (peer scoring)
     V1_1,
+    /// Gossipsub v1.2 (episub)
+    V1_2,
 }
 
 /// Configuration parameters that define the performance of the gossipsub network.

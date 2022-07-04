@@ -97,6 +97,8 @@ pub struct PeerConnections {
 /// Describes the types of peers that can exist in the gossipsub context.
 #[derive(Debug, Clone, PartialEq, Hash, Encode, Eq)]
 pub enum PeerKind {
+    /// A gossipsub 1.2 peer.
+    Gossipsubv1_2,
     /// A gossipsub 1.1 peer.
     Gossipsubv1_1,
     /// A gossipsub 1.0 peer.
@@ -399,6 +401,7 @@ impl PeerKind {
             Self::Floodsub => "Floodsub",
             Self::Gossipsub => "Gossipsub v1.0",
             Self::Gossipsubv1_1 => "Gossipsub v1.1",
+            Self::Gossipsubv1_2 => "Gossipsub v1.2",
         }
     }
 }

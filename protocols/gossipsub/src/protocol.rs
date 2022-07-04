@@ -69,9 +69,11 @@ impl ProtocolConfig {
             Some(v) => match v {
                 GossipsubVersion::V1_0 => vec![ProtocolId::new(id, PeerKind::Gossipsub, false)],
                 GossipsubVersion::V1_1 => vec![ProtocolId::new(id, PeerKind::Gossipsubv1_1, false)],
+                GossipsubVersion::V1_2 => vec![ProtocolId::new(id, PeerKind::Gossipsubv1_2, false)],
             },
             None => {
                 let mut protocol_ids = vec![
+                    ProtocolId::new(id.clone(), PeerKind::Gossipsubv1_2, true),
                     ProtocolId::new(id.clone(), PeerKind::Gossipsubv1_1, true),
                     ProtocolId::new(id, PeerKind::Gossipsub, true),
                 ];
@@ -106,6 +108,10 @@ pub struct ProtocolId {
 impl ProtocolId {
     pub fn new(id: Cow<'static, str>, kind: PeerKind, prefix: bool) -> Self {
         let protocol_id = match kind {
+            PeerKind::Gossipsubv1_2 => match prefix {
+                true => format!("/{}/{}", id, "1.1.2"),
+                false => format!("{}", id),
+            },
             PeerKind::Gossipsubv1_1 => match prefix {
                 true => format!("/{}/{}", id, "1.1.0"),
                 false => format!("{}", id),
@@ -114,6 +120,8 @@ impl ProtocolId {
                 true => format!("/{}/{}", id, "1.0.0"),
                 false => format!("{}", id),
             },
+            // NOTE: A prefix is not used here. Floodsub is not segregated for backwards
+            // compatibility (most implementations didn't allow prefixes, when it was released).
             PeerKind::Floodsub => format!("/{}/{}", "floodsub", "1.0.0"),
             // NOTE: This is used for informing the behaviour of unsupported peers. We do not
             // advertise this variant.
