@@ -60,12 +60,12 @@ impl ProtocolConfig {
     /// Sets the maximum gossip transmission size.
     pub fn new(
         id: Cow<'static, str>,
-        custom_id_peer_kind: Option<GossipsubVersion>,
+        custom_id_version: Option<GossipsubVersion>,
         max_transmit_size: usize,
         validation_mode: ValidationMode,
         support_floodsub: bool,
     ) -> ProtocolConfig {
-        let protocol_ids = match custom_id_peer_kind {
+        let protocol_ids = match custom_id_version {
             Some(v) => match v {
                 GossipsubVersion::V1_0 => vec![ProtocolId::new(id, PeerKind::Gossipsub, false)],
                 GossipsubVersion::V1_1 => vec![ProtocolId::new(id, PeerKind::Gossipsubv1_1, false)],

@@ -1553,7 +1553,7 @@ where
             peer_id, topics
         );
 
-        // Register the peer as choked
+        // Register our node as being choked by the peer
         for topic in topics {
             match self.topic_peers.get_mut(&topic) {
                 None => {
@@ -1590,7 +1590,7 @@ where
             peer_id, topics
         );
 
-        // Register the peer as choked
+        // Register us as being not being choked by the peer
         for topic in topics {
             match self.topic_peers.get_mut(&topic) {
                 None => {
@@ -1819,7 +1819,7 @@ where
 
     /// Handles a newly received [`RawGossipsubMessage`].
     ///
-    /// Forwards the message to all peers in the mesh.
+    /// Forwards the message to all peers in the mesh, unless they have choked us.
     fn handle_received_message(
         &mut self,
         mut raw_message: RawGossipsubMessage,
@@ -2599,8 +2599,12 @@ where
         }
     }
 
+    // This regulates the CHOKING and UNCHOKING of peers in our mesh's. It can also add better
+    // performing peers into the mesh if need be.
     fn episub_heartbeat(&mut self) {
-        // TODO: EPISUB heartbeat
+
+        // TODO: Hardcode choking/unchoking logic now, but ultimately make it generic for user
+        // modification.
     }
 
     /// Emits gossip - Send IHAVE messages to a random set of gossip peers. This is applied to mesh
@@ -2608,7 +2612,7 @@ where
     fn emit_gossip(&mut self) {
         let mut rng = thread_rng();
         for (topic_hash, peers) in self.mesh.iter().chain(self.fanout.iter()) {
-            let mut message_ids = self.mcache.get_gossip_message_ids(topic_hash);
+            let mut message_ids = self.mcache.get_gossip_message_ids(topic_hash, false);
             if message_ids.is_empty() {
                 continue;
             }
@@ -2632,11 +2636,13 @@ where
                     (self.config.gossip_factor() * m as f64) as usize,
                 )
             };
-            // get gossip_lazy random peers
+            // get gossip_lazy random peers, excluding CHOKE'd peers, these are handled
+            // independently below.
             let to_msg_peers = get_random_peers_dynamic(
                 &self.topic_peers,
                 &self.connected_peers,
                 topic_hash,
+                true, // Ignore peers that have CHOKE'd us
                 n_map,
                 |peer| {
                     !peers.contains(peer)
@@ -2667,6 +2673,57 @@ where
                         message_ids: peer_message_ids,
                     },
                 );
+            }
+
+            // Independently handle gossip for peers that have CHOKE'd us.
+            // Peers that have choked us, will be excluded from the above messages
+            // We only send message ids for the last heartbeat, rather than a random selection over
+            // the last few heartbeats. This will prevent duplication in messaging, as we send this
+            // gossip to these peers every heartbeat.
+
+            // For each peer that has choked us, send them all the valid message id's we know
+            // about.
+            let recent_msg_ids = self.mcache.get_gossip_message_ids(topic_hash, true);
+            for peer in peers {
+                match self.topic_peers.get(&topic_hash) {
+                    None => error!(
+                        "Mesh topic does not exist in known topics. Topic: {}",
+                        topic_hash
+                    ),
+                    Some(topic_peers) => {
+                        match topic_peers.get(peer) {
+                            None => error!("Mesh peer does not exist in known peer_topics. Peer: {}, Topic: {}", peer, topic_hash),
+                                Some(choke_status) if !choke_status.choked_by_peer =>  {}, // Not relevant
+                                _ =>  {
+                                    // This peer has choked us, so send it all the recent messages we know
+                                    // about
+                    let mut peer_message_ids = recent_msg_ids.clone();
+
+                    // NOTE: If more messages are sent than `config.max_ihave_length()` in a
+                    // heartbeat, we will not gossip all of these messages to peers that have
+                    // choked us because we only get messages over the last heartbeat.
+                    if peer_message_ids.len() > self.config.max_ihave_length() {
+                        // We do this per peer so that we emit a different set for each peer.
+                        // we have enough redundancy in the system that this will significantly increase
+                        // the message coverage when we do truncate.
+                        peer_message_ids.partial_shuffle(&mut rng, self.config.max_ihave_length());
+                        peer_message_ids.truncate(self.config.max_ihave_length());
+                    }
+
+                    trace!("Gossiping IHAVE to peer that has CHOKE'd us. Peer: {}", peer);
+                    // send an IHAVE message
+                    Self::control_pool_add(
+                        &mut self.control_pool,
+                        *peer,
+                        GossipsubControlAction::IHave {
+                            topic_hash: topic_hash.clone(),
+                            message_ids: peer_message_ids,
+                        },
+                    );
+                                }
+                        }
+                    }
+                }
             }
         }
     }
@@ -2788,6 +2845,8 @@ where
     /// Helper function which forwards a message to mesh\[topic\] peers.
     ///
     /// Returns true if at least one peer was messaged.
+    ///
+    /// NOTE: We do not forward messages to peers that have sent us CHOKE messages.
     fn forward_msg(
         &mut self,
         msg_id: &MessageId,
@@ -2815,6 +2874,8 @@ where
                         && !originating_peers.contains(peer_id)
                         && Some(peer_id) != message.source.as_ref()
                         && topics.contains(&message.topic)
+                        // Do not forward messages to peers that have choked us
+                        && !self.is_peer_choked(peer_id, &message.topic)
                     {
                         recipient_peers.insert(*peer_id);
                     }
@@ -2829,6 +2890,8 @@ where
                     if Some(peer_id) != propagation_source
                         && !originating_peers.contains(peer_id)
                         && Some(peer_id) != message.source.as_ref()
+                        // Do not forward messages to peers that have choked us
+                        && !self.is_peer_choked(peer_id, &message.topic)
                     {
                         recipient_peers.insert(*peer_id);
                     }
@@ -3128,6 +3191,19 @@ where
         }
 
         Ok(rpc_list)
+    }
+
+    /// Helper function to determine if an individual peer has choked us for a topic.
+    fn is_peer_choked(&self, peer_id: &PeerId, topic: &TopicHash) -> bool {
+        self.topic_peers
+            .get(topic)
+            .map(|peers| {
+                peers
+                    .get(peer_id)
+                    .map(|choke_state| choke_state.choked_by_peer)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -3666,6 +3742,8 @@ fn get_random_peers_dynamic(
     topic_peers: &HashMap<TopicHash, BTreeMap<PeerId, ChokeState>>,
     connected_peers: &HashMap<PeerId, PeerConnections>,
     topic_hash: &TopicHash,
+    // Whether to filter peers that have choked us
+    ignore_choked_peers: bool,
     // maps the number of total peers to the number of selected peers
     n_map: impl Fn(usize) -> usize,
     mut f: impl FnMut(&PeerId) -> bool,
@@ -3673,16 +3751,22 @@ fn get_random_peers_dynamic(
     let mut gossip_peers = match topic_peers.get(topic_hash) {
         // if they exist, filter the peers by `f`
         Some(peer_list) => peer_list
-            .keys()
-            .cloned()
-            .filter(|p| {
-                f(p) && match connected_peers.get(p) {
-                    Some(connections) if connections.kind == PeerKind::Gossipsub => true,
-                    Some(connections) if connections.kind == PeerKind::Gossipsubv1_1 => true,
-                    Some(connections) if connections.kind == PeerKind::Gossipsubv1_2 => true,
-                    _ => false,
-                }
+            .iter()
+            // Optionally ignore choked peers, and exclude Floodsub and supported peer types.
+            .filter(|(p, choke_status)| {
+                f(p) && (!ignore_choked_peers | choke_status.choked_by_peer == false)
+                    && match connected_peers.get(p) {
+                        Some(connections)
+                            if connections.kind != PeerKind::Floodsub
+                                && connections.kind != PeerKind::NotSupported =>
+                        {
+                            true
+                        }
+                        _ => false,
+                    }
             })
+            .map(|(peer_id, _choke_status)| peer_id)
+            .cloned()
             .collect(),
         None => Vec::new(),
     };
@@ -3712,7 +3796,7 @@ fn get_random_peers(
     n: usize,
     f: impl FnMut(&PeerId) -> bool,
 ) -> BTreeSet<PeerId> {
-    get_random_peers_dynamic(topic_peers, connected_peers, topic_hash, |_| n, f)
+    get_random_peers_dynamic(topic_peers, connected_peers, topic_hash, false, |_| n, f)
 }
 
 /// Validates the combination of signing, privacy and message validation to ensure the

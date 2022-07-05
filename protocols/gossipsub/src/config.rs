@@ -443,7 +443,8 @@ impl GossipsubConfig {
         self.support_floodsub
     }
 
-    /// Disables support for the episub (meshsub/2.0.0) upgrades.
+    /// Disables choking other peers and mesh additions. Gossipsub will still support other episub
+    /// nodes and respond to their choking requests, but will not choke its peers.
     pub fn disable_episub(&self) -> bool {
         self.disable_episub
     }

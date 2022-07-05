@@ -154,8 +154,16 @@ impl MessageCache {
     }
 
     /// Get a list of [`MessageId`]s for a given topic.
-    pub fn get_gossip_message_ids(&self, topic: &TopicHash) -> Vec<MessageId> {
-        self.history[..self.gossip]
+    /// The `only_last_heartbeat` parameter specifies if we only wish to get message-ids for the
+    /// last heartbeat. This is useful for always forwarding messages (without duplication) to
+    /// peers that have CHOKE'd us.
+    pub fn get_gossip_message_ids(
+        &self,
+        topic: &TopicHash,
+        only_last_heartbeat: bool,
+    ) -> Vec<MessageId> {
+        let gossip_history_length = if only_last_heartbeat { 0 } else { self.gossip };
+        self.history[..gossip_history_length]
             .iter()
             .fold(vec![], |mut current_entries, entries| {
                 // search for entries with desired topic
