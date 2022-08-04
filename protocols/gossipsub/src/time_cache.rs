@@ -135,6 +135,7 @@ where
         }
     }
 
+    /// Loop through the entire map and remove any expired keys.
     fn remove_expired_keys(&mut self, now: Instant) {
         while let Some(element) = self.list.pop_front() {
             if element.expires > now {
@@ -149,6 +150,44 @@ where
         }
     }
 
+    /// If there is an element to be removed from the list, return it.
+    pub fn remove_expired(&mut self) -> Option<(Key, Value)> {
+        if let Some(element) = self.list.pop_front() {
+            if element.expires > Instant::now() {
+                self.list.push_front(element);
+                return None;
+            } else {
+                // The element has expired.
+                if let Some(internal_element) = self.map.remove(&element.element) {
+                    return Some((element.element, internal_element.element));
+                } else {
+                    // This should never happen, return None and fail quietly.
+                    return None;
+                }
+            }
+        } else {
+            // The map is empty, return nothing.
+            None
+        }
+    }
+
+    /// Obtain an entry without removing any expired elements.
+    pub fn entry_without_removal(&mut self, key: Key) -> Entry<Key, Value> {
+        match self.map.entry(key) {
+            Occupied(entry) => Entry::Occupied(OccupiedEntry {
+                expiration: Instant::now() + self.ttl,
+                entry,
+                list: &mut self.list,
+            }),
+            Vacant(entry) => Entry::Vacant(VacantEntry {
+                expiration: Instant::now() + self.ttl,
+                entry,
+                list: &mut self.list,
+            }),
+        }
+    }
+
+    /// Obtain an entry of the map, removing any expired elements automatically.
     pub fn entry(&mut self, key: Key) -> Entry<Key, Value> {
         let now = Instant::now();
         self.remove_expired_keys(now);
