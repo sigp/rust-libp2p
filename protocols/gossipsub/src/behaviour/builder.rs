@@ -77,7 +77,11 @@ where
 
     /// Enables metrics on the Gossipsub router by passing a [`Registry`] and configuration
     /// ([`MetricsConfig`]).
-    pub fn metrics(mut self, registry: &mut Registry, config: MetricsConfig) -> Self {
+    pub fn metrics(
+        mut self,
+        registry: &mut Registry<Box<dyn prometheus_client::encoding::proto::EncodeMetric>>,
+        config: MetricsConfig,
+    ) -> Self {
         self.metrics = Some(Metrics::new(registry, config));
         self
     }

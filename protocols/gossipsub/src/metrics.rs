@@ -22,8 +22,9 @@
 //! protocol.
 
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 
-use prometheus_client::encoding::text::Encode;
+use prometheus_client::encoding::Encode;
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::{Family, MetricConstructor};
 use prometheus_client::metrics::gauge::Gauge;
@@ -209,7 +210,10 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    pub fn new(registry: &mut Registry, config: Config) -> Self {
+    pub fn new(
+        registry: &mut Registry<Box<dyn prometheus_client::encoding::proto::EncodeMetric>>,
+        config: Config,
+    ) -> Self {
         // Destructure the config to be sure everything is used.
         let Config {
             max_topics,
@@ -762,6 +766,17 @@ pub enum Inclusion {
     Outbound,
 }
 
+impl Display for Inclusion {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Inclusion::EpisubAddition => write!(f, "EpisubAddition"),
+            Inclusion::Random => write!(f, "Random"),
+            Inclusion::Subscribed => write!(f, "Subscribed"),
+            Inclusion::Outbound => write!(f, "Outbound"),
+        }
+    }
+}
+
 /// Reasons why a peer was removed from the mesh.
 #[derive(PartialEq, Eq, Hash, Encode, Clone)]
 pub enum Churn {
@@ -777,6 +792,18 @@ pub enum Churn {
     Excess,
 }
 
+impl Display for Churn {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Churn::Dc => write!(f, "Dc"),
+            Churn::BadScore => write!(f, "BadScore"),
+            Churn::Prune => write!(f, "Prune"),
+            Churn::Unsub => write!(f, "Unsub"),
+            Churn::Excess => write!(f, "Excess"),
+        }
+    }
+}
+
 /// Kinds of reasons a peer's score has been penalized
 #[derive(PartialEq, Eq, Hash, Encode, Clone)]
 pub enum Penalty {
@@ -788,6 +815,17 @@ pub enum Penalty {
     MessageDeficit,
     /// Too many peers under one IP address.
     IPColocation,
+}
+
+impl Display for Penalty {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Penalty::GraftBackoff => write!(f, "GraftBackoff"),
+            Penalty::BrokenPromise => write!(f, "BrokenPromise"),
+            Penalty::MessageDeficit => write!(f, "MessageDeficit"),
+            Penalty::IPColocation => write!(f, "IPColocation"),
+        }
+    }
 }
 
 /// Label for the mesh inclusion event metrics.
