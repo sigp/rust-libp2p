@@ -888,7 +888,12 @@ mod tests {
         for topic_hash in topic_hashes[..3].iter() {
             let topic_peers = gs.topic_peers.get(topic_hash).unwrap().clone();
             assert!(
-                topic_peers == peers[..2].into_iter().cloned().collect(),
+                topic_peers
+                    == peers[..2]
+                        .into_iter()
+                        .cloned()
+                        .map(|peer| (peer, ChokeState::default()))
+                        .collect(),
                 "Two peers should be added to the first three topics"
             );
         }
@@ -911,7 +916,12 @@ mod tests {
 
         let topic_peers = gs.topic_peers.get(&topic_hashes[0]).unwrap().clone(); // only gossipsub at the moment
         assert!(
-            topic_peers == peers[1..2].into_iter().cloned().collect(),
+            topic_peers
+                == peers[1..2]
+                    .into_iter()
+                    .cloned()
+                    .map(|peer| (peer, ChokeState::default()))
+                    .collect(),
             "Only the second peers should be in the first topic"
         );
     }
@@ -934,8 +944,14 @@ mod tests {
             peers.push(PeerId::random())
         }
 
-        gs.topic_peers
-            .insert(topic_hash.clone(), peers.iter().cloned().collect());
+        gs.topic_peers.insert(
+            topic_hash.clone(),
+            peers
+                .iter()
+                .cloned()
+                .map(|peer| (peer, ChokeState::default()))
+                .collect(),
+        );
 
         gs.connected_peers = peers
             .iter()

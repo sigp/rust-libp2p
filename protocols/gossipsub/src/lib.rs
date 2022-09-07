@@ -140,6 +140,7 @@ pub mod protocol;
 mod backoff;
 mod behaviour;
 mod config;
+pub mod episub;
 mod gossip_promises;
 mod handler;
 mod mcache;
