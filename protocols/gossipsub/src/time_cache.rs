@@ -40,7 +40,7 @@ pub struct TimeCache<Key, Value> {
     /// Mapping a key to its value together with its latest expire time (can be updated through
     /// reinserts).
     map: FnvHashMap<Key, ExpiringElement<Value>>,
-    /// An ordered list of keys by expires time.
+    /// An ordered list of keys by expire time.
     list: VecDeque<ExpiringElement<Key>>,
     /// The time elements remain in the cache.
     ttl: Duration,
@@ -221,6 +221,14 @@ where
 
     pub fn get_mut(&mut self, key: &Key) -> Option<&mut Value> {
         self.map.get_mut(key).map(|e| &mut e.element)
+    }
+
+    /// Provides an iterator over elements, removing any expired elements.
+    pub fn iter(&mut self) -> impl Iterator<Item = (&Key, &Value)> {
+        self.remove_expired_keys(Instant::now());
+        self.map
+            .iter()
+            .map(|(key, expiring_element)| (key, &expiring_element.element))
     }
 }
 
