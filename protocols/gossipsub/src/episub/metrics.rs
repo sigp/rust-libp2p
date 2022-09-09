@@ -133,6 +133,18 @@ impl EpisubMetrics {
         *self.current_duplicates_per_peer.get(peer_id).unwrap_or(&0)
     }
 
+    /// Calculates the percentage of duplicates sent for each peer in the given moving window. This
+    /// removes expired elements.
+    pub fn duplicates_percentage(&mut self) -> HashMap<PeerId, u8> {
+        self.prune_expired_elements();
+        let messages = self.raw_deliveries.len();
+
+        self.current_duplicates_per_peer
+            .iter()
+            .map(|(peer_id, duplicates)| (*peer_id, (*duplicates * 100 / messages) as u8))
+            .collect()
+    }
+
     /// The unsorted average basic stat per peer over the current moving window.
     /// NOTE: The first message sender is considered to have no latency, i.e latency == 0, anyone who does not
     /// send a duplicate does not get counted.
@@ -163,7 +175,7 @@ impl EpisubMetrics {
     /// Given a percentile, provides the percentage of messages per peer that exist in that
     /// percentile. The percentile must be a number between 0 and 100.
     /// Elements from the cache get pruned before counting.
-    pub fn percentile_latency_per_peer(&mut self, percentile: u8) -> HashMap<PeerId, f32> {
+    pub fn percentile_latency_per_peer(&mut self, percentile: u8) -> HashMap<PeerId, u8> {
         // Remove any old messages from the moving window cache.
         self.prune_expired_elements();
 
@@ -205,7 +217,7 @@ impl EpisubMetrics {
             return HashMap::new();
         }
 
-        let mut percentage_counts_per_peer = HashMap::new();
+        let mut percentage_counts_per_peer: HashMap<PeerId, usize> = HashMap::new();
 
         // Remove the elements that should exist in the percentile
         // The -1 is to account for the rounding in calculating the cutoff to account for
@@ -216,25 +228,37 @@ impl EpisubMetrics {
                 latency: _,
             }) = latency_percentile.pop()
             {
-                *percentage_counts_per_peer.entry(peer_id).or_default() +=
-                    1.0 / message_count as f32;
+                *percentage_counts_per_peer.entry(peer_id).or_default() += 100; // Results in a total percentage
             }
         }
 
+        // Calculate the percentage
         percentage_counts_per_peer
+            .into_iter()
+            .map(|(peer_id, count)| (peer_id, (count / message_count) as u8))
+            .collect()
     }
 
-    /// Returns the number of IHAVE messages that were received before an actual
-    /// message. This indicates that a peer is sending us messages faster than our mesh peers and
+    /// Returns the percentage of IHAVE messages that were received before an actual
+    /// message compared to actual messages received. This is calculated for each peer.
+    /// To put another way, for all messages we received, this calculates the percentage of these
+    /// messages that a specific peer sent an IHAVE prior to us receiving the message from the
+    /// mesh.
+    /// This indicates that a peer is sending us messages faster than our mesh peers and
     /// may be an indicator to unchoke the peer.
-    pub fn ihave_messages_stats(&mut self) -> HashMap<PeerId, usize> {
-        let mut ihave_count = HashMap::new();
+    pub fn ihave_messages_stats(&mut self) -> HashMap<PeerId, u8> {
+        let mut ihave_count: HashMap<PeerId, usize> = HashMap::new();
         for (_message_id, peer_id_hashset) in self.ihave_msgs.iter() {
             for peer_id in peer_id_hashset.iter() {
-                *ihave_count.entry(*peer_id).or_default() += 1;
+                *ihave_count.entry(*peer_id).or_default() += 100;
             }
         }
+        let total_messages = self.raw_deliveries.len();
+
         ihave_count
+            .into_iter()
+            .map(|(peer_id, message_count)| (peer_id, (message_count / total_messages) as u8))
+            .collect()
     }
 
     /// Prunes expired data from the moving window.
@@ -259,6 +283,9 @@ mod test {
     fn test_latency_order_and_percentile() {
         let mut metrics = EpisubMetrics::new(Duration::from_millis(100));
         // Used to keep track of expired messages.
+
+        let peers: Vec<PeerId> = (0..5).map(|_| PeerId::random()).collect();
+        let message_ids: Vec<MessageId> = (0..3).map(|id| MessageId::new(&[id as u8])).collect();
 
         // Make this a closure so we can run it multiple times to make sure pruning is working as
         // expected.
@@ -291,18 +318,14 @@ mod test {
             // M1P1, M2P2, M3P5, M2P1 (2ms), M3P3 (3ms), M2P3 (5ms), M3P1 (8ms) |50th Percentile|, M1P2 (10ms)   M1P3 (15ms), M1P4
             // (15ms), M1P5 (15ms),| 80th Percentile| M1P4(25ms) , M1P5 (25ms) |90th Percentile|, M3P2 (28ms) , M3P4 (28ms).
 
-            let expected_50_percentile_counts = [0.0, 2.0 / 3.0, 1.0 / 3.0, 3.0 / 3.0, 2.0 / 3.0];
-            let expected_80_percentile_counts = [0.0, 1.0 / 3.0, 0.0, 2.0 / 3.0, 1.0 / 3.0];
-            let expected_90_percentile_counts = [0.0, 1.0 / 3.0, 0.0, 1.0 / 3.0, 0.0];
+            let expected_50_percentile_counts = [0, 66, 33, 100, 66];
+            let expected_80_percentile_counts = [0, 33, 0, 66, 33];
+            let expected_90_percentile_counts = [0, 33, 0, 33, 0];
             let expected_percentiles = [
                 expected_50_percentile_counts,
                 expected_80_percentile_counts,
                 expected_90_percentile_counts,
             ];
-
-            let peers: Vec<PeerId> = (0..5).map(|_| PeerId::random()).collect();
-            let message_ids: Vec<MessageId> =
-                (0..3).map(|id| MessageId::new(&[id as u8])).collect();
 
             // First message
             metrics.message_received(message_ids[0].clone(), peers[0].clone(), start_time.clone());
@@ -418,5 +441,48 @@ mod test {
         std::thread::sleep(Duration::from_millis(100));
 
         run_test();
+    }
+
+    #[test]
+    fn test_ihave_message_percent() {
+        let mut metrics = EpisubMetrics::new(Duration::from_millis(100));
+
+        // Lets say there are three peers. Peer 1 sends IHave messages 20% of time for all
+        // messages, Peer 2 sends 50% and Peer 3 never sends any.
+        let expected_percentages = [20, 50, 0];
+
+        let total_messages = 100u8;
+        let peers: Vec<PeerId> = (0..3).map(|_| PeerId::random()).collect();
+
+        for id in 0..total_messages {
+            let message_id = MessageId::new(&id.to_be_bytes());
+
+            if id % 5 == 0 {
+                // Peer 1 sends an IHAVE message 20% of the time.
+                metrics.ihave_received(vec![message_id.clone()], peers[0]);
+            }
+
+            if id % 2 == 0 {
+                // Peer 2 sends an IHAVE message 40% of the time.
+                metrics.ihave_received(vec![message_id.clone()], peers[1]);
+            }
+
+            // Peer 3 is always the first, but later peer 1 and peer 2 send the message also.
+            metrics.message_received(message_id.clone(), peers[2], Instant::now());
+
+            metrics.message_received(message_id.clone(), peers[0], Instant::now());
+            metrics.message_received(message_id, peers[1], Instant::now());
+        }
+
+        // Check to make sure the percentages work out.
+
+        for (peer_id, ihave_percentage) in metrics.ihave_messages_stats() {
+            let peer_idx = peers
+                .iter()
+                .position(|peer| *peer == peer_id)
+                .expect("Must exist");
+            println!("Peer: {}, {}", peer_idx + 1, ihave_percentage,);
+            assert_eq!(expected_percentages[peer_idx], ihave_percentage);
+        }
     }
 }

@@ -140,7 +140,7 @@ pub mod protocol;
 mod backoff;
 mod behaviour;
 mod config;
-pub mod episub;
+mod episub;
 mod gossip_promises;
 mod handler;
 mod mcache;
@@ -173,3 +173,5 @@ pub use self::types::{
 };
 pub type IdentTopic = Topic<self::topic::IdentityHash>;
 pub type Sha256Topic = Topic<self::topic::Sha256Hash>;
+
+pub use episub::{ChokingStrategy, DefaultStrat, DefaultStratBuilder};

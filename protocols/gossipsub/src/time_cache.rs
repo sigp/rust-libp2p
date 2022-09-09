@@ -46,83 +46,6 @@ pub struct TimeCache<Key, Value> {
     ttl: Duration,
 }
 
-pub struct OccupiedEntry<'a, K, V> {
-    expiration: Instant,
-    entry: hash_map::OccupiedEntry<'a, K, ExpiringElement<V>>,
-    list: &'a mut VecDeque<ExpiringElement<K>>,
-}
-
-impl<'a, K, V> OccupiedEntry<'a, K, V>
-where
-    K: Eq + std::hash::Hash + Clone,
-{
-    pub fn into_mut(self) -> &'a mut V {
-        &mut self.entry.into_mut().element
-    }
-
-    pub fn insert_without_updating_expiration(&mut self, value: V) -> V {
-        //keep old expiration, only replace value of element
-        ::std::mem::replace(&mut self.entry.get_mut().element, value)
-    }
-
-    pub fn insert_and_update_expiration(&mut self, value: V) -> V {
-        //We push back an additional element, the first reference in the list will be ignored
-        // since we also updated the expires in the map, see below.
-        self.list.push_back(ExpiringElement {
-            element: self.entry.key().clone(),
-            expires: self.expiration,
-        });
-        self.entry
-            .insert(ExpiringElement {
-                element: value,
-                expires: self.expiration,
-            })
-            .element
-    }
-}
-
-pub struct VacantEntry<'a, K, V> {
-    expiration: Instant,
-    entry: hash_map::VacantEntry<'a, K, ExpiringElement<V>>,
-    list: &'a mut VecDeque<ExpiringElement<K>>,
-}
-
-impl<'a, K, V> VacantEntry<'a, K, V>
-where
-    K: Eq + std::hash::Hash + Clone,
-{
-    pub fn insert(self, value: V) -> &'a mut V {
-        self.list.push_back(ExpiringElement {
-            element: self.entry.key().clone(),
-            expires: self.expiration,
-        });
-        &mut self
-            .entry
-            .insert(ExpiringElement {
-                element: value,
-                expires: self.expiration,
-            })
-            .element
-    }
-}
-
-pub enum Entry<'a, K: 'a, V: 'a> {
-    Occupied(OccupiedEntry<'a, K, V>),
-    Vacant(VacantEntry<'a, K, V>),
-}
-
-impl<'a, K: 'a, V: 'a> Entry<'a, K, V>
-where
-    K: Eq + std::hash::Hash + Clone,
-{
-    pub fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V {
-        match self {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => entry.insert(default()),
-        }
-    }
-}
-
 impl<Key, Value> TimeCache<Key, Value>
 where
     Key: Eq + std::hash::Hash + Clone,
@@ -205,6 +128,11 @@ where
         }
     }
 
+    /// Returns the number of elements in the cache.
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
     /// Empties the entire cache.
     pub fn clear(&mut self) {
         self.map.clear();
@@ -229,6 +157,83 @@ where
         self.map
             .iter()
             .map(|(key, expiring_element)| (key, &expiring_element.element))
+    }
+}
+
+pub struct OccupiedEntry<'a, K, V> {
+    expiration: Instant,
+    entry: hash_map::OccupiedEntry<'a, K, ExpiringElement<V>>,
+    list: &'a mut VecDeque<ExpiringElement<K>>,
+}
+
+impl<'a, K, V> OccupiedEntry<'a, K, V>
+where
+    K: Eq + std::hash::Hash + Clone,
+{
+    pub fn into_mut(self) -> &'a mut V {
+        &mut self.entry.into_mut().element
+    }
+
+    pub fn insert_without_updating_expiration(&mut self, value: V) -> V {
+        //keep old expiration, only replace value of element
+        ::std::mem::replace(&mut self.entry.get_mut().element, value)
+    }
+
+    pub fn insert_and_update_expiration(&mut self, value: V) -> V {
+        //We push back an additional element, the first reference in the list will be ignored
+        // since we also updated the expires in the map, see below.
+        self.list.push_back(ExpiringElement {
+            element: self.entry.key().clone(),
+            expires: self.expiration,
+        });
+        self.entry
+            .insert(ExpiringElement {
+                element: value,
+                expires: self.expiration,
+            })
+            .element
+    }
+}
+
+pub struct VacantEntry<'a, K, V> {
+    expiration: Instant,
+    entry: hash_map::VacantEntry<'a, K, ExpiringElement<V>>,
+    list: &'a mut VecDeque<ExpiringElement<K>>,
+}
+
+impl<'a, K, V> VacantEntry<'a, K, V>
+where
+    K: Eq + std::hash::Hash + Clone,
+{
+    pub fn insert(self, value: V) -> &'a mut V {
+        self.list.push_back(ExpiringElement {
+            element: self.entry.key().clone(),
+            expires: self.expiration,
+        });
+        &mut self
+            .entry
+            .insert(ExpiringElement {
+                element: value,
+                expires: self.expiration,
+            })
+            .element
+    }
+}
+
+pub enum Entry<'a, K: 'a, V: 'a> {
+    Occupied(OccupiedEntry<'a, K, V>),
+    Vacant(VacantEntry<'a, K, V>),
+}
+
+impl<'a, K: 'a, V: 'a> Entry<'a, K, V>
+where
+    K: Eq + std::hash::Hash + Clone,
+{
+    pub fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(default()),
+        }
     }
 }
 
