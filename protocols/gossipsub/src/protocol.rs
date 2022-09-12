@@ -639,6 +639,7 @@ mod tests {
     struct TestKeypair(Keypair);
 
     impl Arbitrary for TestKeypair {
+        #[cfg(feature = "rsa")]
         fn arbitrary<G: Gen>(g: &mut G) -> Self {
             let keypair = if g.gen() {
                 // Small enough to be inlined.
@@ -649,6 +650,12 @@ mod tests {
                 Keypair::rsa_from_pkcs8(&mut rsa_key).unwrap()
             };
             TestKeypair(keypair)
+        }
+
+        #[cfg(not(feature = "rsa"))]
+        fn arbitrary<G: Gen>(_g: &mut G) -> Self {
+            // Small enough to be inlined.
+            TestKeypair(Keypair::generate_ed25519())
         }
     }
 

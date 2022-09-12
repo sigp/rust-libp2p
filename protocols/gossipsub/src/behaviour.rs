@@ -41,8 +41,8 @@ use libp2p_core::{
     multiaddr::Protocol::Ip6, ConnectedPoint, Multiaddr, PeerId,
 };
 use libp2p_swarm::{
-    dial_opts::{self, DialOpts},
-    IntoConnectionHandler, NetworkBehaviour, NetworkBehaviourAction, NotifyHandler, PollParameters,
+    dial_opts::DialOpts, IntoConnectionHandler, NetworkBehaviour, NetworkBehaviourAction,
+    NotifyHandler, PollParameters,
 };
 use wasm_timer::Instant;
 
@@ -600,19 +600,20 @@ where
     }
 
     /// Publishes a message with multiple topics to the network.
-    pub fn publish<H: Hasher>(
+    pub fn publish(
         &mut self,
-        topic: Topic<H>,
+        topic: impl Into<TopicHash>,
         data: impl Into<Vec<u8>>,
     ) -> Result<MessageId, PublishError> {
         let data = data.into();
+        let topic = topic.into();
 
         // Transform the data before building a raw_message.
         let transformed_data = self
             .data_transform
-            .outbound_transform(&topic.hash(), data.clone())?;
+            .outbound_transform(&topic, data.clone())?;
 
-        let raw_message = self.build_raw_message(topic.into(), transformed_data)?;
+        let raw_message = self.build_raw_message(topic, transformed_data)?;
 
         // calculate the message id from the un-transformed data
         let msg_id = self.config.message_id(&GossipsubMessage {
@@ -1156,9 +1157,7 @@ where
             debug!("Connecting to explicit peer {:?}", peer_id);
             let handler = self.new_handler();
             self.events.push_back(NetworkBehaviourAction::Dial {
-                opts: DialOpts::peer_id(*peer_id)
-                    .condition(dial_opts::PeerCondition::Disconnected)
-                    .build(),
+                opts: DialOpts::peer_id(*peer_id).build(),
                 handler,
             });
         }
@@ -1733,9 +1732,7 @@ where
                 // dial peer
                 let handler = self.new_handler();
                 self.events.push_back(NetworkBehaviourAction::Dial {
-                    opts: DialOpts::peer_id(peer_id)
-                        .condition(dial_opts::PeerCondition::Disconnected)
-                        .build(),
+                    opts: DialOpts::peer_id(peer_id).build(),
                     handler,
                 });
             }
@@ -3510,7 +3507,7 @@ where
                     ));
                 } else if let Some(conn) = self.connected_peers.get_mut(&propagation_source) {
                     // Only change the value if the old value is Floodsub (the default set in
-                    // inject_connected). All other PeerKind changes are ignored.
+                    // inject_connection_established). All other PeerKind changes are ignored.
                     debug!(
                         "New peer type found: {} for peer: {}",
                         kind, propagation_source

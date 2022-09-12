@@ -43,7 +43,67 @@
 
 # `libp2p` facade crate
 
-# 0.46.0 [unreleased]
+# 0.49.0 - [unreleased]
+
+- Update to [`libp2p-tcp` `v0.37.0`](transports/tcp/CHANGELOG.md#0370).
+
+# 0.48.0
+
+- Update to [`libp2p-core` `v0.36.0`](core/CHANGELOG.md#0360).
+
+- Update to [`libp2p-swarm-derive` `v0.30.0`](swarm-derive/CHANGELOG.md#0300).
+
+- Update to [`libp2p-dcutr` `v0.6.0`](protocols/dcutr/CHANGELOG.md#060).
+
+- Update to [`libp2p-rendezvous` `v0.9.0`](protocols/rendezvous/CHANGELOG.md#090).
+
+- Update to [`libp2p-ping` `v0.39.0`](protocols/ping/CHANGELOG.md#0390).
+
+- Update to [`libp2p-identify` `v0.39.0`](protocols/identify/CHANGELOG.md#0390).
+
+- Update to [`libp2p-floodsub` `v0.39.0`](protocols/floodsub/CHANGELOG.md#0390).
+
+- Update to [`libp2p-relay` `v0.12.0`](protocols/relay/CHANGELOG.md#0120).
+
+- Update to [`libp2p-metrics` `v0.9.0`](misc/metrics/CHANGELOG.md#090).
+
+- Update to [`libp2p-kad` `v0.40.0`](protocols/kad/CHANGELOG.md#0400).
+
+- Update to [`libp2p-autonat` `v0.7.0`](protocols/autonat/CHANGELOG.md#070).
+
+- Update to [`libp2p-request-response` `v0.21.0`](protocols/request-response/CHANGELOG.md#0210).
+
+# 0.47.0
+
+- Update to [`libp2p-dcutr` `v0.5.0`](protocols/dcutr/CHANGELOG.md#050).
+
+- Update to [`libp2p-derive` `v0.29.0`](swarm-derive/CHANGELOG.md#0290).
+
+- Update to [`libp2p-rendezvous` `v0.8.0`](protocols/rendezvous/CHANGELOG.md#080).
+
+- Update to [`libp2p-ping` `v0.38.0`](protocols/ping/CHANGELOG.md#0380).
+
+- Update to [`libp2p-identify` `v0.38.0`](protocols/identify/CHANGELOG.md#0380).
+
+- Update to [`libp2p-floodsub` `v0.38.0`](protocols/floodsub/CHANGELOG.md#0380).
+
+- Update to [`libp2p-relay` `v0.11.0`](protocols/relay/CHANGELOG.md#0110).
+
+- Update to [`libp2p-metrics` `v0.8.0`](misc/metrics/CHANGELOG.md#080).
+
+- Update to [`libp2p-kad` `v0.39.0`](protocols/kad/CHANGELOG.md#0390).
+
+- Update to [`libp2p-autonat` `v0.6.0`](protocols/autonat/CHANGELOG.md#060).
+
+- Update to [`libp2p-request-response` `v0.20.0`](protocols/request-response/CHANGELOG.md#0200).
+
+- Update to [`libp2p-swarm` `v0.38.0`](swarm/CHANGELOG.md#0380).
+
+# 0.46.1
+
+- Update to `libp2p-derive` [`v0.28.0`](swarm-derive/CHANGELOG.md#0280).
+
+# 0.46.0
 
 - Semver bump Rust from `1.56.1` to `1.60.0` . See [PR 2646].
 - Added weak dependencies for features. See [PR 2646].
