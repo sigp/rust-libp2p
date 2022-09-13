@@ -26,29 +26,6 @@ use libp2p_core::PeerId;
 
 use crate::types::{FastMessageId, GossipsubMessage, MessageId, RawGossipsubMessage};
 
-/// The types of message validation that can be employed by gossipsub.
-#[derive(Debug, Clone)]
-pub enum ValidationMode {
-    /// This is the default setting. This requires the message author to be a valid [`PeerId`] and to
-    /// be present as well as the sequence number. All messages must have valid signatures.
-    ///
-    /// NOTE: This setting will reject messages from nodes using
-    /// [`crate::behaviour::MessageAuthenticity::Anonymous`] and all messages that do not have
-    /// signatures.
-    Strict,
-    /// This setting permits messages that have no author, sequence number or signature. If any of
-    /// these fields exist in the message these are validated.
-    Permissive,
-    /// This setting requires the author, sequence number and signature fields of a message to be
-    /// empty. Any message that contains these fields is considered invalid.
-    Anonymous,
-    /// This setting does not check the author, sequence number or signature fields of incoming
-    /// messages. If these fields contain data, they are simply ignored.
-    ///
-    /// NOTE: This setting will consider messages with invalid signatures as valid messages.
-    None,
-}
-
 /// Selector for custom Protocol Id
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GossipsubVersion {
@@ -88,7 +65,6 @@ pub struct GossipsubConfig {
     idle_timeout: Duration,
     duplicate_cache_time: Duration,
     validate_messages: bool,
-    validation_mode: ValidationMode,
     message_id_fn: Arc<dyn Fn(&GossipsubMessage) -> MessageId + Send + Sync + 'static>,
     fast_message_id_fn:
         Option<Arc<dyn Fn(&RawGossipsubMessage) -> FastMessageId + Send + Sync + 'static>>,
@@ -280,12 +256,6 @@ impl GossipsubConfig {
     /// The default is `false`.
     pub fn validate_messages(&self) -> bool {
         self.validate_messages
-    }
-
-    /// Determines the level of validation used when receiving messages. See [`ValidationMode`]
-    /// for the available types. The default is ValidationMode::Strict.
-    pub fn validation_mode(&self) -> &ValidationMode {
-        &self.validation_mode
     }
 
     /// A user-defined function allowing the user to specify the message id of a gossipsub message.
@@ -498,7 +468,6 @@ impl Default for GossipsubConfigBuilder {
                 idle_timeout: Duration::from_secs(120),
                 duplicate_cache_time: Duration::from_secs(60),
                 validate_messages: false,
-                validation_mode: ValidationMode::Strict,
                 message_id_fn: Arc::new(|message| {
                     // default message id is: source + sequence number
                     // NOTE: If either the peer_id or source is not provided, we set to 0;
@@ -731,13 +700,6 @@ impl GossipsubConfigBuilder {
     /// behaviour to forward a message once validated.
     pub fn validate_messages(&mut self) -> &mut Self {
         self.config.validate_messages = true;
-        self
-    }
-
-    /// Determines the level of validation used when receiving messages. See [`ValidationMode`]
-    /// for the available types. The default is ValidationMode::Strict.
-    pub fn validation_mode(&mut self, validation_mode: ValidationMode) -> &mut Self {
-        self.config.validation_mode = validation_mode;
         self
     }
 
@@ -991,7 +953,6 @@ impl std::fmt::Debug for GossipsubConfig {
         let _ = builder.field("idle_timeout", &self.idle_timeout);
         let _ = builder.field("duplicate_cache_time", &self.duplicate_cache_time);
         let _ = builder.field("validate_messages", &self.validate_messages);
-        let _ = builder.field("validation_mode", &self.validation_mode);
         let _ = builder.field("allow_self_origin", &self.allow_self_origin);
         let _ = builder.field("do_px", &self.do_px);
         let _ = builder.field("prune_peers", &self.prune_peers);
@@ -1021,7 +982,7 @@ mod test {
     use crate::topic::IdentityHash;
     use crate::types::PeerKind;
     use crate::Topic;
-    use crate::{Gossipsub, MessageAuthenticity};
+    use crate::{Gossipsub, GossipsubBuilder, MessageAuthenticity};
     use libp2p_core::UpgradeInfo;
     use libp2p_swarm::{ConnectionHandler, NetworkBehaviour};
     use std::collections::hash_map::DefaultHasher;
@@ -1117,7 +1078,6 @@ mod test {
     fn create_config_with_protocol_id_prefix() {
         let builder: GossipsubConfig = GossipsubConfigBuilder::default()
             .protocol_id_prefix("purple")
-            .validation_mode(ValidationMode::Anonymous)
             .message_id_fn(message_id_plain_function)
             .build()
             .unwrap();
@@ -1125,8 +1085,10 @@ mod test {
         assert_eq!(builder.protocol_id(), "purple");
         assert_eq!(builder.custom_id_version(), &None);
 
-        let mut gossipsub: Gossipsub =
-            Gossipsub::new(MessageAuthenticity::Anonymous, builder).expect("Correct configuration");
+        let mut gossipsub: Gossipsub = GossipsubBuilder::new(MessageAuthenticity::Anonymous)
+            .config(builder)
+            .build()
+            .expect("Correct configuration");
 
         let handler = gossipsub.new_handler();
         let (protocol_config, _) = handler.listen_protocol().into_upgrade();
@@ -1145,7 +1107,6 @@ mod test {
     fn create_config_with_custom_protocol_id() {
         let builder: GossipsubConfig = GossipsubConfigBuilder::default()
             .protocol_id("purple", GossipsubVersion::V1_0)
-            .validation_mode(ValidationMode::Anonymous)
             .message_id_fn(message_id_plain_function)
             .build()
             .unwrap();
@@ -1153,8 +1114,10 @@ mod test {
         assert_eq!(builder.protocol_id(), "purple");
         assert_eq!(builder.custom_id_version(), &Some(GossipsubVersion::V1_0));
 
-        let mut gossipsub: Gossipsub =
-            Gossipsub::new(MessageAuthenticity::Anonymous, builder).expect("Correct configuration");
+        let mut gossipsub: Gossipsub = GossipsubBuilder::new(MessageAuthenticity::Anonymous)
+            .config(builder)
+            .build()
+            .expect("Correct configuration");
 
         let handler = gossipsub.new_handler();
         let (protocol_config, _) = handler.listen_protocol().into_upgrade();

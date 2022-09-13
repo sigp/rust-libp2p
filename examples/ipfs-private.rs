@@ -37,7 +37,7 @@ use libp2p::{
     core::{
         either::EitherTransport, muxing::StreamMuxerBox, transport, transport::upgrade::Version,
     },
-    gossipsub::{self, Gossipsub, GossipsubConfigBuilder, GossipsubEvent, MessageAuthenticity},
+    gossipsub::{self, Gossipsub, GossipsubConfigBuilder, GossipsubBuilder, GossipsubEvent, MessageAuthenticity},
     identify::{Identify, IdentifyConfig, IdentifyEvent},
     identity,
     multiaddr::Protocol,
@@ -196,11 +196,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .build()
             .expect("valid config");
         let mut behaviour = MyBehaviour {
-            gossipsub: Gossipsub::new(
-                MessageAuthenticity::Signed(local_key.clone()),
-                gossipsub_config,
-            )
-            .expect("Valid configuration"),
+            gossipsub: GossipsubBuilder::new(MessageAuthenticity::Signed(local_key.clone()))
+                .config(gossipsub_config)
+                .build()
+                .expect("Valid configuration"),
             identify: Identify::new(IdentifyConfig::new(
                 "/ipfs/0.1.0".into(),
                 local_key.public(),

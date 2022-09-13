@@ -32,13 +32,12 @@ use std::{
 
 use futures::StreamExt;
 use log::{debug, error, trace, warn};
-use prometheus_client::registry::Registry;
 use prost::Message;
 use rand::{seq::SliceRandom, thread_rng};
 
 use libp2p_core::{
-    connection::ConnectionId, identity::Keypair, multiaddr::Protocol::Ip4,
-    multiaddr::Protocol::Ip6, ConnectedPoint, Multiaddr, PeerId,
+    connection::ConnectionId, multiaddr::Protocol::Ip4, multiaddr::Protocol::Ip6, ConnectedPoint,
+    Multiaddr, PeerId,
 };
 use libp2p_swarm::{
     dial_opts::DialOpts, IntoConnectionHandler, NetworkBehaviour, NetworkBehaviourAction,
@@ -47,12 +46,12 @@ use libp2p_swarm::{
 use wasm_timer::Instant;
 
 use crate::backoff::BackoffStorage;
-use crate::config::{GossipsubConfig, ValidationMode};
+use crate::config::GossipsubConfig;
 use crate::error::{PublishError, SubscriptionError, ValidationError};
 use crate::gossip_promises::GossipPromises;
 use crate::handler::{GossipsubHandler, GossipsubHandlerIn, HandlerEvent};
 use crate::mcache::MessageCache;
-use crate::metrics::{Churn, Config as MetricsConfig, Inclusion, Metrics, Penalty};
+use crate::metrics::{Churn, Inclusion, Metrics, Penalty};
 use crate::peer_score::{PeerScore, PeerScoreParams, PeerScoreThresholds, RejectReason};
 use crate::protocol::{ProtocolConfig, SIGNING_PREFIX};
 use crate::subscription_filter::{AllowAllSubscriptionFilter, TopicSubscriptionFilter};
@@ -65,55 +64,13 @@ use crate::types::{
 };
 use crate::types::{GossipsubRpc, PeerConnections, PeerKind};
 use crate::{rpc_proto, TopicScoreParams};
+use builder::{PublishConfig, ValidationMode};
 use std::{cmp::Ordering::Equal, fmt::Debug};
 use wasm_timer::Interval;
 
+pub mod builder;
 #[cfg(test)]
 mod tests;
-
-/// Determines if published messages should be signed or not.
-///
-/// Without signing, a number of privacy preserving modes can be selected.
-///
-/// NOTE: The default validation settings are to require signatures. The [`ValidationMode`]
-/// should be updated in the [`GossipsubConfig`] to allow for unsigned messages.
-#[derive(Clone)]
-pub enum MessageAuthenticity {
-    /// Message signing is enabled. The author will be the owner of the key and the sequence number
-    /// will be a random number.
-    Signed(Keypair),
-    /// Message signing is disabled.
-    ///
-    /// The specified [`PeerId`] will be used as the author of all published messages. The sequence
-    /// number will be randomized.
-    Author(PeerId),
-    /// Message signing is disabled.
-    ///
-    /// A random [`PeerId`] will be used when publishing each message. The sequence number will be
-    /// randomized.
-    RandomAuthor,
-    /// Message signing is disabled.
-    ///
-    /// The author of the message and the sequence numbers are excluded from the message.
-    ///
-    /// NOTE: Excluding these fields may make these messages invalid by other nodes who
-    /// enforce validation of these fields. See [`ValidationMode`] in the [`GossipsubConfig`]
-    /// for how to customise this for rust-libp2p gossipsub.  A custom `message_id`
-    /// function will need to be set to prevent all messages from a peer being filtered
-    /// as duplicates.
-    Anonymous,
-}
-
-impl MessageAuthenticity {
-    /// Returns true if signing is enabled.
-    pub fn is_signing(&self) -> bool {
-        matches!(self, MessageAuthenticity::Signed(_))
-    }
-
-    pub fn is_anonymous(&self) -> bool {
-        matches!(self, MessageAuthenticity::Anonymous)
-    }
-}
 
 /// Event that can be emitted by the gossipsub behaviour.
 #[derive(Debug)]
@@ -144,59 +101,6 @@ pub enum GossipsubEvent {
     },
     /// A peer that does not support gossipsub has connected.
     GossipsubNotSupported { peer_id: PeerId },
-}
-
-/// A data structure for storing configuration for publishing messages. See [`MessageAuthenticity`]
-/// for further details.
-#[allow(clippy::large_enum_variant)]
-#[derive(Clone)]
-enum PublishConfig {
-    Signing {
-        keypair: Keypair,
-        author: PeerId,
-        inline_key: Option<Vec<u8>>,
-    },
-    Author(PeerId),
-    RandomAuthor,
-    Anonymous,
-}
-
-impl PublishConfig {
-    pub fn get_own_id(&self) -> Option<&PeerId> {
-        match self {
-            Self::Signing { author, .. } => Some(author),
-            Self::Author(author) => Some(author),
-            _ => None,
-        }
-    }
-}
-
-impl From<MessageAuthenticity> for PublishConfig {
-    fn from(authenticity: MessageAuthenticity) -> Self {
-        match authenticity {
-            MessageAuthenticity::Signed(keypair) => {
-                let public_key = keypair.public();
-                let key_enc = public_key.to_protobuf_encoding();
-                let key = if key_enc.len() <= 42 {
-                    // The public key can be inlined in [`rpc_proto::Message::from`], so we don't include it
-                    // specifically in the [`rpc_proto::Message::key`] field.
-                    None
-                } else {
-                    // Include the protobuf encoding of the public key in the message.
-                    Some(key_enc)
-                };
-
-                PublishConfig::Signing {
-                    keypair,
-                    author: public_key.to_peer_id(),
-                    inline_key: key,
-                }
-            }
-            MessageAuthenticity::Author(peer_id) => PublishConfig::Author(peer_id),
-            MessageAuthenticity::RandomAuthor => PublishConfig::RandomAuthor,
-            MessageAuthenticity::Anonymous => PublishConfig::Anonymous,
-        }
-    }
 }
 
 type GossipsubNetworkBehaviourAction =
@@ -235,8 +139,12 @@ pub struct Gossipsub<
     /// Pools non-urgent control messages between heartbeats.
     control_pool: HashMap<PeerId, Vec<GossipsubControlAction>>,
 
-    /// Information used for publishing messages.
+    /// Information used for publishing messages. See [`PublishConfig`] for further details.
     publish_config: PublishConfig,
+
+    /// The kind of validation the user wishes to undertake on received messages. See
+    /// [`ValidationMode`] for further details.
+    validation_mode: ValidationMode,
 
     /// An LRU Time cache for storing seen messages (based on their ID). This cache prevents
     /// duplicates from being propagated to the application and on the network.
@@ -324,151 +232,6 @@ pub struct Gossipsub<
 
     /// Keep track of a set of internal metrics relating to gossipsub.
     metrics: Option<Metrics>,
-}
-
-impl<D, F> Gossipsub<D, F>
-where
-    D: DataTransform + Default,
-    F: TopicSubscriptionFilter + Default,
-{
-    /// Creates a [`Gossipsub`] struct given a set of parameters specified via a
-    /// [`GossipsubConfig`]. This has no subscription filter and uses no compression.
-    pub fn new(
-        privacy: MessageAuthenticity,
-        config: GossipsubConfig,
-    ) -> Result<Self, &'static str> {
-        Self::new_with_subscription_filter_and_transform(
-            privacy,
-            config,
-            None,
-            F::default(),
-            D::default(),
-        )
-    }
-
-    /// Creates a [`Gossipsub`] struct given a set of parameters specified via a
-    /// [`GossipsubConfig`]. This has no subscription filter and uses no compression.
-    /// Metrics can be evaluated by passing a reference to a [`Registry`].
-    pub fn new_with_metrics(
-        privacy: MessageAuthenticity,
-        config: GossipsubConfig,
-        metrics_registry: &mut Registry,
-        metrics_config: MetricsConfig,
-    ) -> Result<Self, &'static str> {
-        Self::new_with_subscription_filter_and_transform(
-            privacy,
-            config,
-            Some((metrics_registry, metrics_config)),
-            F::default(),
-            D::default(),
-        )
-    }
-}
-
-impl<D, F> Gossipsub<D, F>
-where
-    D: DataTransform + Default,
-    F: TopicSubscriptionFilter,
-{
-    /// Creates a [`Gossipsub`] struct given a set of parameters specified via a
-    /// [`GossipsubConfig`] and a custom subscription filter.
-    pub fn new_with_subscription_filter(
-        privacy: MessageAuthenticity,
-        config: GossipsubConfig,
-        metrics: Option<(&mut Registry, MetricsConfig)>,
-        subscription_filter: F,
-    ) -> Result<Self, &'static str> {
-        Self::new_with_subscription_filter_and_transform(
-            privacy,
-            config,
-            metrics,
-            subscription_filter,
-            D::default(),
-        )
-    }
-}
-
-impl<D, F> Gossipsub<D, F>
-where
-    D: DataTransform,
-    F: TopicSubscriptionFilter + Default,
-{
-    /// Creates a [`Gossipsub`] struct given a set of parameters specified via a
-    /// [`GossipsubConfig`] and a custom data transform.
-    pub fn new_with_transform(
-        privacy: MessageAuthenticity,
-        config: GossipsubConfig,
-        metrics: Option<(&mut Registry, MetricsConfig)>,
-        data_transform: D,
-    ) -> Result<Self, &'static str> {
-        Self::new_with_subscription_filter_and_transform(
-            privacy,
-            config,
-            metrics,
-            F::default(),
-            data_transform,
-        )
-    }
-}
-
-impl<D, F> Gossipsub<D, F>
-where
-    D: DataTransform,
-    F: TopicSubscriptionFilter,
-{
-    /// Creates a [`Gossipsub`] struct given a set of parameters specified via a
-    /// [`GossipsubConfig`] and a custom subscription filter and data transform.
-    pub fn new_with_subscription_filter_and_transform(
-        privacy: MessageAuthenticity,
-        config: GossipsubConfig,
-        metrics: Option<(&mut Registry, MetricsConfig)>,
-        subscription_filter: F,
-        data_transform: D,
-    ) -> Result<Self, &'static str> {
-        // Set up the router given the configuration settings.
-
-        // We do not allow configurations where a published message would also be rejected if it
-        // were received locally.
-        validate_config(&privacy, config.validation_mode())?;
-
-        Ok(Gossipsub {
-            metrics: metrics.map(|(registry, cfg)| Metrics::new(registry, cfg)),
-            events: VecDeque::new(),
-            control_pool: HashMap::new(),
-            publish_config: privacy.into(),
-            duplicate_cache: DuplicateCache::new(config.duplicate_cache_time()),
-            fast_message_id_cache: TimeCache::new(config.duplicate_cache_time()),
-            topic_peers: HashMap::new(),
-            peer_topics: HashMap::new(),
-            explicit_peers: HashSet::new(),
-            blacklisted_peers: HashSet::new(),
-            mesh: HashMap::new(),
-            fanout: HashMap::new(),
-            fanout_last_pub: HashMap::new(),
-            backoffs: BackoffStorage::new(
-                &config.prune_backoff(),
-                config.heartbeat_interval(),
-                config.backoff_slack(),
-            ),
-            mcache: MessageCache::new(config.history_gossip(), config.history_length()),
-            heartbeat: Interval::new_at(
-                Instant::now() + config.heartbeat_initial_delay(),
-                config.heartbeat_interval(),
-            ),
-            heartbeat_ticks: 0,
-            px_peers: HashSet::new(),
-            outbound_peers: HashSet::new(),
-            peer_score: None,
-            count_received_ihave: HashMap::new(),
-            count_sent_iwant: HashMap::new(),
-            pending_iwant_msgs: HashSet::new(),
-            connected_peers: HashMap::new(),
-            published_message_ids: DuplicateCache::new(config.published_message_ids_cache_time()),
-            config,
-            subscription_filter,
-            data_transform,
-        })
-    }
 }
 
 impl<D, F> Gossipsub<D, F>
@@ -3225,7 +2988,7 @@ where
             self.config.protocol_id().clone(),
             self.config.custom_id_version().clone(),
             self.config.max_transmit_size(),
-            self.config.validation_mode().clone(),
+            self.validation_mode.clone(),
             self.config.support_floodsub(),
         );
 
@@ -3796,36 +3559,6 @@ fn get_random_peers(
     get_random_peers_dynamic(topic_peers, connected_peers, topic_hash, false, |_| n, f)
 }
 
-/// Validates the combination of signing, privacy and message validation to ensure the
-/// configuration will not reject published messages.
-fn validate_config(
-    authenticity: &MessageAuthenticity,
-    validation_mode: &ValidationMode,
-) -> Result<(), &'static str> {
-    match validation_mode {
-        ValidationMode::Anonymous => {
-            if authenticity.is_signing() {
-                return Err("Cannot enable message signing with an Anonymous validation mode. Consider changing either the ValidationMode or MessageAuthenticity");
-            }
-
-            if !authenticity.is_anonymous() {
-                return Err("Published messages contain an author but incoming messages with an author will be rejected. Consider adjusting the validation or privacy settings in the config");
-            }
-        }
-        ValidationMode::Strict => {
-            if !authenticity.is_signing() {
-                return Err(
-                    "Messages will be
-                published unsigned and incoming unsigned messages will be rejected. Consider adjusting
-                the validation or privacy settings in the config"
-                );
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
 impl<C: DataTransform, F: TopicSubscriptionFilter> fmt::Debug for Gossipsub<C, F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Gossipsub")
@@ -3863,6 +3596,7 @@ impl fmt::Debug for PublishConfig {
 mod local_test {
     use super::*;
     use crate::IdentTopic;
+    use crate::{GossipsubBuilder, MessageAuthenticity};
     use asynchronous_codec::Encoder;
     use quickcheck::*;
     use rand::Rng;
@@ -3924,10 +3658,13 @@ mod local_test {
         let max_transmit_size = 500;
         let config = crate::GossipsubConfigBuilder::default()
             .max_transmit_size(max_transmit_size)
-            .validation_mode(ValidationMode::Permissive)
             .build()
             .unwrap();
-        let gs: Gossipsub = Gossipsub::new(MessageAuthenticity::RandomAuthor, config).unwrap();
+        let gs: Gossipsub = GossipsubBuilder::new(MessageAuthenticity::RandomAuthor)
+            .validation_mode(ValidationMode::Permissive)
+            .config(config)
+            .build()
+            .unwrap();
 
         // Message under the limit should be fine.
         let mut rpc = empty_rpc();
@@ -3972,10 +3709,13 @@ mod local_test {
             let max_transmit_size = 500;
             let config = crate::GossipsubConfigBuilder::default()
                 .max_transmit_size(max_transmit_size)
-                .validation_mode(ValidationMode::Permissive)
                 .build()
                 .unwrap();
-            let gs: Gossipsub = Gossipsub::new(MessageAuthenticity::RandomAuthor, config).unwrap();
+            let gs: Gossipsub = GossipsubBuilder::new(MessageAuthenticity::RandomAuthor)
+                .validation_mode(ValidationMode::Permissive)
+                .config(config)
+                .build()
+                .unwrap();
 
             let mut length_codec = unsigned_varint::codec::UviBytes::default();
             length_codec.set_max_len(max_transmit_size);

@@ -18,7 +18,8 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-use crate::config::{GossipsubVersion, ValidationMode};
+use crate::behaviour::builder::ValidationMode;
+use crate::config::GossipsubVersion;
 use crate::error::{GossipsubHandlerError, ValidationError};
 use crate::handler::HandlerEvent;
 use crate::rpc_proto;
@@ -609,11 +610,12 @@ mod tests {
 
             // generate an arbitrary GossipsubMessage using the behaviour signing functionality
             let config = GossipsubConfig::default();
-            let gs: Gossipsub = Gossipsub::new(
-                crate::MessageAuthenticity::Signed(keypair.0.clone()),
-                config,
-            )
-            .unwrap();
+
+            let gs: Gossipsub =
+                crate::GossipsubBuilder::new(crate::MessageAuthenticity::Signed(keypair.0.clone()))
+                    .config(config)
+                    .build()
+                    .unwrap();
             let data = (0..g.gen_range(10, 10024))
                 .map(|_| g.gen())
                 .collect::<Vec<_>>();

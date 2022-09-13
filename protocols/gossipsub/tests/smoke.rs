@@ -33,8 +33,8 @@ use libp2p_core::{
     identity, multiaddr::Protocol, transport::MemoryTransport, upgrade, Multiaddr, Transport,
 };
 use libp2p_gossipsub::{
-    Gossipsub, GossipsubConfigBuilder, GossipsubEvent, IdentTopic as Topic, MessageAuthenticity,
-    ValidationMode,
+    Gossipsub, GossipsubBuilder, GossipsubConfigBuilder, GossipsubEvent, IdentTopic as Topic,
+    MessageAuthenticity, ValidationMode,
 };
 use libp2p_plaintext::PlainText2Config;
 use libp2p_swarm::{Swarm, SwarmEvent};
@@ -167,10 +167,14 @@ fn build_node() -> (Multiaddr, Swarm<Gossipsub>) {
         .heartbeat_interval(Duration::from_millis(200))
         .history_length(10)
         .history_gossip(10)
-        .validation_mode(ValidationMode::Permissive)
         .build()
         .unwrap();
-    let behaviour = Gossipsub::new(MessageAuthenticity::Author(peer_id.clone()), config).unwrap();
+
+    let behaviour: Gossipsub = GossipsubBuilder::new(MessageAuthenticity::Author(peer_id.clone()))
+        .validation_mode(ValidationMode::Permissive)
+        .config(config)
+        .build()
+        .unwrap();
     let mut swarm = Swarm::new(transport, behaviour, peer_id);
 
     let port = 1 + random::<u64>();

@@ -38,6 +38,7 @@ mod tests {
     use crate::subscription_filter::WhitelistSubscriptionFilter;
     use crate::transform::{DataTransform, IdentityTransform};
     use crate::types::FastMessageId;
+    use crate::{GossipsubBuilder, MessageAuthenticity};
     use libp2p_core::Endpoint;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -70,14 +71,13 @@ mod tests {
         pub fn create_network(self) -> (Gossipsub<D, F>, Vec<PeerId>, Vec<TopicHash>) {
             let keypair = libp2p_core::identity::Keypair::generate_ed25519();
             // create a gossipsub struct
-            let mut gs: Gossipsub<D, F> = Gossipsub::new_with_subscription_filter_and_transform(
-                MessageAuthenticity::Signed(keypair),
-                self.gs_config,
-                None,
-                self.subscription_filter,
-                self.data_transform,
-            )
-            .unwrap();
+            let mut gs: Gossipsub<D, F> =
+                GossipsubBuilder::new(MessageAuthenticity::Signed(keypair))
+                    .config(self.gs_config)
+                    .topic_subscription_filter(self.subscription_filter)
+                    .data_transform(self.data_transform)
+                    .build()
+                    .unwrap();
 
             if let Some((scoring_params, scoring_thresholds)) = self.scoring {
                 gs.with_peer_score(scoring_params, scoring_thresholds)
@@ -930,12 +930,12 @@ mod tests {
     /// Test Gossipsub.get_random_peers() function
     fn test_get_random_peers() {
         // generate a default GossipsubConfig
-        let gs_config = GossipsubConfigBuilder::default()
-            .validation_mode(ValidationMode::Anonymous)
+        let gs_config = GossipsubConfigBuilder::default().build().unwrap();
+        // create a gossipsub struct
+        let mut gs: Gossipsub = GossipsubBuilder::new(MessageAuthenticity::Anonymous)
+            .config(gs_config)
             .build()
             .unwrap();
-        // create a gossipsub struct
-        let mut gs: Gossipsub = Gossipsub::new(MessageAuthenticity::Anonymous, gs_config).unwrap();
 
         // create a topic and fill it with some peers
         let topic_hash = Topic::new("Test").hash().clone();
@@ -1492,6 +1492,7 @@ mod tests {
 
     #[test]
     fn explicit_peers_not_added_to_mesh_on_receiving_subscription() {
+        let _ = env_logger::try_init();
         let (gs, peers, topic_hashes) = inject_nodes1()
             .peer_no(2)
             .topics(vec![String::from("topic1")])
@@ -1506,6 +1507,22 @@ mod tests {
             vec![peers[1].clone()].into_iter().collect()
         );
 
+        println!(
+            "HOw many {}",
+            count_control_msgs(&gs, |peer_id, m| peer_id == &peers[0]
+                && match m {
+                    GossipsubControlAction::Graft { .. } => true,
+                    _ => false,
+                })
+        );
+        println!(
+            "HOw many {}",
+            count_control_msgs(&gs, |peer_id, m| peer_id == &peers[1]
+                && match m {
+                    GossipsubControlAction::Graft { .. } => true,
+                    _ => false,
+                })
+        );
         //assert that graft gets created to non-explicit peer
         assert!(
             count_control_msgs(&gs, |peer_id, m| peer_id == &peers[1]
