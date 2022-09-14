@@ -117,7 +117,10 @@
 //!     let gossipsub_config = libp2p_gossipsub::GossipsubConfig::default();
 //!     // build a gossipsub network behaviour
 //!     let mut gossipsub: libp2p_gossipsub::Gossipsub =
-//!         libp2p_gossipsub::Gossipsub::new(message_authenticity, gossipsub_config).unwrap();
+//!         libp2p_gossipsub::GossipsubBuilder::new(message_authenticity)
+//!         .config(gossipsub_config)
+//!         .build()
+//!         .unwrap();
 //!     // subscribe to the topic
 //!     gossipsub.subscribe(&topic);
 //!     // create the swarm

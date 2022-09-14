@@ -1086,6 +1086,7 @@ mod test {
         assert_eq!(builder.custom_id_version(), &None);
 
         let mut gossipsub: Gossipsub = GossipsubBuilder::new(MessageAuthenticity::Anonymous)
+            .validation_mode(crate::ValidationMode::Permissive)
             .config(builder)
             .build()
             .expect("Correct configuration");
@@ -1094,13 +1095,16 @@ mod test {
         let (protocol_config, _) = handler.listen_protocol().into_upgrade();
         let protocol_ids = protocol_config.protocol_info();
 
-        assert_eq!(protocol_ids.len(), 2);
+        assert_eq!(protocol_ids.len(), 3);
 
-        assert_eq!(protocol_ids[0].protocol_id, b"/purple/1.1.0".to_vec());
-        assert_eq!(protocol_ids[0].kind, PeerKind::Gossipsubv1_1);
+        assert_eq!(protocol_ids[0].protocol_id, b"/purple/1.1.2".to_vec());
+        assert_eq!(protocol_ids[0].kind, PeerKind::Gossipsubv1_2);
 
-        assert_eq!(protocol_ids[1].protocol_id, b"/purple/1.0.0".to_vec());
-        assert_eq!(protocol_ids[1].kind, PeerKind::Gossipsub);
+        assert_eq!(protocol_ids[1].protocol_id, b"/purple/1.1.0".to_vec());
+        assert_eq!(protocol_ids[1].kind, PeerKind::Gossipsubv1_1);
+
+        assert_eq!(protocol_ids[2].protocol_id, b"/purple/1.0.0".to_vec());
+        assert_eq!(protocol_ids[2].kind, PeerKind::Gossipsub);
     }
 
     #[test]
@@ -1115,6 +1119,7 @@ mod test {
         assert_eq!(builder.custom_id_version(), &Some(GossipsubVersion::V1_0));
 
         let mut gossipsub: Gossipsub = GossipsubBuilder::new(MessageAuthenticity::Anonymous)
+            .validation_mode(crate::ValidationMode::Permissive)
             .config(builder)
             .build()
             .expect("Correct configuration");

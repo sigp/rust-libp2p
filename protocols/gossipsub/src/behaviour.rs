@@ -1813,11 +1813,11 @@ where
 
                     // if the mesh needs peers add the peer to the mesh
                     if !self.explicit_peers.contains(propagation_source)
-                        && matches!(
+                        && !matches!(
                             self.connected_peers
                                 .get(propagation_source)
                                 .map(|v| &v.kind),
-                            Some(PeerKind::Gossipsubv1_1) | Some(PeerKind::Gossipsub)
+                            None | Some(PeerKind::NotSupported) | Some(PeerKind::Floodsub)
                         )
                         && !Self::score_below_threshold_from_scores(
                             &self.peer_score,
@@ -1830,8 +1830,9 @@ where
                             .is_backoff_with_slack(topic_hash, propagation_source)
                     {
                         if let Some(peers) = self.mesh.get_mut(topic_hash) {
+                            debug!("Peers: {}", peers.len());
                             if peers.len() < self.config.mesh_n_low()
-                                && !peers.insert(*propagation_source)
+                                && peers.insert(*propagation_source)
                             {
                                 debug!(
                                     "SUBSCRIPTION: Adding peer {} to the mesh for topic {:?}",
@@ -1952,6 +1953,8 @@ where
     fn heartbeat(&mut self) {
         debug!("Starting heartbeat");
         let start = Instant::now();
+
+        self.heartbeat_ticks += 1;
 
         let mut to_graft = HashMap::new();
         let mut to_prune = HashMap::new();
@@ -2350,8 +2353,6 @@ where
         }
 
         // The main heartbeat has completed. Handle the Episub heartbeat, if required
-        self.heartbeat_ticks += 1;
-
         if !self.config.disable_episub()
             && self.heartbeat_ticks % self.config.episub_heartbeat_ticks() == 0
         {
@@ -3514,7 +3515,7 @@ fn get_random_peers_dynamic(
             .iter()
             // Optionally ignore choked peers, and exclude Floodsub and supported peer types.
             .filter(|(p, choke_status)| {
-                f(p) && (!ignore_choked_peers | choke_status.choked_by_peer == false)
+                f(p) && (!ignore_choked_peers | !choke_status.choked_by_peer)
                     && match connected_peers.get(p) {
                         Some(connections)
                             if connections.kind != PeerKind::Floodsub

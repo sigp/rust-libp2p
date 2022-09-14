@@ -933,6 +933,7 @@ mod tests {
         let gs_config = GossipsubConfigBuilder::default().build().unwrap();
         // create a gossipsub struct
         let mut gs: Gossipsub = GossipsubBuilder::new(MessageAuthenticity::Anonymous)
+            .validation_mode(ValidationMode::Permissive)
             .config(gs_config)
             .build()
             .unwrap();
@@ -1405,6 +1406,7 @@ mod tests {
 
     #[test]
     fn test_explicit_peer_reconnects() {
+        let _ = env_logger::try_init();
         let config = GossipsubConfigBuilder::default()
             .check_explicit_peers_ticks(2)
             .build()
@@ -1418,17 +1420,17 @@ mod tests {
 
         let peer = others.get(0).unwrap();
 
-        //add peer as explicit peer
+        // Add peer as explicit peer
         gs.add_explicit_peer(peer);
 
         flush_events(&mut gs);
 
-        //disconnect peer
+        // Disconnect peer
         disconnect_peer(&mut gs, peer);
 
         gs.heartbeat();
 
-        //check that no reconnect after first heartbeat since `explicit_peer_ticks == 2`
+        // Check that no reconnect after first heartbeat since `explicit_peer_ticks == 2`
         assert_eq!(
             gs.events
                 .iter()
@@ -1507,22 +1509,6 @@ mod tests {
             vec![peers[1].clone()].into_iter().collect()
         );
 
-        println!(
-            "HOw many {}",
-            count_control_msgs(&gs, |peer_id, m| peer_id == &peers[0]
-                && match m {
-                    GossipsubControlAction::Graft { .. } => true,
-                    _ => false,
-                })
-        );
-        println!(
-            "HOw many {}",
-            count_control_msgs(&gs, |peer_id, m| peer_id == &peers[1]
-                && match m {
-                    GossipsubControlAction::Graft { .. } => true,
-                    _ => false,
-                })
-        );
         //assert that graft gets created to non-explicit peer
         assert!(
             count_control_msgs(&gs, |peer_id, m| peer_id == &peers[1]
@@ -1679,6 +1665,7 @@ mod tests {
 
     #[test]
     fn explicit_peers_not_added_to_mesh_from_fanout_on_subscribe() {
+        let _ = env_logger::try_init();
         let (mut gs, peers, _) = inject_nodes1()
             .peer_no(2)
             .topics(Vec::new())
