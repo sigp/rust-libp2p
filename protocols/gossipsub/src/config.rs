@@ -25,6 +25,7 @@ use std::time::Duration;
 use libp2p_core::PeerId;
 
 use crate::types::{FastMessageId, GossipsubMessage, MessageId, RawGossipsubMessage};
+use crate::{ChokingStrategy, DefaultStrat};
 
 /// Selector for custom Protocol Id
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,7 +40,7 @@ pub enum GossipsubVersion {
 
 /// Configuration parameters that define the performance of the gossipsub network.
 #[derive(Clone)]
-pub struct GossipsubConfig {
+pub struct GossipsubConfig<S: ChokingStrategy = DefaultStrat> {
     protocol_id: Cow<'static, str>,
     custom_id_version: Option<GossipsubVersion>,
     history_length: usize,
@@ -50,10 +51,7 @@ pub struct GossipsubConfig {
     mesh_non_choke: usize,
     mesh_max_fanout_addition: usize,
     episub_heartbeat_ticks: u64,
-    choke_duplicates_threshold: u8,
-    choke_churn: usize,
-    unchoke_threshold: u8,
-    fanout_addition_threshold: u8,
+    choking_strategy: S,
     retain_scores: usize,
     gossip_lazy: usize,
     gossip_factor: f64,
@@ -89,7 +87,7 @@ pub struct GossipsubConfig {
     published_message_ids_cache_time: Duration,
 }
 
-impl GossipsubConfig {
+impl<S: ChokingStrategy> GossipsubConfig<S> {
     // All the getters
 
     /// The protocol id to negotiate this protocol. By default, the resulting protocol id has the form
@@ -150,33 +148,15 @@ impl GossipsubConfig {
     }
 
     /// The number of heartbeats required to form a `episub_heartbeat_interval`. This interval
-    /// determines the frequency peers are choked/unchoked.
+    /// determines the frequency peers are choked/unchoked. The default value is 20.
     pub fn episub_heartbeat_ticks(&self) -> u64 {
         self.episub_heartbeat_ticks
     }
 
-    /// The percentage of duplicates a peer must send us within a `episub_heartbeat_interval` before
-    /// being considered for choking.
-    pub fn choke_duplicates_threshold(&self) -> u8 {
-        self.choke_duplicates_threshold
-    }
-
-    /// The maximum number of peers that can be separately choke'd or unchoke'd in a given
-    /// `episub_heartbeat_interval`.
-    pub fn choke_churn(&self) -> usize {
-        self.choke_churn
-    }
-
-    /// The percentage of messages we receive via gossip from a choked peer in a
-    /// `episub_heartbeat_interval` before we consider the peer for unchoking.
-    pub fn unchoke_threshold(&self) -> u8 {
-        self.unchoke_threshold
-    }
-
-    /// The percentage of messages we receive via a gossip from a fanout peer in a
-    /// `episub_heartbeat_interval` before we consider it for addition into a mesh.
-    pub fn fanout_addition_threshold(&self) -> u8 {
-        self.fanout_addition_threshold
+    /// The [`ChokingStrategy`] used to decide how to choke/unchoke peers. The default is to use
+    /// [`DefaultStrat`] with default values.
+    pub fn choking_strategy(&self) -> &S {
+        &self.choking_strategy
     }
 
     // End Episub parameters
@@ -425,7 +405,7 @@ impl GossipsubConfig {
     }
 }
 
-impl Default for GossipsubConfig {
+impl<S: ChokingStrategy + Default> Default for GossipsubConfig<S> {
     fn default() -> Self {
         // use ConfigBuilder to also validate defaults
         GossipsubConfigBuilder::default()
@@ -435,11 +415,11 @@ impl Default for GossipsubConfig {
 }
 
 /// The builder struct for constructing a gossipsub configuration.
-pub struct GossipsubConfigBuilder {
-    config: GossipsubConfig,
+pub struct GossipsubConfigBuilder<S: ChokingStrategy + Default> {
+    config: GossipsubConfig<S>,
 }
 
-impl Default for GossipsubConfigBuilder {
+impl<S: ChokingStrategy + Default> Default for GossipsubConfigBuilder<S> {
     fn default() -> Self {
         GossipsubConfigBuilder {
             config: GossipsubConfig {
@@ -453,10 +433,7 @@ impl Default for GossipsubConfigBuilder {
                 mesh_non_choke: 2,
                 mesh_max_fanout_addition: 1,
                 episub_heartbeat_ticks: 20,
-                choke_duplicates_threshold: 60,
-                choke_churn: 2,
-                unchoke_threshold: 50,
-                fanout_addition_threshold: 10,
+                choking_strategy: S::default(),
                 retain_scores: 4,
                 gossip_lazy: 6, // default to mesh_n
                 gossip_factor: 0.25,
@@ -507,18 +484,15 @@ impl Default for GossipsubConfigBuilder {
     }
 }
 
-impl From<GossipsubConfig> for GossipsubConfigBuilder {
-    fn from(config: GossipsubConfig) -> Self {
+impl<S: ChokingStrategy + Default> From<GossipsubConfig<S>> for GossipsubConfigBuilder<S> {
+    fn from(config: GossipsubConfig<S>) -> Self {
         GossipsubConfigBuilder { config }
     }
 }
 
-impl GossipsubConfigBuilder {
+impl<S: ChokingStrategy + Default> GossipsubConfigBuilder<S> {
     /// The protocol id prefix to negotiate this protocol (default is `/meshsub/1.0.0`).
-    pub fn protocol_id_prefix(
-        &mut self,
-        protocol_id_prefix: impl Into<Cow<'static, str>>,
-    ) -> &mut Self {
+    pub fn protocol_id_prefix(mut self, protocol_id_prefix: impl Into<Cow<'static, str>>) -> Self {
         self.config.custom_id_version = None;
         self.config.protocol_id = protocol_id_prefix.into();
         self
@@ -526,42 +500,42 @@ impl GossipsubConfigBuilder {
 
     /// The full protocol id to negotiate this protocol (does not append `/1.0.0` or `/1.1.0`).
     pub fn protocol_id(
-        &mut self,
+        mut self,
         protocol_id: impl Into<Cow<'static, str>>,
         custom_id_version: GossipsubVersion,
-    ) -> &mut Self {
+    ) -> Self {
         self.config.custom_id_version = Some(custom_id_version);
         self.config.protocol_id = protocol_id.into();
         self
     }
 
     /// Number of heartbeats to keep in the `memcache` (default is 5).
-    pub fn history_length(&mut self, history_length: usize) -> &mut Self {
+    pub fn history_length(mut self, history_length: usize) -> Self {
         self.config.history_length = history_length;
         self
     }
 
     /// Number of past heartbeats to gossip about (default is 3).
-    pub fn history_gossip(&mut self, history_gossip: usize) -> &mut Self {
+    pub fn history_gossip(mut self, history_gossip: usize) -> Self {
         self.config.history_gossip = history_gossip;
         self
     }
 
     /// Target number of peers for the mesh network (D in the spec, default is 6).
-    pub fn mesh_n(&mut self, mesh_n: usize) -> &mut Self {
+    pub fn mesh_n(mut self, mesh_n: usize) -> Self {
         self.config.mesh_n = mesh_n;
         self
     }
 
     /// Minimum number of peers in mesh network before adding more (D_lo in the spec, default is 4).
-    pub fn mesh_n_low(&mut self, mesh_n_low: usize) -> &mut Self {
+    pub fn mesh_n_low(mut self, mesh_n_low: usize) -> Self {
         self.config.mesh_n_low = mesh_n_low;
         self
     }
 
     /// Maximum number of peers in mesh network before removing some (D_high in the spec, default
     /// is 12).
-    pub fn mesh_n_high(&mut self, mesh_n_high: usize) -> &mut Self {
+    pub fn mesh_n_high(mut self, mesh_n_high: usize) -> Self {
         self.config.mesh_n_high = mesh_n_high;
         self
     }
@@ -570,7 +544,7 @@ impl GossipsubConfigBuilder {
 
     /// The minimum number of peers in the mesh that cannot be choked. Ignored if
     /// `disable_episub` is set. Default value is 2.
-    pub fn mesh_non_choke(&mut self, mesh_non_choke: usize) -> &mut Self {
+    pub fn mesh_non_choke(mut self, mesh_non_choke: usize) -> Self {
         self.config.mesh_non_choke = mesh_non_choke;
         self
     }
@@ -578,44 +552,21 @@ impl GossipsubConfigBuilder {
     /// The maximum number of peers that can be added into the mesh from fanout if deemed
     /// to be more efficient per episub_heartbeat_interval. Ignored if `disable_episub` is set.
     /// Default value is 1.
-    pub fn mesh_max_fanout_addition(&mut self, mesh_max_fanout_addition: usize) -> &mut Self {
+    pub fn mesh_max_fanout_addition(mut self, mesh_max_fanout_addition: usize) -> Self {
         self.config.mesh_max_fanout_addition = mesh_max_fanout_addition;
         self
     }
 
     /// The number of heartbeats required to form a `episub_heartbeat_interval`. This interval
     /// determines the frequency peers are choked/unchoked. Default value is 20.
-    pub fn episub_heartbeat_ticks(&mut self, episub_heartbeat_ticks: u64) -> &mut Self {
+    pub fn episub_heartbeat_ticks(mut self, episub_heartbeat_ticks: u64) -> Self {
         self.config.episub_heartbeat_ticks = episub_heartbeat_ticks;
         self
     }
 
-    /// The percentage of duplicates a peer must send us within a `episub_heartbeat_interval` before
-    /// being considered for choking. Default value is 60.
-    pub fn choke_duplicates_threshold(&mut self, choke_duplicates_threshold: u8) -> &mut Self {
-        self.config.choke_duplicates_threshold = choke_duplicates_threshold;
-        self
-    }
-
-    /// The maximum number of peers that can be separately choke'd or unchoke'd in a given
-    /// `episub_heartbeat_interval`. Default value is 2;
-    pub fn choke_churn(&mut self, choke_churn: usize) -> &mut Self {
-        self.config.choke_churn = choke_churn;
-        self
-    }
-
-    /// The percentage of messages we receive via gossip from a choked peer in a
-    /// `episub_heartbeat_interval` before we consider the peer for unchoking. Default value is 50.
-    pub fn unchoke_threshold(&mut self, unchoke_threshold: u8) -> &mut Self {
-        self.config.unchoke_threshold = unchoke_threshold;
-        self
-    }
-
-    /// The percentage of messages we receive via a gossip from a fanout peer in a
-    /// `episub_heartbeat_interval` before we consider it for addition into a mesh. Default value
-    /// is 10.
-    pub fn fanout_addition_threshold(&mut self, fanout_addition_threshold: u8) -> &mut Self {
-        self.config.fanout_addition_threshold = fanout_addition_threshold;
+    /// The [`ChokingStrategy`] to use for choking/unchoking peers.
+    pub fn choking_strategy(mut self, choking_strategy: S) -> Self {
+        self.config.choking_strategy = choking_strategy;
         self
     }
 
@@ -625,14 +576,14 @@ impl GossipsubConfigBuilder {
     ///
     /// At least [`Self::retain_scores`] of the retained peers will be high-scoring, while the remainder are
     /// chosen randomly (D_score in the spec, default is 4).
-    pub fn retain_scores(&mut self, retain_scores: usize) -> &mut Self {
+    pub fn retain_scores(mut self, retain_scores: usize) -> Self {
         self.config.retain_scores = retain_scores;
         self
     }
 
     /// Minimum number of peers to emit gossip to during a heartbeat (D_lazy in the spec,
     /// default is 6).
-    pub fn gossip_lazy(&mut self, gossip_lazy: usize) -> &mut Self {
+    pub fn gossip_lazy(mut self, gossip_lazy: usize) -> Self {
         self.config.gossip_lazy = gossip_lazy;
         self
     }
@@ -641,38 +592,38 @@ impl GossipsubConfigBuilder {
     ///
     /// We will send gossip to `gossip_factor * (total number of non-mesh peers)`, or
     /// `gossip_lazy`, whichever is greater. The default is 0.25.
-    pub fn gossip_factor(&mut self, gossip_factor: f64) -> &mut Self {
+    pub fn gossip_factor(mut self, gossip_factor: f64) -> Self {
         self.config.gossip_factor = gossip_factor;
         self
     }
 
     /// Initial delay in each heartbeat (default is 5 seconds).
-    pub fn heartbeat_initial_delay(&mut self, heartbeat_initial_delay: Duration) -> &mut Self {
+    pub fn heartbeat_initial_delay(mut self, heartbeat_initial_delay: Duration) -> Self {
         self.config.heartbeat_initial_delay = heartbeat_initial_delay;
         self
     }
 
     /// Time between each heartbeat (default is 1 second).
-    pub fn heartbeat_interval(&mut self, heartbeat_interval: Duration) -> &mut Self {
+    pub fn heartbeat_interval(mut self, heartbeat_interval: Duration) -> Self {
         self.config.heartbeat_interval = heartbeat_interval;
         self
     }
 
     /// The number of heartbeat ticks until we recheck the connection to explicit peers and
     /// reconnecting if necessary (default 300).
-    pub fn check_explicit_peers_ticks(&mut self, check_explicit_peers_ticks: u64) -> &mut Self {
+    pub fn check_explicit_peers_ticks(mut self, check_explicit_peers_ticks: u64) -> Self {
         self.config.check_explicit_peers_ticks = check_explicit_peers_ticks;
         self
     }
 
     /// Time to live for fanout peers (default is 60 seconds).
-    pub fn fanout_ttl(&mut self, fanout_ttl: Duration) -> &mut Self {
+    pub fn fanout_ttl(mut self, fanout_ttl: Duration) -> Self {
         self.config.fanout_ttl = fanout_ttl;
         self
     }
 
     /// The maximum byte size for each gossip (default is 2048 bytes).
-    pub fn max_transmit_size(&mut self, max_transmit_size: usize) -> &mut Self {
+    pub fn max_transmit_size(mut self, max_transmit_size: usize) -> Self {
         self.config.max_transmit_size = max_transmit_size;
         self
     }
@@ -680,7 +631,7 @@ impl GossipsubConfigBuilder {
     /// The time a connection is maintained to a peer without being in the mesh and without
     /// send/receiving a message from. Connections that idle beyond this timeout are disconnected.
     /// Default is 120 seconds.
-    pub fn idle_timeout(&mut self, idle_timeout: Duration) -> &mut Self {
+    pub fn idle_timeout(mut self, idle_timeout: Duration) -> Self {
         self.config.idle_timeout = idle_timeout;
         self
     }
@@ -689,7 +640,7 @@ impl GossipsubConfigBuilder {
     /// This settings sets the time period that messages are stored in the cache. Duplicates can be
     /// received if duplicate messages are sent at a time greater than this setting apart. The
     /// default is 1 minute.
-    pub fn duplicate_cache_time(&mut self, cache_size: Duration) -> &mut Self {
+    pub fn duplicate_cache_time(mut self, cache_size: Duration) -> Self {
         self.config.duplicate_cache_time = cache_size;
         self
     }
@@ -698,7 +649,7 @@ impl GossipsubConfigBuilder {
     /// allows a user to validate the messages before propagating them to their peers. If set,
     /// the user must manually call [`crate::Gossipsub::report_message_validation_result()`] on the
     /// behaviour to forward a message once validated.
-    pub fn validate_messages(&mut self) -> &mut Self {
+    pub fn validate_messages(mut self) -> Self {
         self.config.validate_messages = true;
         self
     }
@@ -711,7 +662,7 @@ impl GossipsubConfigBuilder {
     ///
     /// The function takes a [`GossipsubMessage`] as input and outputs a String to be
     /// interpreted as the message id.
-    pub fn message_id_fn<F>(&mut self, id_fn: F) -> &mut Self
+    pub fn message_id_fn<F>(mut self, id_fn: F) -> Self
     where
         F: Fn(&GossipsubMessage) -> MessageId + Send + Sync + 'static,
     {
@@ -727,7 +678,7 @@ impl GossipsubConfigBuilder {
     ///
     /// The function takes a [`RawGossipsubMessage`] as input and outputs a String to be interpreted
     /// as the fast message id. Default is None.
-    pub fn fast_message_id_fn<F>(&mut self, fast_id_fn: F) -> &mut Self
+    pub fn fast_message_id_fn<F>(mut self, fast_id_fn: F) -> Self
     where
         F: Fn(&RawGossipsubMessage) -> FastMessageId + Send + Sync + 'static,
     {
@@ -740,7 +691,7 @@ impl GossipsubConfigBuilder {
     ///
     /// Note: Peer exchange is not implemented today, see
     /// https://github.com/libp2p/rust-libp2p/issues/2398.
-    pub fn do_px(&mut self) -> &mut Self {
+    pub fn do_px(mut self) -> Self {
         self.config.do_px = true;
         self
     }
@@ -751,7 +702,7 @@ impl GossipsubConfigBuilder {
     /// send them signed peer records for up to [`Self::prune_peers] other peers that we
     /// know of. It is recommended that this value is larger than [`Self::mesh_n_high`] so that the
     /// pruned peer can reliably form a full mesh. The default is 16.
-    pub fn prune_peers(&mut self, prune_peers: usize) -> &mut Self {
+    pub fn prune_peers(mut self, prune_peers: usize) -> Self {
         self.config.prune_peers = prune_peers;
         self
     }
@@ -762,7 +713,7 @@ impl GossipsubConfigBuilder {
     /// the minimum time to wait. Peers running older versions may not send a backoff time,
     /// so if we receive a prune message without one, we will wait at least [`Self::prune_backoff`]
     /// before attempting to re-graft. The default is one minute.
-    pub fn prune_backoff(&mut self, prune_backoff: Duration) -> &mut Self {
+    pub fn prune_backoff(mut self, prune_backoff: Duration) -> Self {
         self.config.prune_backoff = prune_backoff;
         self
     }
@@ -772,7 +723,7 @@ impl GossipsubConfigBuilder {
     /// This is how long to wait before resubscribing to the topic. A short backoff period in case
     /// of an unsubscribe event allows reaching a healthy mesh in a more timely manner. The default
     /// is 10 seconds.
-    pub fn unsubscribe_backoff(&mut self, unsubscribe_backoff: u64) -> &mut Self {
+    pub fn unsubscribe_backoff(mut self, unsubscribe_backoff: u64) -> Self {
         self.config.unsubscribe_backoff = Duration::from_secs(unsubscribe_backoff);
         self
     }
@@ -783,7 +734,7 @@ impl GossipsubConfigBuilder {
     /// `backoff_slack * heartbeat_interval` is longer than any latencies between processing
     /// prunes on our side and processing prunes on the receiving side this guarantees that we
     /// get not punished for too early grafting. The default is 1.
-    pub fn backoff_slack(&mut self, backoff_slack: u32) -> &mut Self {
+    pub fn backoff_slack(mut self, backoff_slack: u32) -> Self {
         self.config.backoff_slack = backoff_slack;
         self
     }
@@ -791,14 +742,14 @@ impl GossipsubConfigBuilder {
     /// Whether to do flood publishing or not. If enabled newly created messages will always be
     /// sent to all peers that are subscribed to the topic and have a good enough score.
     /// The default is true.
-    pub fn flood_publish(&mut self, flood_publish: bool) -> &mut Self {
+    pub fn flood_publish(mut self, flood_publish: bool) -> Self {
         self.config.flood_publish = flood_publish;
         self
     }
 
     /// If a GRAFT comes before `graft_flood_threshold` has elapsed since the last PRUNE,
     /// then there is an extra score penalty applied to the peer through P7.
-    pub fn graft_flood_threshold(&mut self, graft_flood_threshold: Duration) -> &mut Self {
+    pub fn graft_flood_threshold(mut self, graft_flood_threshold: Duration) -> Self {
         self.config.graft_flood_threshold = graft_flood_threshold;
         self
     }
@@ -806,7 +757,7 @@ impl GossipsubConfigBuilder {
     /// Minimum number of outbound peers in the mesh network before adding more (D_out in the spec).
     /// This value must be smaller or equal than `mesh_n / 2` and smaller than `mesh_n_low`.
     /// The default is 2.
-    pub fn mesh_outbound_min(&mut self, mesh_outbound_min: usize) -> &mut Self {
+    pub fn mesh_outbound_min(mut self, mesh_outbound_min: usize) -> Self {
         self.config.mesh_outbound_min = mesh_outbound_min;
         self
     }
@@ -816,7 +767,7 @@ impl GossipsubConfigBuilder {
     /// peers to replace lower-scoring ones, if the median score of our mesh peers falls below a
     /// threshold (see https://godoc.org/github.com/libp2p/go-libp2p-pubsub#PeerScoreThresholds).
     /// The default is 60.
-    pub fn opportunistic_graft_ticks(&mut self, opportunistic_graft_ticks: u64) -> &mut Self {
+    pub fn opportunistic_graft_ticks(mut self, opportunistic_graft_ticks: u64) -> Self {
         self.config.opportunistic_graft_ticks = opportunistic_graft_ticks;
         self
     }
@@ -824,20 +775,20 @@ impl GossipsubConfigBuilder {
     /// Controls how many times we will allow a peer to request the same message id through IWANT
     /// gossip before we start ignoring them. This is designed to prevent peers from spamming us
     /// with requests and wasting our resources.
-    pub fn gossip_retransimission(&mut self, gossip_retransimission: u32) -> &mut Self {
+    pub fn gossip_retransimission(mut self, gossip_retransimission: u32) -> Self {
         self.config.gossip_retransimission = gossip_retransimission;
         self
     }
 
     /// The maximum number of new peers to graft to during opportunistic grafting. The default is 2.
-    pub fn opportunistic_graft_peers(&mut self, opportunistic_graft_peers: usize) -> &mut Self {
+    pub fn opportunistic_graft_peers(mut self, opportunistic_graft_peers: usize) -> Self {
         self.config.opportunistic_graft_peers = opportunistic_graft_peers;
         self
     }
 
     /// The maximum number of messages we will process in a given RPC. If this is unset, there is
     /// no limit. The default is None.
-    pub fn max_messages_per_rpc(&mut self, max: Option<usize>) -> &mut Self {
+    pub fn max_messages_per_rpc(mut self, max: Option<usize>) -> Self {
         self.config.max_messages_per_rpc = max;
         self
     }
@@ -847,14 +798,14 @@ impl GossipsubConfigBuilder {
     /// peer within a heartbeat, to protect from IHAVE floods. You should adjust this value from the
     /// default if your system is pushing more than 5000 messages in GossipSubHistoryGossip
     /// heartbeats; with the defaults this is 1666 messages/s. The default is 5000.
-    pub fn max_ihave_length(&mut self, max_ihave_length: usize) -> &mut Self {
+    pub fn max_ihave_length(mut self, max_ihave_length: usize) -> Self {
         self.config.max_ihave_length = max_ihave_length;
         self
     }
 
     /// GossipSubMaxIHaveMessages is the maximum number of IHAVE messages to accept from a peer
     /// within a heartbeat.
-    pub fn max_ihave_messages(&mut self, max_ihave_messages: usize) -> &mut Self {
+    pub fn max_ihave_messages(mut self, max_ihave_messages: usize) -> Self {
         self.config.max_ihave_messages = max_ihave_messages;
         self
     }
@@ -862,7 +813,7 @@ impl GossipsubConfigBuilder {
     /// By default, gossipsub will reject messages that are sent to us that has the same message
     /// source as we have specified locally. Enabling this, allows these messages and prevents
     /// penalizing the peer that sent us the message. Default is false.
-    pub fn allow_self_origin(&mut self, allow_self_origin: bool) -> &mut Self {
+    pub fn allow_self_origin(mut self, allow_self_origin: bool) -> Self {
         self.config.allow_self_origin = allow_self_origin;
         self
     }
@@ -870,34 +821,34 @@ impl GossipsubConfigBuilder {
     /// Time to wait for a message requested through IWANT following an IHAVE advertisement.
     /// If the message is not received within this window, a broken promise is declared and
     /// the router may apply behavioural penalties. The default is 3 seconds.
-    pub fn iwant_followup_time(&mut self, iwant_followup_time: Duration) -> &mut Self {
+    pub fn iwant_followup_time(mut self, iwant_followup_time: Duration) -> Self {
         self.config.iwant_followup_time = iwant_followup_time;
         self
     }
 
     /// Enable support for flooodsub peers.
-    pub fn support_floodsub(&mut self) -> &mut Self {
+    pub fn support_floodsub(mut self) -> Self {
         self.config.support_floodsub = true;
         self
     }
 
     /// Disable support for the episub upgrade.
-    pub fn disable_episub(&mut self) -> &mut Self {
+    pub fn disable_episub(mut self) -> Self {
         self.config.disable_episub = true;
         self
     }
 
     /// Published message ids time cache duration. The default is 10 seconds.
     pub fn published_message_ids_cache_time(
-        &mut self,
+        mut self,
         published_message_ids_cache_time: Duration,
-    ) -> &mut Self {
+    ) -> Self {
         self.config.published_message_ids_cache_time = published_message_ids_cache_time;
         self
     }
 
     /// Constructs a [`GossipsubConfig`] from the given configuration and validates the settings.
-    pub fn build(&self) -> Result<GossipsubConfig, &'static str> {
+    pub fn build(self) -> Result<GossipsubConfig<S>, &'static str> {
         // check all constraints on config
 
         if self.config.max_transmit_size < 100 {
@@ -929,11 +880,11 @@ impl GossipsubConfigBuilder {
             return Err("The unsubscribe_backoff parameter should be positive.");
         }
 
-        Ok(self.config.clone())
+        Ok(self.config)
     }
 }
 
-impl std::fmt::Debug for GossipsubConfig {
+impl<S: ChokingStrategy> std::fmt::Debug for GossipsubConfig<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut builder = f.debug_struct("GossipsubConfig");
         let _ = builder.field("protocol_id", &self.protocol_id);

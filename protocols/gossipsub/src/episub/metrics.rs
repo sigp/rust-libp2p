@@ -106,8 +106,20 @@ impl EpisubMetrics {
         }
     }
 
+    /// If a message turns out to be invalid, we want to remove the data here to prevent peers
+    /// sending us a bunch of invalid messages lowering their average message delivery statistics.
+    pub fn remove_invalid_message(&mut self, message_id: &MessageId) {
+        if let Some(delivery_data) = self.raw_deliveries.remove(message_id) {
+            for (peer_id, _basic_stat) in delivery_data.duplicates {
+                // Subtract an expired registered duplicate
+                // NOTE: We want this to panic in debug mode, as it should never happen.
+                *self.current_duplicates_per_peer.entry(peer_id).or_default() -= 1;
+            }
+        }
+    }
+
     /// Record that an IHAVE message has been received.
-    pub fn ihave_received(&mut self, message_ids: Vec<MessageId>, peer_id: PeerId) {
+    pub fn ihave_received(&mut self, message_ids: &[MessageId], peer_id: PeerId) {
         for message_id in message_ids {
             // Register the message as being unique if we haven't already seen this message before
             // (it should already be filtered by the duplicates filter) and record it against the
@@ -120,7 +132,7 @@ impl EpisubMetrics {
 
             // Add this peer to the list
             self.ihave_msgs
-                .entry(message_id)
+                .entry(message_id.clone())
                 .or_insert_with(|| HashSet::new())
                 .insert(peer_id);
         }
@@ -246,11 +258,23 @@ impl EpisubMetrics {
     /// mesh.
     /// This indicates that a peer is sending us messages faster than our mesh peers and
     /// may be an indicator to unchoke the peer.
+    // NOTE: We don't want peers to send us a bunch of random IHAVE messages in an attempt to be
+    // unchoked (if scoring is enabled, they would be punished if these messages are not real).
+    // Therefore we only count IHAVE messages that correspond to a message that was later received
+    // by another peer.
     pub fn ihave_messages_stats(&mut self) -> HashMap<PeerId, u8> {
         let mut ihave_count: HashMap<PeerId, usize> = HashMap::new();
-        for (_message_id, peer_id_hashset) in self.ihave_msgs.iter() {
-            for peer_id in peer_id_hashset.iter() {
-                *ihave_count.entry(*peer_id).or_default() += 100;
+        for (message_id, peer_id_hashset) in self.ihave_msgs.iter() {
+            // Make sure we actually received this message from another peer.
+            if let Some(delivery_data) = self.raw_deliveries.get(message_id) {
+                for peer_id in peer_id_hashset.iter() {
+                    // If we received the message from another peer.
+                    if !delivery_data.duplicates.is_empty()
+                        || &delivery_data.first_sender != peer_id
+                    {
+                        *ihave_count.entry(*peer_id).or_default() += 100;
+                    }
+                }
             }
         }
         let total_messages = self.raw_deliveries.len();
@@ -459,12 +483,12 @@ mod test {
 
             if id % 5 == 0 {
                 // Peer 1 sends an IHAVE message 20% of the time.
-                metrics.ihave_received(vec![message_id.clone()], peers[0]);
+                metrics.ihave_received(&vec![message_id.clone()], peers[0]);
             }
 
             if id % 2 == 0 {
                 // Peer 2 sends an IHAVE message 40% of the time.
-                metrics.ihave_received(vec![message_id.clone()], peers[1]);
+                metrics.ihave_received(&vec![message_id.clone()], peers[1]);
             }
 
             // Peer 3 is always the first, but later peer 1 and peer 2 send the message also.

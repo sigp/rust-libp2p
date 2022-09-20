@@ -29,9 +29,9 @@ use std::collections::VecDeque;
 use std::time::Duration;
 use wasm_timer::Instant;
 
-struct ExpiringElement<Element> {
+struct ExpiringElement<Value> {
     /// The element that expires
-    element: Element,
+    element: Value,
     /// The expire time.
     expires: Instant,
 }
@@ -139,6 +139,19 @@ where
         self.list.clear();
     }
 
+    /// Remove an element from the cache
+    pub fn remove(&mut self, key: &Key) -> Option<Value> {
+        // NOTE: We just remove the element from the map. The corresponding list element will
+        // eventually be removed naturally and will be ignored as it has no corresponding
+        // map.
+        // If a new element gets re-added, the old list element will still be ignored as the
+        // expiry time of the new element will not match that of the old list element. It is
+        // therefore fine to just remove from the map.
+        self.map
+            .remove(key)
+            .map(|expiry_element| expiry_element.element)
+    }
+
     pub fn contains_key(&self, key: &Key) -> bool {
         self.map.contains_key(key)
     }
@@ -175,12 +188,12 @@ where
     }
 
     pub fn insert_without_updating_expiration(&mut self, value: V) -> V {
-        //keep old expiration, only replace value of element
+        // Keep old expiration, only replace value of element
         ::std::mem::replace(&mut self.entry.get_mut().element, value)
     }
 
     pub fn insert_and_update_expiration(&mut self, value: V) -> V {
-        //We push back an additional element, the first reference in the list will be ignored
+        // We push back an additional element, the first reference in the list will be ignored
         // since we also updated the expires in the map, see below.
         self.list.push_back(ExpiringElement {
             element: self.entry.key().clone(),

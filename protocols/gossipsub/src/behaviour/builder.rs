@@ -8,20 +8,23 @@ use wasm_timer::Instant;
 use super::Gossipsub;
 use crate::backoff::BackoffStorage;
 use crate::config::GossipsubConfig;
+use crate::episub::metrics::EpisubMetrics;
 use crate::mcache::MessageCache;
 use crate::metrics::{Config as MetricsConfig, Metrics};
 use crate::subscription_filter::TopicSubscriptionFilter;
 use crate::time_cache::{DuplicateCache, TimeCache};
 use crate::transform::DataTransform;
+use crate::ChokingStrategy;
 use wasm_timer::Interval;
 
-pub struct GossipsubBuilder<D, F>
+pub struct GossipsubBuilder<D, F, S>
 where
+    S: ChokingStrategy,
     D: DataTransform,
     F: TopicSubscriptionFilter,
 {
     /// The gossipsub configuration to be used.
-    config: GossipsubConfig,
+    config: GossipsubConfig<S>,
     /// The type of configuration used to publish messages.
     publish_config: PublishConfig,
     /// The type of validation that should be done on messages.
@@ -35,8 +38,9 @@ where
     topic_subscription_filter: F,
 }
 
-impl<D, F> GossipsubBuilder<D, F>
+impl<D, F, S> GossipsubBuilder<D, F, S>
 where
+    S: ChokingStrategy + Default,
     D: DataTransform + Default,
     F: TopicSubscriptionFilter + Default,
 {
@@ -53,7 +57,7 @@ where
     }
 
     /// Sets the [`GossipsubConfig`] configuration.
-    pub fn config(mut self, config: GossipsubConfig) -> Self {
+    pub fn config(mut self, config: GossipsubConfig<S>) -> Self {
         self.config = config;
         self
     }
@@ -95,12 +99,17 @@ where
     }
 
     /// Consumes the builder and constructs a [`Gossipsub`] router from the configuration.
-    pub fn build(self) -> Result<Gossipsub<D, F>, &'static str> {
+    pub fn build(self) -> Result<Gossipsub<S, D, F>, &'static str> {
         // Set up the router given the configuration settings.
 
         // We do not allow configurations where a published message would also be rejected if it
         // were received locally.
         validate_config(&self.publish_config, &self.validation_mode)?;
+
+        // The amount of time we cache message data for episub metrics. Currently we consider the
+        // moving window between episub heartbeats.
+        let episub_metrics_retention_window =
+            self.config.heartbeat_interval() * self.config.episub_heartbeat_ticks() as u32;
 
         Ok(Gossipsub {
             metrics: self.metrics,
@@ -115,6 +124,7 @@ where
             explicit_peers: HashSet::new(),
             blacklisted_peers: HashSet::new(),
             mesh: HashMap::new(),
+            episub_metrics: EpisubMetrics::new(episub_metrics_retention_window),
             fanout: HashMap::new(),
             fanout_last_pub: HashMap::new(),
             backoffs: BackoffStorage::new(

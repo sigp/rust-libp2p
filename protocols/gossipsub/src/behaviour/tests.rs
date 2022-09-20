@@ -68,10 +68,12 @@ mod tests {
         D: DataTransform + Default + Clone + Send + 'static,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
-        pub fn create_network(self) -> (Gossipsub<D, F>, Vec<PeerId>, Vec<TopicHash>) {
+        pub fn create_network(
+            self,
+        ) -> (Gossipsub<DefaultStrat, D, F>, Vec<PeerId>, Vec<TopicHash>) {
             let keypair = libp2p_core::identity::Keypair::generate_ed25519();
             // create a gossipsub struct
-            let mut gs: Gossipsub<D, F> =
+            let mut gs: Gossipsub<DefaultStrat, D, F> =
                 GossipsubBuilder::new(MessageAuthenticity::Signed(keypair))
                     .config(self.gs_config)
                     .topic_subscription_filter(self.subscription_filter)
@@ -119,7 +121,9 @@ mod tests {
         D: DataTransform + Default + Clone + Send + 'static,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
-        pub fn create_network(&self) -> (Gossipsub<D, F>, Vec<PeerId>, Vec<TopicHash>) {
+        pub fn create_network(
+            &self,
+        ) -> (Gossipsub<DefaultStrat, D, F>, Vec<PeerId>, Vec<TopicHash>) {
             self.build().unwrap().create_network()
         }
     }
@@ -138,27 +142,29 @@ mod tests {
 
     // helper functions for testing
 
-    fn add_peer<D, F>(
-        gs: &mut Gossipsub<D, F>,
+    fn add_peer<S, D, F>(
+        gs: &mut Gossipsub<S, D, F>,
         topic_hashes: &Vec<TopicHash>,
         outbound: bool,
         explicit: bool,
     ) -> PeerId
     where
+        S: ChokingStrategy + Default + Clone + Send + 'static,
         D: DataTransform + Default + Clone + Send + 'static,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
         add_peer_with_addr(gs, topic_hashes, outbound, explicit, Multiaddr::empty())
     }
 
-    fn add_peer_with_addr<D, F>(
-        gs: &mut Gossipsub<D, F>,
+    fn add_peer_with_addr<S, D, F>(
+        gs: &mut Gossipsub<S, D, F>,
         topic_hashes: &Vec<TopicHash>,
         outbound: bool,
         explicit: bool,
         address: Multiaddr,
     ) -> PeerId
     where
+        S: ChokingStrategy + Default + Clone + Send + 'static,
         D: DataTransform + Default + Clone + Send + 'static,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
@@ -172,8 +178,8 @@ mod tests {
         )
     }
 
-    fn add_peer_with_addr_and_kind<D, F>(
-        gs: &mut Gossipsub<D, F>,
+    fn add_peer_with_addr_and_kind<S, D, F>(
+        gs: &mut Gossipsub<S, D, F>,
         topic_hashes: &Vec<TopicHash>,
         outbound: bool,
         explicit: bool,
@@ -181,6 +187,7 @@ mod tests {
         kind: Option<PeerKind>,
     ) -> PeerId
     where
+        S: ChokingStrategy + Default + Clone + Send + 'static,
         D: DataTransform + Default + Clone + Send + 'static,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
@@ -228,8 +235,9 @@ mod tests {
         peer
     }
 
-    fn disconnect_peer<D, F>(gs: &mut Gossipsub<D, F>, peer_id: &PeerId)
+    fn disconnect_peer<S, D, F>(gs: &mut Gossipsub<S, D, F>, peer_id: &PeerId)
     where
+        S: ChokingStrategy + Default + Clone + Send + 'static,
         D: DataTransform + Default + Clone + Send + 'static,
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
@@ -667,7 +675,7 @@ mod tests {
 
         let msg_id = gs.config.message_id(&message);
 
-        let config: GossipsubConfig = GossipsubConfig::default();
+        let config: GossipsubConfig<DefaultStrat> = GossipsubConfig::default();
         assert_eq!(
             publishes.len(),
             config.mesh_n_low(),
@@ -1338,8 +1346,8 @@ mod tests {
         );
     }
 
-    fn count_control_msgs<D: DataTransform, F: TopicSubscriptionFilter>(
-        gs: &Gossipsub<D, F>,
+    fn count_control_msgs<S: ChokingStrategy, D: DataTransform, F: TopicSubscriptionFilter>(
+        gs: &Gossipsub<S, D, F>,
         mut filter: impl FnMut(&PeerId, &GossipsubControlAction) -> bool,
     ) -> usize {
         gs.control_pool
@@ -1366,7 +1374,9 @@ mod tests {
                 .sum::<usize>()
     }
 
-    fn flush_events<D: DataTransform, F: TopicSubscriptionFilter>(gs: &mut Gossipsub<D, F>) {
+    fn flush_events<S: ChokingStrategy, D: DataTransform, F: TopicSubscriptionFilter>(
+        gs: &mut Gossipsub<S, D, F>,
+    ) {
         gs.control_pool.clear();
         gs.events.clear();
     }
@@ -4458,7 +4468,7 @@ mod tests {
 
     #[test]
     fn test_ignore_too_many_iwants_from_same_peer_for_same_message() {
-        let config = GossipsubConfig::default();
+        let config: GossipsubConfig = GossipsubConfig::default();
         //build gossipsub with full mesh
         let (mut gs, _, topics) = inject_nodes1()
             .peer_no(config.mesh_n_high())

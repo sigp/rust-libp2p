@@ -47,6 +47,10 @@ use wasm_timer::Instant;
 
 use crate::backoff::BackoffStorage;
 use crate::config::GossipsubConfig;
+use crate::episub::{
+    metrics::EpisubMetrics,
+    strategy::{ChokingStrategy, DefaultStrat},
+};
 use crate::error::{PublishError, SubscriptionError, ValidationError};
 use crate::gossip_promises::GossipPromises;
 use crate::handler::{GossipsubHandler, GossipsubHandlerIn, HandlerEvent};
@@ -108,11 +112,11 @@ type GossipsubNetworkBehaviourAction =
 
 /// (Episub) the choke status of a peer
 #[derive(Default, PartialEq, Debug, Clone)]
-struct ChokeState {
+pub struct ChokeState {
     /// Whether we have choked this peer.
-    peer_is_choked: bool,
+    pub peer_is_choked: bool,
     /// Whether this peer has choked us.
-    choked_by_peer: bool,
+    pub choked_by_peer: bool,
 }
 
 /// Network behaviour that handles the gossipsub protocol.
@@ -127,11 +131,12 @@ struct ChokeState {
 /// The TopicSubscriptionFilter allows applications to implement specific filters on topics to
 /// prevent unwanted messages being propagated and evaluated.
 pub struct Gossipsub<
+    S: ChokingStrategy = DefaultStrat,
     D: DataTransform = IdentityTransform,
     F: TopicSubscriptionFilter = AllowAllSubscriptionFilter,
 > {
     /// Configuration providing gossipsub performance parameters.
-    config: GossipsubConfig,
+    config: GossipsubConfig<S>,
 
     /// Events that need to be yielded to the outside when polling.
     events: VecDeque<GossipsubNetworkBehaviourAction>,
@@ -171,6 +176,11 @@ pub struct Gossipsub<
 
     /// Overlay network of connected peers - Maps topics to connected gossipsub peers.
     mesh: HashMap<TopicHash, BTreeSet<PeerId>>,
+
+    /// A collection of data based on received messages, which can be used to determine which peers
+    /// should be choked or unchoked.
+    // NOTE: If Episub is disabled, this cache never gets filled so consumes no memory.
+    episub_metrics: EpisubMetrics,
 
     /// Map of topics to list of peers that we publish to, but don't subscribe to.
     fanout: HashMap<TopicHash, BTreeSet<PeerId>>,
@@ -234,8 +244,9 @@ pub struct Gossipsub<
     metrics: Option<Metrics>,
 }
 
-impl<D, F> Gossipsub<D, F>
+impl<S, D, F> Gossipsub<S, D, F>
 where
+    S: ChokingStrategy + Send + 'static,
     D: DataTransform + Send + 'static,
     F: TopicSubscriptionFilter + Send + 'static,
 {
@@ -582,6 +593,11 @@ where
             MessageAcceptance::Reject => RejectReason::ValidationFailed,
             MessageAcceptance::Ignore => RejectReason::ValidationIgnored,
         };
+
+        // Register the message rejection with the episub metrics
+        if !self.config.disable_episub() & matches!(reject_reason, RejectReason::ValidationFailed) {
+            self.episub_metrics.remove_invalid_message(msg_id);
+        }
 
         if let Some((raw_message, originating_peers)) = self.mcache.remove(msg_id) {
             if let Some(metrics) = self.metrics.as_mut() {
@@ -1013,6 +1029,11 @@ where
                     topic
                 );
                 continue;
+            }
+
+            // Inform Episub metrics of the IHAVE message.
+            if !self.config.disable_episub() {
+                self.episub_metrics.ihave_received(&ids, *peer_id);
             }
 
             for id in ids.into_iter().filter(want_message) {
@@ -1585,6 +1606,9 @@ where
         mut raw_message: RawGossipsubMessage,
         propagation_source: &PeerId,
     ) {
+        // Timing is important for Episub metrics, so we record this instant
+        let received_time = Instant::now();
+
         // Record the received metric
         if let Some(metrics) = self.metrics.as_mut() {
             metrics.msg_recvd_unfiltered(&raw_message.topic, raw_message.raw_protobuf_len());
@@ -1610,6 +1634,15 @@ where
                     self.mcache.observe_duplicate(&msg_id, propagation_source);
                 }
 
+                // Report the duplicate with the Episub Metrics
+                if !self.config.disable_episub() {
+                    self.episub_metrics.message_received(
+                        msg_id,
+                        *propagation_source,
+                        received_time,
+                    );
+                }
+
                 // This message has been seen previously. Ignore it
                 return;
             }
@@ -1632,6 +1665,15 @@ where
 
         // Calculate the message id on the transformed data.
         let msg_id = self.config.message_id(&message);
+
+        // Register the message with the Episub Metrics
+        if !self.config.disable_episub() {
+            self.episub_metrics.message_received(
+                msg_id.clone(),
+                *propagation_source,
+                received_time,
+            );
+        }
 
         // Check the validity of the message
         // Peers get penalized if this message is invalid. We don't add it to the duplicate cache
@@ -2364,8 +2406,7 @@ where
     // performing peers into the mesh if need be.
     fn episub_heartbeat(&mut self) {
 
-        // TODO: Hardcode choking/unchoking logic now, but ultimately make it generic for user
-        // modification.
+        // Handle Choking
     }
 
     /// Emits gossip - Send IHAVE messages to a random set of gossip peers. This is applied to mesh
@@ -2976,9 +3017,10 @@ fn get_ip_addr(addr: &Multiaddr) -> Option<IpAddr> {
     })
 }
 
-impl<C, F> NetworkBehaviour for Gossipsub<C, F>
+impl<S, D, F> NetworkBehaviour for Gossipsub<S, D, F>
 where
-    C: Send + 'static + DataTransform,
+    S: Send + 'static + ChokingStrategy,
+    D: Send + 'static + DataTransform,
     F: Send + 'static + TopicSubscriptionFilter,
 {
     type ConnectionHandler = GossipsubHandler;
@@ -3560,7 +3602,9 @@ fn get_random_peers(
     get_random_peers_dynamic(topic_peers, connected_peers, topic_hash, false, |_| n, f)
 }
 
-impl<C: DataTransform, F: TopicSubscriptionFilter> fmt::Debug for Gossipsub<C, F> {
+impl<S: ChokingStrategy, D: DataTransform, F: TopicSubscriptionFilter> fmt::Debug
+    for Gossipsub<S, D, F>
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Gossipsub")
             .field("config", &self.config)
