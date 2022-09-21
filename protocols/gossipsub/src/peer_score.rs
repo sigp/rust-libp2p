@@ -21,12 +21,13 @@
 //!
 //! Manages and stores the Scoring logic of a particular peer on the gossipsub behaviour.
 
-use crate::metrics::{Metrics, Penalty};
+use crate::metrics::{self, Metrics, Penalty};
 use crate::time_cache::TimeCache;
 use crate::{MessageId, TopicHash};
 use libp2p_core::PeerId;
 use log::{debug, trace, warn};
 use std::collections::{hash_map, HashMap, HashSet};
+use std::marker::PhantomData;
 use std::net::IpAddr;
 use std::time::Duration;
 use wasm_timer::Instant;
@@ -44,7 +45,7 @@ mod tests;
 /// The number of seconds delivery messages are stored in the cache.
 const TIME_CACHE_DURATION: u64 = 120;
 
-pub(crate) struct PeerScore {
+pub(crate) struct PeerScore<E: metrics::AnyEncoder = metrics::TextEncoder> {
     params: PeerScoreParams,
     /// The score parameters.
     peer_stats: HashMap<PeerId, PeerStats>,
@@ -54,6 +55,8 @@ pub(crate) struct PeerScore {
     deliveries: TimeCache<MessageId, DeliveryRecord>,
     /// callback for monitoring message delivery times
     message_delivery_time_callback: Option<fn(&PeerId, &TopicHash, f64)>,
+    // TODO: any better way? this is horrendous
+    _phantom_encoder: PhantomData<E>,
 }
 
 /// General statistics for a given gossipsub peer.
@@ -193,7 +196,7 @@ impl Default for DeliveryRecord {
     }
 }
 
-impl PeerScore {
+impl<E: metrics::AnyEncoder> PeerScore<E> {
     /// Creates a new [`PeerScore`] using a given set of peer scoring parameters.
     #[allow(dead_code)]
     pub fn new(params: PeerScoreParams) -> Self {
@@ -210,6 +213,7 @@ impl PeerScore {
             peer_ips: HashMap::new(),
             deliveries: TimeCache::new(Duration::from_secs(TIME_CACHE_DURATION)),
             message_delivery_time_callback: callback,
+            _phantom_encoder: PhantomData,
         }
     }
 
@@ -220,7 +224,7 @@ impl PeerScore {
 
     /// Returns the score for a peer, logging metrics. This is called from the heartbeat and
     /// increments the metric counts for penalties.
-    pub fn metric_score(&self, peer_id: &PeerId, mut metrics: Option<&mut Metrics>) -> f64 {
+    pub fn metric_score(&self, peer_id: &PeerId, mut metrics: Option<&mut Metrics<E>>) -> f64 {
         let peer_stats = match self.peer_stats.get(peer_id) {
             Some(v) => v,
             None => return 0.0,

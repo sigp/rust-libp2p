@@ -46,7 +46,6 @@ use libp2p_swarm::{
 };
 use wasm_timer::Instant;
 
-use crate::backoff::BackoffStorage;
 use crate::config::{GossipsubConfig, ValidationMode};
 use crate::error::{PublishError, SubscriptionError, ValidationError};
 use crate::gossip_promises::GossipPromises;
@@ -64,6 +63,7 @@ use crate::types::{
     GossipsubSubscriptionAction, MessageAcceptance, MessageId, PeerInfo, RawGossipsubMessage,
 };
 use crate::types::{GossipsubRpc, PeerConnections, PeerKind};
+use crate::{backoff::BackoffStorage, metrics};
 use crate::{rpc_proto, TopicScoreParams};
 use std::{cmp::Ordering::Equal, fmt::Debug};
 use wasm_timer::Interval;
@@ -216,6 +216,7 @@ type GossipsubNetworkBehaviourAction =
 pub struct Gossipsub<
     D: DataTransform = IdentityTransform,
     F: TopicSubscriptionFilter = AllowAllSubscriptionFilter,
+    E: metrics::AnyEncoder = metrics::TextEncoder,
 > {
     /// Configuration providing gossipsub performance parameters.
     config: GossipsubConfig,
@@ -285,7 +286,7 @@ pub struct Gossipsub<
 
     /// Stores optional peer score data together with thresholds, decay interval and gossip
     /// promises.
-    peer_score: Option<(PeerScore, PeerScoreThresholds, Interval, GossipPromises)>,
+    peer_score: Option<(PeerScore<E>, PeerScoreThresholds, Interval, GossipPromises)>,
 
     /// Counts the number of `IHAVE` received from each peer since the last heartbeat.
     count_received_ihave: HashMap<PeerId, usize>,
@@ -313,13 +314,14 @@ pub struct Gossipsub<
     data_transform: D,
 
     /// Keep track of a set of internal metrics relating to gossipsub.
-    metrics: Option<Metrics>,
+    metrics: Option<Metrics<E>>,
 }
 
-impl<D, F> Gossipsub<D, F>
+impl<D, F, E> Gossipsub<D, F, E>
 where
     D: DataTransform + Default,
     F: TopicSubscriptionFilter + Default,
+    E: metrics::AnyEncoder,
 {
     /// Creates a [`Gossipsub`] struct given a set of parameters specified via a
     /// [`GossipsubConfig`]. This has no subscription filter and uses no compression.
@@ -342,7 +344,7 @@ where
     pub fn new_with_metrics(
         privacy: MessageAuthenticity,
         config: GossipsubConfig,
-        metrics_registry: &mut Registry,
+        metrics_registry: &mut Registry<E>,
         metrics_config: MetricsConfig,
     ) -> Result<Self, &'static str> {
         Self::new_with_subscription_filter_and_transform(
@@ -355,17 +357,18 @@ where
     }
 }
 
-impl<D, F> Gossipsub<D, F>
+impl<D, F, E> Gossipsub<D, F, E>
 where
     D: DataTransform + Default,
     F: TopicSubscriptionFilter,
+    E: metrics::AnyEncoder,
 {
     /// Creates a [`Gossipsub`] struct given a set of parameters specified via a
     /// [`GossipsubConfig`] and a custom subscription filter.
     pub fn new_with_subscription_filter(
         privacy: MessageAuthenticity,
         config: GossipsubConfig,
-        metrics: Option<(&mut Registry, MetricsConfig)>,
+        metrics: Option<(&mut Registry<E>, MetricsConfig)>,
         subscription_filter: F,
     ) -> Result<Self, &'static str> {
         Self::new_with_subscription_filter_and_transform(
@@ -378,17 +381,18 @@ where
     }
 }
 
-impl<D, F> Gossipsub<D, F>
+impl<D, F, E> Gossipsub<D, F, E>
 where
     D: DataTransform,
     F: TopicSubscriptionFilter + Default,
+    E: metrics::AnyEncoder,
 {
     /// Creates a [`Gossipsub`] struct given a set of parameters specified via a
     /// [`GossipsubConfig`] and a custom data transform.
     pub fn new_with_transform(
         privacy: MessageAuthenticity,
         config: GossipsubConfig,
-        metrics: Option<(&mut Registry, MetricsConfig)>,
+        metrics: Option<(&mut Registry<E>, MetricsConfig)>,
         data_transform: D,
     ) -> Result<Self, &'static str> {
         Self::new_with_subscription_filter_and_transform(
@@ -401,17 +405,18 @@ where
     }
 }
 
-impl<D, F> Gossipsub<D, F>
+impl<D, F, E> Gossipsub<D, F, E>
 where
     D: DataTransform,
     F: TopicSubscriptionFilter,
+    E: metrics::AnyEncoder,
 {
     /// Creates a [`Gossipsub`] struct given a set of parameters specified via a
     /// [`GossipsubConfig`] and a custom subscription filter and data transform.
     pub fn new_with_subscription_filter_and_transform(
         privacy: MessageAuthenticity,
         config: GossipsubConfig,
-        metrics: Option<(&mut Registry, MetricsConfig)>,
+        metrics: Option<(&mut Registry<E>, MetricsConfig)>,
         subscription_filter: F,
         data_transform: D,
     ) -> Result<Self, &'static str> {
@@ -422,7 +427,7 @@ where
         validate_config(&privacy, config.validation_mode())?;
 
         Ok(Gossipsub {
-            metrics: metrics.map(|(registry, cfg)| Metrics::new(registry, cfg)),
+            metrics: metrics.map(|(registry, cfg)| E::new_metrics(registry, cfg)),
             events: VecDeque::new(),
             control_pool: HashMap::new(),
             publish_config: privacy.into(),
@@ -461,10 +466,11 @@ where
     }
 }
 
-impl<D, F> Gossipsub<D, F>
+impl<D, F, E> Gossipsub<D, F, E>
 where
     D: DataTransform + Send + 'static,
     F: TopicSubscriptionFilter + Send + 'static,
+    E: metrics::AnyEncoder + 'static,
 {
     /// Lists the hashes of the topics we are currently subscribed to.
     pub fn topics(&self) -> impl Iterator<Item = &TopicHash> {
@@ -1158,7 +1164,7 @@ where
     }
 
     fn score_below_threshold_from_scores(
-        peer_score: &Option<(PeerScore, PeerScoreThresholds, Interval, GossipPromises)>,
+        peer_score: &Option<(PeerScore<E>, PeerScoreThresholds, Interval, GossipPromises)>,
         peer_id: &PeerId,
         threshold: impl Fn(&PeerScoreThresholds) -> f64,
     ) -> (bool, f64) {
@@ -3038,10 +3044,11 @@ fn get_ip_addr(addr: &Multiaddr) -> Option<IpAddr> {
     })
 }
 
-impl<C, F> NetworkBehaviour for Gossipsub<C, F>
+impl<C, F, E> NetworkBehaviour for Gossipsub<C, F, E>
 where
     C: Send + 'static + DataTransform,
     F: Send + 'static + TopicSubscriptionFilter,
+    E: 'static + metrics::AnyEncoder,
 {
     type ConnectionHandler = GossipsubHandler;
     type OutEvent = GossipsubEvent;
@@ -3625,7 +3632,9 @@ fn validate_config(
     Ok(())
 }
 
-impl<C: DataTransform, F: TopicSubscriptionFilter> fmt::Debug for Gossipsub<C, F> {
+impl<C: DataTransform, F: TopicSubscriptionFilter, E: metrics::AnyEncoder> fmt::Debug
+    for Gossipsub<C, F, E>
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Gossipsub")
             .field("config", &self.config)

@@ -22,6 +22,7 @@
 //! protocol.
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
 
 use prometheus_client::encoding::Encode;
 use prometheus_client::metrics::counter::Counter;
@@ -98,8 +99,14 @@ impl Default for Config {
 /// Whether we have ever been subscribed to this topic.
 type EverSubscribed = bool;
 
+pub type TextEncoder = Box<dyn prometheus_client::encoding::text::EncodeMetric>;
+pub type ProtoEncoder = Box<dyn prometheus_client::encoding::proto::EncodeMetric>;
+pub trait AnyEncoder: Sized {
+    fn new_metrics(registry: &mut Registry<Self>, config: Config) -> Metrics<Self>;
+}
+
 /// A collection of metrics used throughout the Gossipsub behaviour.
-pub struct Metrics {
+pub struct Metrics<Encoder: AnyEncoder> {
     /* Configuration parameters */
     /// Maximum number of topics for which we store metrics. This helps keep the metrics bounded.
     max_topics: usize,
@@ -174,10 +181,11 @@ pub struct Metrics {
     /// The number of times we have decided that an IWANT control message is required for this
     /// topic. A very high metric might indicate an underperforming network.
     topic_iwant_msgs: Family<TopicHash, Counter>,
+    _phantom_encoder: PhantomData<Encoder>,
 }
 
-impl Metrics {
-    pub fn new(registry: &mut Registry, config: Config) -> Self {
+impl AnyEncoder for TextEncoder {
+    fn new_metrics(registry: &mut Registry<Self>, config: Config) -> Metrics<Self> {
         // Destructure the config to be sure everything is used.
         let Config {
             max_topics,
@@ -302,7 +310,7 @@ impl Metrics {
             metric
         };
 
-        Self {
+        Metrics {
             max_topics,
             max_never_subscribed_topics,
             topic_info: HashMap::default(),
@@ -327,9 +335,168 @@ impl Metrics {
             heartbeat_duration,
             memcache_misses,
             topic_iwant_msgs,
+            _phantom_encoder: PhantomData,
         }
     }
+}
 
+impl AnyEncoder for ProtoEncoder {
+    fn new_metrics(registry: &mut Registry<Self>, config: Config) -> Metrics<Self> {
+        // Destructure the config to be sure everything is used.
+        let Config {
+            max_topics,
+            max_never_subscribed_topics,
+            score_buckets,
+        } = config;
+
+        macro_rules! register_family {
+            ($name:expr, $help:expr) => {{
+                let fam = Family::default();
+                registry.register($name, $help, Box::new(fam.clone()));
+                fam
+            }};
+        }
+
+        let topic_subscription_status = register_family!(
+            "topic_subscription_status",
+            "Subscription status per known topic"
+        );
+        let topic_peers_count = register_family!(
+            "topic_peers_counts",
+            "Number of peers subscribed to each topic"
+        );
+
+        let invalid_messages = register_family!(
+            "invalid_messages_per_topic",
+            "Number of invalid messages received for each topic"
+        );
+
+        let accepted_messages = register_family!(
+            "accepted_messages_per_topic",
+            "Number of accepted messages received for each topic"
+        );
+
+        let ignored_messages = register_family!(
+            "ignored_messages_per_topic",
+            "Number of ignored messages received for each topic"
+        );
+
+        let rejected_messages = register_family!(
+            "rejected_messages_per_topic",
+            "Number of rejected messages received for each topic"
+        );
+
+        let mesh_peer_counts = register_family!(
+            "mesh_peer_counts",
+            "Number of peers in each topic in our mesh"
+        );
+        let mesh_peer_inclusion_events = register_family!(
+            "mesh_peer_inclusion_events",
+            "Number of times a peer gets added to our mesh for different reasons"
+        );
+        let mesh_peer_churn_events = register_family!(
+            "mesh_peer_churn_events",
+            "Number of times a peer gets removed from our mesh for different reasons"
+        );
+        let topic_msg_sent_counts = register_family!(
+            "topic_msg_sent_counts",
+            "Number of gossip messages sent to each topic"
+        );
+        let topic_msg_published = register_family!(
+            "topic_msg_published",
+            "Number of gossip messages published to each topic"
+        );
+        let topic_msg_sent_bytes = register_family!(
+            "topic_msg_sent_bytes",
+            "Bytes from gossip messages sent to each topic"
+        );
+
+        let topic_msg_recv_counts_unfiltered = register_family!(
+            "topic_msg_recv_counts_unfiltered",
+            "Number of gossip messages received on each topic (without duplicates being filtered)"
+        );
+
+        let topic_msg_recv_counts = register_family!(
+            "topic_msg_recv_counts",
+            "Number of gossip messages received on each topic (after duplicates have been filtered)"
+        );
+        let topic_msg_recv_bytes = register_family!(
+            "topic_msg_recv_bytes",
+            "Bytes received from gossip messages for each topic"
+        );
+
+        let hist_builder = HistBuilder {
+            buckets: score_buckets,
+        };
+
+        let score_per_mesh: Family<_, _, HistBuilder> = Family::new_with_constructor(hist_builder);
+        registry.register(
+            "score_per_mesh",
+            "Histogram of scores per mesh topic",
+            Box::new(score_per_mesh.clone()),
+        );
+
+        let scoring_penalties = register_family!(
+            "scoring_penalties",
+            "Counter of types of scoring penalties given to peers"
+        );
+        let peers_per_protocol = register_family!(
+            "peers_per_protocol",
+            "Number of connected peers by protocol type"
+        );
+
+        let heartbeat_duration = Histogram::new(linear_buckets(0.0, 50.0, 10));
+        registry.register(
+            "heartbeat_duration",
+            "Histogram of observed heartbeat durations",
+            Box::new(heartbeat_duration.clone()),
+        );
+
+        let topic_iwant_msgs = register_family!(
+            "topic_iwant_msgs",
+            "Number of times we have decided an IWANT is required for this topic"
+        );
+        let memcache_misses = {
+            let metric = Counter::default();
+            registry.register(
+                "memcache_misses",
+                "Number of times a message is not found in the duplicate cache when validating",
+                Box::new(metric.clone()),
+            );
+            metric
+        };
+
+        Metrics {
+            max_topics,
+            max_never_subscribed_topics,
+            topic_info: HashMap::default(),
+            topic_subscription_status,
+            topic_peers_count,
+            invalid_messages,
+            accepted_messages,
+            ignored_messages,
+            rejected_messages,
+            mesh_peer_counts,
+            mesh_peer_inclusion_events,
+            mesh_peer_churn_events,
+            topic_msg_sent_counts,
+            topic_msg_sent_bytes,
+            topic_msg_published,
+            topic_msg_recv_counts_unfiltered,
+            topic_msg_recv_counts,
+            topic_msg_recv_bytes,
+            score_per_mesh,
+            scoring_penalties,
+            peers_per_protocol,
+            heartbeat_duration,
+            memcache_misses,
+            topic_iwant_msgs,
+            _phantom_encoder: PhantomData,
+        }
+    }
+}
+
+impl<Encoder: AnyEncoder> Metrics<Encoder> {
     fn non_subscription_topics_count(&self) -> usize {
         self.topic_info
             .values()
