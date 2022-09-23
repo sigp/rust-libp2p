@@ -35,13 +35,13 @@ mod tests {
 
     use super::super::*;
     use crate::error::ValidationError;
-    use crate::subscription_filter::WhitelistSubscriptionFilter;
-    use crate::transform::{DataTransform, IdentityTransform};
     use crate::types::FastMessageId;
     use crate::{GossipsubBuilder, MessageAuthenticity};
     use libp2p_core::Endpoint;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
+    use subscription_filter::WhitelistSubscriptionFilter;
+    use transform::{DataTransform, IdentityTransform};
 
     #[derive(Default, Builder, Debug)]
     #[builder(default)]

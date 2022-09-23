@@ -149,10 +149,8 @@ mod handler;
 mod mcache;
 pub mod metrics;
 mod peer_score;
-pub mod subscription_filter;
 pub mod time_cache;
 mod topic;
-mod transform;
 mod types;
 
 #[cfg(test)]
@@ -165,7 +163,7 @@ pub use self::behaviour::{
     builder::{GossipsubBuilder, MessageAuthenticity, ValidationMode},
     Gossipsub, GossipsubEvent,
 };
-pub use self::transform::{DataTransform, IdentityTransform};
+pub use behaviour::transform::{DataTransform, IdentityTransform};
 
 pub use self::config::{GossipsubConfig, GossipsubConfigBuilder, GossipsubVersion};
 pub use self::peer_score::{

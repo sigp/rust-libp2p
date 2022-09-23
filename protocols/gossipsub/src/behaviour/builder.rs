@@ -5,15 +5,15 @@ use libp2p_core::{identity::Keypair, PeerId};
 use prometheus_client::registry::Registry;
 use wasm_timer::Instant;
 
+use super::subscription_filter::TopicSubscriptionFilter;
+use super::transform::DataTransform;
 use super::Gossipsub;
 use crate::backoff::BackoffStorage;
 use crate::config::GossipsubConfig;
 use crate::episub::metrics::EpisubMetrics;
 use crate::mcache::MessageCache;
 use crate::metrics::{Config as MetricsConfig, Metrics};
-use crate::subscription_filter::TopicSubscriptionFilter;
 use crate::time_cache::{DuplicateCache, TimeCache};
-use crate::transform::DataTransform;
 use crate::ChokingStrategy;
 use wasm_timer::Interval;
 

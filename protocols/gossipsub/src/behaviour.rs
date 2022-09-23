@@ -58,10 +58,8 @@ use crate::mcache::MessageCache;
 use crate::metrics::{Churn, Inclusion, Metrics, Penalty};
 use crate::peer_score::{PeerScore, PeerScoreParams, PeerScoreThresholds, RejectReason};
 use crate::protocol::{ProtocolConfig, SIGNING_PREFIX};
-use crate::subscription_filter::{AllowAllSubscriptionFilter, TopicSubscriptionFilter};
 use crate::time_cache::{DuplicateCache, TimeCache};
 use crate::topic::{Hasher, Topic, TopicHash};
-use crate::transform::{DataTransform, IdentityTransform};
 use crate::types::{
     FastMessageId, GossipsubControlAction, GossipsubMessage, GossipsubSubscription,
     GossipsubSubscriptionAction, MessageAcceptance, MessageId, PeerInfo, RawGossipsubMessage,
@@ -70,11 +68,15 @@ use crate::types::{GossipsubRpc, PeerConnections, PeerKind};
 use crate::{rpc_proto, TopicScoreParams};
 use builder::{PublishConfig, ValidationMode};
 use std::{cmp::Ordering::Equal, fmt::Debug};
+use subscription_filter::{AllowAllSubscriptionFilter, TopicSubscriptionFilter};
+use transform::{DataTransform, IdentityTransform};
 use wasm_timer::Interval;
 
 pub mod builder;
+pub mod subscription_filter;
 #[cfg(test)]
 mod tests;
+pub mod transform;
 
 /// Event that can be emitted by the gossipsub behaviour.
 #[derive(Debug)]
@@ -230,7 +232,7 @@ pub struct Gossipsub<
     published_message_ids: DuplicateCache<MessageId>,
 
     /// Short term cache for fast message ids mapping them to the real message ids
-    fast_message_id_cache: TimeCache<FastMessageId, MessageId>,
+    fast_message_id_cache: TimeCache<FastMessageId, (MessageId, TopicHash)>,
 
     /// The filter used to handle message subscriptions.
     subscription_filter: F,
@@ -596,7 +598,10 @@ where
 
         // Register the message rejection with the episub metrics
         if !self.config.disable_episub() & matches!(reject_reason, RejectReason::ValidationFailed) {
-            self.episub_metrics.remove_invalid_message(msg_id);
+            if let Some(raw_message) = self.mcache.get(msg_id) {
+                self.episub_metrics
+                    .remove_invalid_message(raw_message.topic.clone(), msg_id.clone());
+            }
         }
 
         if let Some((raw_message, originating_peers)) = self.mcache.remove(msg_id) {
@@ -1033,7 +1038,7 @@ where
 
             // Inform Episub metrics of the IHAVE message.
             if !self.config.disable_episub() {
-                self.episub_metrics.ihave_received(&ids, *peer_id);
+                self.episub_metrics.ihave_received(&topic, &ids, *peer_id);
             }
 
             for id in ids.into_iter().filter(want_message) {
@@ -1563,7 +1568,8 @@ where
                 );
                 self.handle_invalid_message(
                     propagation_source,
-                    raw_message,
+                    &raw_message.topic,
+                    Some(msg_id),
                     RejectReason::BlackListedSource,
                 );
                 return false;
@@ -1591,7 +1597,12 @@ where
                 "Dropping message {} claiming to be from self but forwarded from {}",
                 msg_id, propagation_source
             );
-            self.handle_invalid_message(propagation_source, raw_message, RejectReason::SelfOrigin);
+            self.handle_invalid_message(
+                propagation_source,
+                &raw_message.topic,
+                Some(msg_id),
+                RejectReason::SelfOrigin,
+            );
             return false;
         }
 
@@ -1614,37 +1625,61 @@ where
             metrics.msg_recvd_unfiltered(&raw_message.topic, raw_message.raw_protobuf_len());
         }
 
+        // If we are not subscribed to the topic, drop it. Don't bother with the message ID. Also,
+        // penalize the peer for sending it to us.
+        if !self.mesh.contains_key(&raw_message.topic) {
+            // Reject the message and return
+            self.handle_invalid_message(
+                propagation_source,
+                &raw_message.topic,
+                None,
+                RejectReason::ValidationError(ValidationError::InvalidTopic),
+            );
+
+            debug!(
+                "Received message on a topic we are not subscribed to: {:?}",
+                raw_message.topic
+            );
+            return;
+        }
+
+        // If we can get the message id without wasting time on data-transforming, attempt it.
         let fast_message_id = self.config.fast_message_id(&raw_message);
 
+        // Check for duplicates and filter them
         if let Some(fast_message_id) = fast_message_id.as_ref() {
-            if let Some(msg_id) = self.fast_message_id_cache.get(fast_message_id) {
-                let msg_id = msg_id.clone();
-                // Report the duplicate
-                if self.message_is_valid(&msg_id, &mut raw_message, propagation_source) {
-                    if let Some((peer_score, ..)) = &mut self.peer_score {
-                        peer_score.duplicated_message(
-                            propagation_source,
-                            &msg_id,
-                            &raw_message.topic,
+            if let Some((msg_id, topic)) = self.fast_message_id_cache.get(fast_message_id) {
+                // Segregate duplicates based on topics
+                if topic == &raw_message.topic {
+                    let msg_id = msg_id.clone();
+                    // Report the duplicate
+                    if self.message_is_valid(&msg_id, &mut raw_message, propagation_source) {
+                        if let Some((peer_score, ..)) = &mut self.peer_score {
+                            peer_score.duplicated_message(
+                                propagation_source,
+                                &msg_id,
+                                &raw_message.topic,
+                            );
+                        }
+                        // Update the cache, informing that we have received a duplicate from another peer.
+                        // The peers in this cache are used to prevent us forwarding redundant messages onto
+                        // these peers.
+                        self.mcache.observe_duplicate(&msg_id, propagation_source);
+                    }
+
+                    // Report the duplicate with the Episub Metrics
+                    if !self.config.disable_episub() {
+                        self.episub_metrics.message_received(
+                            raw_message.topic.clone(),
+                            msg_id,
+                            *propagation_source,
+                            received_time,
                         );
                     }
-                    // Update the cache, informing that we have received a duplicate from another peer.
-                    // The peers in this cache are used to prevent us forwarding redundant messages onto
-                    // these peers.
-                    self.mcache.observe_duplicate(&msg_id, propagation_source);
-                }
 
-                // Report the duplicate with the Episub Metrics
-                if !self.config.disable_episub() {
-                    self.episub_metrics.message_received(
-                        msg_id,
-                        *propagation_source,
-                        received_time,
-                    );
+                    // This message has been seen previously. Ignore it
+                    return;
                 }
-
-                // This message has been seen previously. Ignore it
-                return;
             }
         }
 
@@ -1652,11 +1687,17 @@ where
         let message = match self.data_transform.inbound_transform(raw_message.clone()) {
             Ok(message) => message,
             Err(e) => {
+                let message_id = fast_message_id.as_ref().and_then(|f_msg_id| {
+                    self.fast_message_id_cache
+                        .get(&f_msg_id)
+                        .map(|(msg_id, _topic)| msg_id.clone())
+                });
                 debug!("Invalid message. Transform error: {:?}", e);
                 // Reject the message and return
                 self.handle_invalid_message(
                     propagation_source,
-                    &raw_message,
+                    &raw_message.topic,
+                    message_id.as_ref(),
                     RejectReason::ValidationError(ValidationError::TransformFailed),
                 );
                 return;
@@ -1669,6 +1710,7 @@ where
         // Register the message with the Episub Metrics
         if !self.config.disable_episub() {
             self.episub_metrics.message_received(
+                message.topic.clone(),
                 msg_id.clone(),
                 *propagation_source,
                 received_time,
@@ -1687,7 +1729,7 @@ where
             // add id to cache
             self.fast_message_id_cache
                 .entry(fast_message_id)
-                .or_insert_with(|| msg_id.clone());
+                .or_insert_with(|| (msg_id.clone(), message.topic.clone()));
         }
 
         if !self.duplicate_cache.insert(msg_id.clone()) {
@@ -1719,24 +1761,16 @@ where
         self.mcache.put(&msg_id, raw_message.clone());
 
         // Dispatch the message to the user if we are subscribed to any of the topics
-        if self.mesh.contains_key(&message.topic) {
-            debug!("Sending received message to user");
-            self.events.push_back(NetworkBehaviourAction::GenerateEvent(
-                GossipsubEvent::Message {
-                    propagation_source: *propagation_source,
-                    message_id: msg_id.clone(),
-                    message,
-                },
-            ));
-        } else {
-            debug!(
-                "Received message on a topic we are not subscribed to: {:?}",
-                message.topic
-            );
-            return;
-        }
+        debug!("Sending received message to user");
+        self.events.push_back(NetworkBehaviourAction::GenerateEvent(
+            GossipsubEvent::Message {
+                propagation_source: *propagation_source,
+                message_id: msg_id.clone(),
+                message,
+            },
+        ));
 
-        // forward the message to mesh peers, if no validation is required
+        // Forward the message to mesh peers, if no validation is required
         if !self.config.validate_messages() {
             if self
                 .forward_msg(
@@ -1757,33 +1791,23 @@ where
     fn handle_invalid_message(
         &mut self,
         propagation_source: &PeerId,
-        raw_message: &RawGossipsubMessage,
+        topic: &TopicHash,
+        message_id: Option<&MessageId>,
         reject_reason: RejectReason,
     ) {
         if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
             if let Some(metrics) = self.metrics.as_mut() {
-                metrics.register_invalid_message(&raw_message.topic);
+                metrics.register_invalid_message(&topic);
             }
 
-            let fast_message_id_cache = &self.fast_message_id_cache;
-
-            if let Some(msg_id) = self
-                .config
-                .fast_message_id(raw_message)
-                .and_then(|id| fast_message_id_cache.get(&id))
-            {
-                peer_score.reject_message(
-                    propagation_source,
-                    msg_id,
-                    &raw_message.topic,
-                    reject_reason,
-                );
+            if let Some(msg_id) = message_id {
+                peer_score.reject_message(propagation_source, msg_id, &topic, reject_reason);
                 gossip_promises.reject_message(msg_id, &reject_reason);
             } else {
                 // The message is invalid, we reject it ignoring any gossip promises. If a peer is
                 // advertising this message via an IHAVE and it's invalid it will be double
                 // penalized, one for sending us an invalid and again for breaking a promise.
-                peer_score.reject_invalid_message(propagation_source, &raw_message.topic);
+                peer_score.reject_invalid_message(propagation_source, topic);
             }
         }
     }
@@ -2405,8 +2429,25 @@ where
     // This regulates the CHOKING and UNCHOKING of peers in our mesh's. It can also add better
     // performing peers into the mesh if need be.
     fn episub_heartbeat(&mut self) {
-
         // Handle Choking
+
+        // Get a list of currently unchoked peers.
+        /*
+        let unchoked_peers = self
+            .mesh
+            .values()
+            .map(|hashset| {
+                hashset.iter().filter(|peer_id| {
+                    if !self.choke_state.peer_is_choked {
+                        Some(peer_id)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .flatten()
+            .collect();
+            */
     }
 
     /// Emits gossip - Send IHAVE messages to a random set of gossip peers. This is applied to mesh
@@ -3346,9 +3387,18 @@ where
                 // Handle any invalid messages from this peer
                 if self.peer_score.is_some() {
                     for (raw_message, validation_error) in invalid_messages {
+                        let message_id =
+                            self.config
+                                .fast_message_id(&raw_message)
+                                .and_then(|f_msg_id| {
+                                    self.fast_message_id_cache
+                                        .get(&f_msg_id)
+                                        .map(|(msg_id, _topic)| msg_id.clone())
+                                });
                         self.handle_invalid_message(
                             &propagation_source,
-                            &raw_message,
+                            &raw_message.topic,
+                            message_id.as_ref(),
                             RejectReason::ValidationError(validation_error),
                         )
                     }

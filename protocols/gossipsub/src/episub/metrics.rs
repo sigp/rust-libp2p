@@ -1,9 +1,29 @@
+// Copyright 2022 Sigma Prime Pty Ltd.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the "Software"),
+// to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the
+// Software is furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+// DEALINGS IN THE SOFTWARE.
+
 //! The metrics obtained each episub metric window.
 //! These metrics are used by various choking/unchoking algorithms in order to make their
 //! decisions.
 
 use crate::time_cache::{Entry, TimeCache};
-use crate::MessageId;
+use crate::{MessageId, TopicHash};
 use libp2p_core::PeerId;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -15,13 +35,15 @@ use std::time::{Duration, Instant};
 // include messages here that an application may REJECT or IGNORE.
 /// The metrics passed to choking algorithms.
 pub struct EpisubMetrics {
-    /// Raw information within the moving window that we are capturing these metrics
-    raw_deliveries: TimeCache<MessageId, DeliveryData>,
+    /// Raw information within the moving window that we are capturing these metrics.
+    raw_deliveries: TimeCache<UniqueMessage, DeliveryData>,
     /// A collection of IHAVE messages we have received. This is used for determining if we should
     /// unchoke a peer.
-    ihave_msgs: TimeCache<MessageId, HashSet<PeerId>>,
-    /// The number of duplicates per peer in the moving window.
-    current_duplicates_per_peer: HashMap<PeerId, usize>,
+    ihave_msgs: TimeCache<UniqueMessage, HashSet<PeerId>>,
+    /// The number of duplicates per peer, per topic, in the moving window.
+    current_duplicates_per_topic_peer: HashMap<TopicHash, HashMap<PeerId, usize>>,
+    /// The total number of messages received for a topic.
+    total_messages: HashMap<TopicHash, usize>,
 }
 
 /// A struct for storing message data along with their duplicates for building basic
@@ -45,6 +67,22 @@ pub struct BasicStat {
     pub latency: usize,
 }
 
+/// Defines a unique message. This segregates messages across topics.
+/// This is required as it cannot be assumed that message-ids are unique across topics.
+#[derive(PartialEq, Eq, Hash, Clone)]
+struct UniqueMessage {
+    /// The topic the message was seen on.
+    topic: TopicHash,
+    // Message Id associated with the message.
+    message_id: MessageId,
+}
+
+impl UniqueMessage {
+    pub fn new(topic: TopicHash, message_id: MessageId) -> Self {
+        UniqueMessage { topic, message_id }
+    }
+}
+
 impl std::ops::AddAssign for BasicStat {
     fn add_assign(&mut self, other: Self) {
         *self = Self {
@@ -59,7 +97,6 @@ impl BasicStat {
     pub fn scalar_div(mut self, scalar: usize) -> Self {
         self.order /= scalar;
         self.latency /= scalar;
-
         self
     }
 }
@@ -80,59 +117,93 @@ impl EpisubMetrics {
         EpisubMetrics {
             raw_deliveries: TimeCache::new(window_duration),
             ihave_msgs: TimeCache::new(window_duration),
-            current_duplicates_per_peer: HashMap::new(),
+            current_duplicates_per_topic_peer: HashMap::new(),
+            total_messages: HashMap::new(),
         }
     }
 
     /// Record that a message has been received.
-    pub fn message_received(&mut self, message_id: MessageId, peer_id: PeerId, received: Instant) {
-        match self.raw_deliveries.entry_without_removal(message_id) {
+    pub fn message_received(
+        &mut self,
+        topic: TopicHash,
+        message_id: MessageId,
+        peer_id: PeerId,
+        received: Instant,
+    ) {
+        let unique_message = UniqueMessage::new(topic.clone(), message_id);
+
+        match self.raw_deliveries.entry_without_removal(unique_message) {
             // This is the first time we have seen this message in this window
             Entry::Vacant(vacant_entry) => {
                 vacant_entry.insert(DeliveryData::new(peer_id, received));
+                *self.total_messages.entry(topic).or_default() += 1;
             }
             Entry::Occupied(occupied_entry) => {
-                let entry = occupied_entry.into_mut();
+                // This a is a duplicate. Register it in the DeliveryData.
+                let delivery_data = occupied_entry.into_mut();
                 // The latency of this message
-                let latency = received.duration_since(entry.time_received).as_millis() as usize;
+                let latency = received
+                    .duration_since(delivery_data.time_received)
+                    .as_millis() as usize;
                 // The order that this peer sent us this message
-                let order = entry.duplicates.len() + 1; // We add 1 as the first entry gets the 0
-                                                        // score.
+                let order = delivery_data.duplicates.len() + 1; // We add 1 as the first entry gets the 0
+                                                                // score.
                 let dupe = BasicStat { order, latency };
-                entry.duplicates.insert(peer_id, dupe);
+                delivery_data.duplicates.insert(peer_id, dupe);
 
-                *self.current_duplicates_per_peer.entry(peer_id).or_default() += 1;
+                *self
+                    .current_duplicates_per_topic_peer
+                    .entry(topic)
+                    .or_default()
+                    .entry(peer_id)
+                    .or_default() += 1;
             }
         }
     }
 
     /// If a message turns out to be invalid, we want to remove the data here to prevent peers
     /// sending us a bunch of invalid messages lowering their average message delivery statistics.
-    pub fn remove_invalid_message(&mut self, message_id: &MessageId) {
-        if let Some(delivery_data) = self.raw_deliveries.remove(message_id) {
+    pub fn remove_invalid_message(&mut self, topic: TopicHash, message_id: MessageId) {
+        let unique_message = UniqueMessage::new(topic.clone(), message_id);
+
+        if let Some(delivery_data) = self.raw_deliveries.remove(&unique_message) {
             for (peer_id, _basic_stat) in delivery_data.duplicates {
                 // Subtract an expired registered duplicate
                 // NOTE: We want this to panic in debug mode, as it should never happen.
-                *self.current_duplicates_per_peer.entry(peer_id).or_default() -= 1;
+                *self
+                    .current_duplicates_per_topic_peer
+                    .entry(topic.clone())
+                    .or_default()
+                    .entry(peer_id)
+                    .or_default() -= 1;
             }
+
+            *self.total_messages.entry(topic).or_default() -= 1;
         }
     }
 
     /// Record that an IHAVE message has been received.
-    pub fn ihave_received(&mut self, message_ids: &[MessageId], peer_id: PeerId) {
+    pub fn ihave_received(
+        &mut self,
+        topic: &TopicHash,
+        message_ids: &[MessageId],
+        peer_id: PeerId,
+    ) {
         for message_id in message_ids {
+            let unique_message = UniqueMessage::new(topic.clone(), message_id.clone());
             // Register the message as being unique if we haven't already seen this message before
             // (it should already be filtered by the duplicates filter) and record it against the
             // peers id.
 
-            // NOTE: This check, prunes old messages.
-            if self.raw_deliveries.contains_key(&message_id) {
+            // We register IHAVE messages on a per-topic basis. So it may be the case we've seen it
+            // in another topic.
+            if self.raw_deliveries.contains_key(&unique_message) {
                 continue;
             }
 
             // Add this peer to the list
             self.ihave_msgs
-                .entry(message_id.clone())
+                .entry(unique_message)
                 .or_insert_with(|| HashSet::new())
                 .insert(peer_id);
         }
@@ -141,55 +212,107 @@ impl EpisubMetrics {
     /// Returns the current number of duplicates a peer has sent us in this moving window.
     /// NOTE: This may contain expired elements and `prune_expired_elements()` should be called to remove these
     /// elements.
-    pub fn duplicates(&self, peer_id: &PeerId) -> usize {
-        *self.current_duplicates_per_peer.get(peer_id).unwrap_or(&0)
+    pub fn duplicates(&self, topic: &TopicHash, peer_id: &PeerId) -> usize {
+        *self
+            .current_duplicates_per_topic_peer
+            .get(topic)
+            .and_then(|map| map.get(peer_id))
+            .unwrap_or(&0)
     }
 
     /// Calculates the percentage of duplicates sent for each peer in the given moving window. This
     /// removes expired elements.
-    pub fn duplicates_percentage(&mut self) -> HashMap<PeerId, u8> {
+    /// For efficiency, this calculates the duplicate percentages for all known topics. Therefore
+    /// this only need be called once.
+    pub fn duplicates_percentage(&mut self) -> HashMap<TopicHash, HashMap<PeerId, u8>> {
         self.prune_expired_elements();
-        let messages = self.raw_deliveries.len();
 
-        self.current_duplicates_per_peer
-            .iter()
-            .map(|(peer_id, duplicates)| (*peer_id, (*duplicates * 100 / messages) as u8))
-            .collect()
+        let mut result = HashMap::with_capacity(self.current_duplicates_per_topic_peer.len());
+
+        for (topic, peer_map) in self.current_duplicates_per_topic_peer.iter() {
+            // We should have a value, if not use 1 to avoid a div by 0.
+            let message_total = self.total_messages.get(topic).unwrap_or(&1);
+
+            let topic_peer_hashmap: HashMap<PeerId, u8> = peer_map
+                .iter()
+                .map(|(peer_id, duplicates)| (*peer_id, (*duplicates * 100 / message_total) as u8))
+                .collect();
+
+            result
+                .entry(topic.clone())
+                .or_insert_with(|| topic_peer_hashmap);
+        }
+        result
     }
 
     /// The unsorted average basic stat per peer over the current moving window.
     /// NOTE: The first message sender is considered to have no latency, i.e latency == 0, anyone who does not
     /// send a duplicate does not get counted.
-    pub fn average_stat_per_peer(&mut self) -> Vec<(PeerId, BasicStat)> {
+    /// For efficiency, this calculates the duplicate percentages for all known topics. Therefore
+    /// this only need be called once.
+    pub fn average_stat_per_topic_peer(
+        &mut self,
+    ) -> HashMap<TopicHash, HashMap<PeerId, BasicStat>> {
         // Remove any expired elements
         self.prune_expired_elements();
-        let mut total_latency: HashMap<PeerId, BasicStat> = HashMap::new();
-        // The number of messages participated in.
-        let mut count: HashMap<PeerId, usize> = HashMap::new();
 
-        for (_message_id, delivery_data) in self.raw_deliveries.iter() {
+        let mut total_latency: HashMap<TopicHash, HashMap<PeerId, BasicStat>> = HashMap::new();
+        // The number of messages participated in.
+        let mut count: HashMap<TopicHash, HashMap<PeerId, usize>> = HashMap::new();
+
+        for (unique_message, delivery_data) in self.raw_deliveries.iter() {
             // The sender receives 0 latency
-            *count.entry(delivery_data.first_sender).or_default() += 1;
+            *count
+                .entry(unique_message.topic.clone())
+                .or_default()
+                .entry(delivery_data.first_sender)
+                .or_default() += 1;
 
             // Add the duplicate latencies
             for (peer_id, stat) in delivery_data.duplicates.iter() {
-                *total_latency.entry(*peer_id).or_default() += *stat;
-                *count.entry(*peer_id).or_default() += 1;
+                *total_latency
+                    .entry(unique_message.topic.clone())
+                    .or_default()
+                    .entry(*peer_id)
+                    .or_default() += *stat;
+                *count
+                    .entry(unique_message.topic.clone())
+                    .or_default()
+                    .entry(*peer_id)
+                    .or_default() += 1;
             }
         }
 
-        return total_latency
-            .into_iter()
-            .map(|(peer_id, stat)| (peer_id, stat.scalar_div(*count.get(&peer_id).unwrap_or(&1))))
-            .collect();
+        // Calculate the percentages
+        for (topic, map) in total_latency.iter_mut() {
+            for (peer_id, basic_stat) in map.iter_mut() {
+                *basic_stat = basic_stat.scalar_div(
+                    *count
+                        .get(topic)
+                        .and_then(|map| map.get(peer_id))
+                        .unwrap_or(&1),
+                );
+            }
+        }
+        total_latency
     }
 
     /// Given a percentile, provides the percentage of messages per peer that exist in that
     /// percentile. The percentile must be a number between 0 and 100.
     /// Elements from the cache get pruned before counting.
-    pub fn percentile_latency_per_peer(&mut self, percentile: u8) -> HashMap<PeerId, u8> {
+    /// For efficiency, this calculates the duplicate percentages for all known topics. Therefore
+    /// this only need be called once.
+    pub fn percentile_latency_per_topic_peer(
+        &mut self,
+        percentile: u8,
+    ) -> HashMap<TopicHash, HashMap<PeerId, u8>> {
         // Remove any old messages from the moving window cache.
         self.prune_expired_elements();
+
+        if percentile >= 100 {
+            // NOTE: The percentile was > 100, we don't return an error, just return an empty set.
+            return HashMap::new();
+        }
 
         // A little struct to store efficiently in a BinaryHeap and get the correct ordering.
         #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -198,56 +321,93 @@ impl EpisubMetrics {
             peer_id: PeerId,
         }
 
-        // Collect the latency for all duplicate messages
-        let mut message_count = 0;
-        let mut data_points_count = 0;
+        // Collect the latency for all duplicate messages, per topic.
+        let mut message_count = HashMap::with_capacity(5);
+        let mut data_points_count: HashMap<TopicHash, usize> = HashMap::with_capacity(5);
+        let mut latency_percentiles = HashMap::new();
         // Assume there's going to be quite a few messages.
-        let mut latency_percentile = std::collections::BinaryHeap::with_capacity(1000);
-        for (_message_id, delivery_data) in self.raw_deliveries.iter() {
-            message_count += 1;
+
+        for (unique_message, delivery_data) in self.raw_deliveries.iter() {
+            *message_count
+                .entry(unique_message.topic.clone())
+                .or_default() += 1;
+
+            let latency_percentile = latency_percentiles
+                .entry(unique_message.topic.clone())
+                .or_insert_with(|| std::collections::BinaryHeap::with_capacity(100));
             latency_percentile.push(PercentileData {
                 peer_id: delivery_data.first_sender,
                 latency: 0,
             });
-            data_points_count += 1; // The first message sender counts as a data point with 0
-                                    // latency.
+            // The first message sender counts as a data point with 0 latency
+            *data_points_count
+                .entry(unique_message.topic.clone())
+                .or_default() += 1;
+
             for (peer_id, basic_stat) in delivery_data.duplicates.iter() {
                 latency_percentile.push(PercentileData {
                     latency: basic_stat.latency,
                     peer_id: *peer_id,
                 });
-                data_points_count += 1;
+                *data_points_count
+                    .entry(unique_message.topic.clone())
+                    .or_default() += 1;
             }
         }
 
-        // Count the number of times a peer ends up in the `percentile`.
-        let percentile_cutoff =
-            ((percentile as f32 * data_points_count as f32 / 100.0).ceil()) as usize;
+        // Count the number of times a peer ends up in the `percentile`, per topic
+        let percentile_cutoff = data_points_count
+            .iter()
+            .map(|(topic, count)| {
+                (
+                    topic.clone(),
+                    ((percentile as f32 * (*count as f32) / 100.0).ceil()) as usize,
+                )
+            })
+            .collect::<HashMap<_, _>>();
 
-        if percentile_cutoff > data_points_count {
-            // NOTE: The percentile was > 100, we don't return an error, just return an empty set.
-            return HashMap::new();
-        }
-
-        let mut percentage_counts_per_peer: HashMap<PeerId, usize> = HashMap::new();
+        let mut percentage_counts_per_topic_peer: HashMap<TopicHash, HashMap<PeerId, usize>> =
+            HashMap::new();
 
         // Remove the elements that should exist in the percentile
         // The -1 is to account for the rounding in calculating the cutoff to account for
         // percentiles that split data indexes. This makes the percentile inclusive.
-        for _ in percentile_cutoff.saturating_sub(1)..data_points_count {
-            if let Some(PercentileData {
-                peer_id,
-                latency: _,
-            }) = latency_percentile.pop()
-            {
-                *percentage_counts_per_peer.entry(peer_id).or_default() += 100; // Results in a total percentage
+        for (topic, cutoff) in percentile_cutoff.into_iter() {
+            if let Some(latency_percentile) = latency_percentiles.get_mut(&topic) {
+                if let Some(count) = data_points_count.get(&topic) {
+                    for _ in cutoff.saturating_sub(1)..*count {
+                        if let Some(PercentileData {
+                            peer_id,
+                            latency: _,
+                        }) = latency_percentile.pop()
+                        {
+                            *percentage_counts_per_topic_peer
+                                .entry(topic.clone())
+                                .or_default()
+                                .entry(peer_id)
+                                .or_default() += 100; // Results in a total percentage
+                        }
+                    }
+                }
             }
         }
 
         // Calculate the percentage
-        percentage_counts_per_peer
+        percentage_counts_per_topic_peer
             .into_iter()
-            .map(|(peer_id, count)| (peer_id, (count / message_count) as u8))
+            .map(|(topic, map)| {
+                (
+                    topic.clone(),
+                    map.into_iter()
+                        .map(|(peer_id, count)| {
+                            (
+                                peer_id,
+                                (count / message_count.get(&topic).unwrap_or(&1)) as u8,
+                            )
+                        })
+                        .collect::<HashMap<PeerId, u8>>(),
+                )
+            })
             .collect()
     }
 
@@ -262,26 +422,42 @@ impl EpisubMetrics {
     // unchoked (if scoring is enabled, they would be punished if these messages are not real).
     // Therefore we only count IHAVE messages that correspond to a message that was later received
     // by another peer.
-    pub fn ihave_messages_stats(&mut self) -> HashMap<PeerId, u8> {
-        let mut ihave_count: HashMap<PeerId, usize> = HashMap::new();
-        for (message_id, peer_id_hashset) in self.ihave_msgs.iter() {
+    pub fn ihave_messages_stats(&mut self) -> HashMap<TopicHash, HashMap<PeerId, u8>> {
+        let mut ihave_count: HashMap<TopicHash, HashMap<PeerId, usize>> = HashMap::new();
+        for (unique_message, peer_id_hashset) in self.ihave_msgs.iter() {
             // Make sure we actually received this message from another peer.
-            if let Some(delivery_data) = self.raw_deliveries.get(message_id) {
+            if let Some(delivery_data) = self.raw_deliveries.get(unique_message) {
                 for peer_id in peer_id_hashset.iter() {
                     // If we received the message from another peer.
                     if !delivery_data.duplicates.is_empty()
                         || &delivery_data.first_sender != peer_id
                     {
-                        *ihave_count.entry(*peer_id).or_default() += 100;
+                        *ihave_count
+                            .entry(unique_message.topic.clone())
+                            .or_default()
+                            .entry(*peer_id)
+                            .or_default() += 100;
                     }
                 }
             }
         }
-        let total_messages = self.raw_deliveries.len();
 
         ihave_count
             .into_iter()
-            .map(|(peer_id, message_count)| (peer_id, (message_count / total_messages) as u8))
+            .map(|(topic, map)| {
+                (
+                    topic.clone(),
+                    map.into_iter()
+                        .map(|(peer_id, message_count)| {
+                            (
+                                peer_id,
+                                (message_count / self.total_messages.get(&topic).unwrap_or(&1))
+                                    as u8,
+                            )
+                        })
+                        .collect(),
+                )
+            })
             .collect()
     }
 
@@ -289,13 +465,25 @@ impl EpisubMetrics {
     // This is used to handle current cumulative values. We can add/subtract values as we go for
     // more complex metrics.
     pub fn prune_expired_elements(&mut self) {
-        while let Some((_message_id, delivery_data)) = self.raw_deliveries.remove_expired() {
+        while let Some((unique_message, delivery_data)) = self.raw_deliveries.remove_expired() {
             for (peer_id, _basic_stat) in delivery_data.duplicates {
                 // Subtract an expired registered duplicate
                 // NOTE: We want this to panic in debug mode, as it should never happen.
-                *self.current_duplicates_per_peer.entry(peer_id).or_default() -= 1;
+                *self
+                    .current_duplicates_per_topic_peer
+                    .entry(unique_message.topic.clone())
+                    .or_default()
+                    .entry(peer_id)
+                    .or_default() -= 1;
+                *self
+                    .total_messages
+                    .entry(unique_message.topic.clone())
+                    .or_default() -= 1;
             }
         }
+
+        // Remove the ihave_msgs_cache.
+        self.ihave_msgs.remove_expired();
     }
 }
 
@@ -313,7 +501,7 @@ mod test {
 
         // Make this a closure so we can run it multiple times to make sure pruning is working as
         // expected.
-        let mut run_test = || {
+        let mut run_test = |topic: TopicHash| {
             let start_time = Instant::now();
             // Lets have 5 Peer Ids. In the first 100ms the peers send messages as follows
             // Message 1: P1, 10ms P2, 5ms P3, 10ms P4, P5
@@ -352,84 +540,113 @@ mod test {
             ];
 
             // First message
-            metrics.message_received(message_ids[0].clone(), peers[0].clone(), start_time.clone());
             metrics.message_received(
+                topic.clone(),
+                message_ids[0].clone(),
+                peers[0].clone(),
+                start_time.clone(),
+            );
+            metrics.message_received(
+                topic.clone(),
                 message_ids[0].clone(),
                 peers[1].clone(),
                 start_time.clone() + Duration::from_millis(10),
             );
             metrics.message_received(
+                topic.clone(),
                 message_ids[0].clone(),
                 peers[2].clone(),
                 start_time.clone() + Duration::from_millis(15),
             );
             metrics.message_received(
+                topic.clone(),
                 message_ids[0].clone(),
                 peers[3].clone(),
                 start_time.clone() + Duration::from_millis(25),
             );
             metrics.message_received(
+                topic.clone(),
                 message_ids[0].clone(),
                 peers[4].clone(),
                 start_time.clone() + Duration::from_millis(25),
             );
 
             // Second message
-            metrics.message_received(message_ids[1].clone(), peers[1].clone(), start_time.clone());
             metrics.message_received(
+                topic.clone(),
+                message_ids[1].clone(),
+                peers[1].clone(),
+                start_time.clone(),
+            );
+            metrics.message_received(
+                topic.clone(),
                 message_ids[1].clone(),
                 peers[0].clone(),
                 start_time.clone() + Duration::from_millis(2),
             );
             metrics.message_received(
+                topic.clone(),
                 message_ids[1].clone(),
                 peers[2].clone(),
                 start_time.clone() + Duration::from_millis(5),
             );
             metrics.message_received(
+                topic.clone(),
                 message_ids[1].clone(),
                 peers[3].clone(),
                 start_time.clone() + Duration::from_millis(15),
             );
             metrics.message_received(
+                topic.clone(),
                 message_ids[1].clone(),
                 peers[4].clone(),
                 start_time.clone() + Duration::from_millis(15),
             );
 
             // Third message
-            metrics.message_received(message_ids[2].clone(), peers[4].clone(), start_time.clone());
             metrics.message_received(
+                topic.clone(),
+                message_ids[2].clone(),
+                peers[4].clone(),
+                start_time.clone(),
+            );
+            metrics.message_received(
+                topic.clone(),
                 message_ids[2].clone(),
                 peers[2].clone(),
                 start_time.clone() + Duration::from_millis(3),
             );
             metrics.message_received(
+                topic.clone(),
                 message_ids[2].clone(),
                 peers[0].clone(),
                 start_time.clone() + Duration::from_millis(8),
             );
             metrics.message_received(
+                topic.clone(),
                 message_ids[2].clone(),
                 peers[1].clone(),
                 start_time.clone() + Duration::from_millis(28),
             );
             metrics.message_received(
+                topic.clone(),
                 message_ids[2].clone(),
                 peers[3].clone(),
                 start_time.clone() + Duration::from_millis(28),
             );
 
             // Check the results
-            for (peer_id, basic_stat) in metrics.average_stat_per_peer() {
-                let peer_idx = peers
-                    .iter()
-                    .position(|peer| peer == &peer_id)
-                    .expect("Must exist");
-                println!("Peer: {} Avg_Latency: {}", peer_idx + 1, basic_stat.latency);
-                assert_eq!(expected_latencies[peer_idx], basic_stat.latency);
-                println!("Peer: {} Avg_Order: {}", peer_idx + 1, basic_stat.order);
-                assert_eq!(expected_orders[peer_idx], basic_stat.order);
+            for (_topic, map) in metrics.average_stat_per_topic_peer() {
+                for (peer_id, basic_stat) in map.iter() {
+                    let peer_idx = peers
+                        .iter()
+                        .position(|peer| peer == peer_id)
+                        .expect("Must exist");
+                    println!("Peer: {} Avg_Latency: {}", peer_idx + 1, basic_stat.latency);
+                    assert_eq!(expected_latencies[peer_idx], basic_stat.latency);
+                    println!("Peer: {} Avg_Order: {}", peer_idx + 1, basic_stat.order);
+                    assert_eq!(expected_orders[peer_idx], basic_stat.order);
+                }
             }
 
             // Check the percentile calculations
@@ -437,34 +654,38 @@ mod test {
 
             let mut check_id = 0;
             for latency_check in latency_checks {
-                for (peer_id, percentage_count) in
-                    metrics.percentile_latency_per_peer(latency_check).iter()
+                for (_topic, map) in metrics
+                    .percentile_latency_per_topic_peer(latency_check)
+                    .iter()
                 {
-                    let peer_idx = peers
-                        .iter()
-                        .position(|peer| peer == peer_id)
-                        .expect("Must exist");
-                    println!(
-                        "Peer: {}, {} ,  {}_percentile_latency: {}",
-                        peer_idx + 1,
-                        peer_id,
-                        latency_check,
-                        percentage_count
-                    );
-                    assert_eq!(expected_percentiles[check_id][peer_idx], *percentage_count);
+                    for (peer_id, percentage_count) in map.iter() {
+                        let peer_idx = peers
+                            .iter()
+                            .position(|peer| peer == peer_id)
+                            .expect("Must exist");
+                        println!(
+                            "Peer: {}, {} ,  {}_percentile_latency: {}",
+                            peer_idx + 1,
+                            peer_id,
+                            latency_check,
+                            percentage_count
+                        );
+                        assert_eq!(expected_percentiles[check_id][peer_idx], *percentage_count);
+                    }
                 }
                 // Keep track of expected result id.
                 check_id += 1;
             }
         };
 
+        let topic = TopicHash::from_raw("test");
         // Perform the test.
-        run_test();
+        run_test(topic.clone());
 
         // Test to make sure we prune expired elements.
         std::thread::sleep(Duration::from_millis(100));
 
-        run_test();
+        run_test(topic);
     }
 
     #[test]
@@ -477,36 +698,39 @@ mod test {
 
         let total_messages = 100u8;
         let peers: Vec<PeerId> = (0..3).map(|_| PeerId::random()).collect();
+        let topic = TopicHash::from_raw("test");
 
         for id in 0..total_messages {
             let message_id = MessageId::new(&id.to_be_bytes());
 
             if id % 5 == 0 {
                 // Peer 1 sends an IHAVE message 20% of the time.
-                metrics.ihave_received(&vec![message_id.clone()], peers[0]);
+                metrics.ihave_received(&topic, &vec![message_id.clone()], peers[0]);
             }
 
             if id % 2 == 0 {
                 // Peer 2 sends an IHAVE message 40% of the time.
-                metrics.ihave_received(&vec![message_id.clone()], peers[1]);
+                metrics.ihave_received(&topic, &vec![message_id.clone()], peers[1]);
             }
 
             // Peer 3 is always the first, but later peer 1 and peer 2 send the message also.
-            metrics.message_received(message_id.clone(), peers[2], Instant::now());
+            metrics.message_received(topic.clone(), message_id.clone(), peers[2], Instant::now());
 
-            metrics.message_received(message_id.clone(), peers[0], Instant::now());
-            metrics.message_received(message_id, peers[1], Instant::now());
+            metrics.message_received(topic.clone(), message_id.clone(), peers[0], Instant::now());
+            metrics.message_received(topic.clone(), message_id, peers[1], Instant::now());
         }
 
         // Check to make sure the percentages work out.
 
-        for (peer_id, ihave_percentage) in metrics.ihave_messages_stats() {
-            let peer_idx = peers
-                .iter()
-                .position(|peer| *peer == peer_id)
-                .expect("Must exist");
-            println!("Peer: {}, {}", peer_idx + 1, ihave_percentage,);
-            assert_eq!(expected_percentages[peer_idx], ihave_percentage);
+        for (_topic, map) in metrics.ihave_messages_stats() {
+            for (peer_id, ihave_percentage) in map {
+                let peer_idx = peers
+                    .iter()
+                    .position(|peer| *peer == peer_id)
+                    .expect("Must exist");
+                println!("Peer: {}, {}", peer_idx + 1, ihave_percentage,);
+                assert_eq!(expected_percentages[peer_idx], ihave_percentage);
+            }
         }
     }
 }
