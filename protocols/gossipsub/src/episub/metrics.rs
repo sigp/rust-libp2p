@@ -475,11 +475,13 @@ impl EpisubMetrics {
                     .or_default()
                     .entry(peer_id)
                     .or_default() -= 1;
-                *self
-                    .total_messages
-                    .entry(unique_message.topic.clone())
-                    .or_default() -= 1;
             }
+
+            // Decrement the total message stats
+            *self
+                .total_messages
+                .entry(unique_message.topic.clone())
+                .or_default() -= 1;
         }
 
         // Remove the ihave_msgs_cache.
@@ -709,7 +711,7 @@ mod test {
             }
 
             if id % 2 == 0 {
-                // Peer 2 sends an IHAVE message 40% of the time.
+                // Peer 2 sends an IHAVE message 50% of the time.
                 metrics.ihave_received(&topic, &vec![message_id.clone()], peers[1]);
             }
 
@@ -728,7 +730,7 @@ mod test {
                     .iter()
                     .position(|peer| *peer == peer_id)
                     .expect("Must exist");
-                println!("Peer: {}, {}", peer_idx + 1, ihave_percentage,);
+                println!("Peer: {}, {}", peer_idx + 1, ihave_percentage);
                 assert_eq!(expected_percentages[peer_idx], ihave_percentage);
             }
         }
