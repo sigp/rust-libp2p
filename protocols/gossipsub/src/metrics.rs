@@ -99,8 +99,8 @@ impl Default for Config {
 /// Whether we have ever been subscribed to this topic.
 type EverSubscribed = bool;
 
-pub type TextEncoder = Box<dyn prometheus_client::encoding::text::EncodeMetric>;
-pub type ProtoEncoder = Box<dyn prometheus_client::encoding::proto::EncodeMetric>;
+pub type TextEncoder = Box<dyn prometheus_client::encoding::text::SendSyncEncodeMetric>;
+pub type ProtoEncoder = Box<dyn prometheus_client::encoding::proto::SendSyncEncodeMetric>;
 pub trait AnyEncoder: Sized {
     fn new_metrics(registry: &mut Registry<Self>, config: Config) -> Metrics<Self>;
 }
