@@ -2430,24 +2430,18 @@ where
     // performing peers into the mesh if need be.
     fn episub_heartbeat(&mut self) {
         // Handle Choking
+        self.config.choking_strategy().choke_peers(
+            &mut self.topic_peers,
+            &self.mesh,
+            &mut self.episub_metrics,
+        );
 
-        // Get a list of currently unchoked peers.
-        /*
-        let unchoked_peers = self
-            .mesh
-            .values()
-            .map(|hashset| {
-                hashset.iter().filter(|peer_id| {
-                    if !self.choke_state.peer_is_choked {
-                        Some(peer_id)
-                    } else {
-                        None
-                    }
-                })
-            })
-            .flatten()
-            .collect();
-            */
+        // Handle Unchoking
+        self.config.choking_strategy().unchoke_peers(
+            &mut self.topic_peers,
+            &self.mesh,
+            &mut self.episub_metrics,
+        );
     }
 
     /// Emits gossip - Send IHAVE messages to a random set of gossip peers. This is applied to mesh
