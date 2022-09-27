@@ -527,7 +527,7 @@ impl Metrics {
 /// Reasons why a peer was included in the mesh.
 #[derive(PartialEq, Eq, Hash, Encode, Clone)]
 pub enum Inclusion {
-    /// Peer was a fanaout peer.
+    /// Peer was a fanout peer.
     Fanout,
     /// Included from random selection.
     Random,
@@ -535,6 +535,8 @@ pub enum Inclusion {
     Subscribed,
     /// Peer was included to fill the outbound quota.
     Outbound,
+    /// Peer was added via an episub FanoutAddition.
+    FanoutAddition,
 }
 
 /// Reasons why a peer was removed from the mesh.

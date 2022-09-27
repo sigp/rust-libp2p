@@ -854,8 +854,13 @@ where
         }
 
         match self.connected_peers.get(peer).map(|v| &v.kind) {
+            // We log errors, but proceed with sending the message. This shouldn't happen in
+            // principle.
             Some(PeerKind::Floodsub) => {
                 error!("Attempted to prune a Floodsub peer");
+            }
+            Some(PeerKind::NotSupported) | None => {
+                error!("Attempted to Prune an unknown peer");
             }
             Some(PeerKind::Gossipsub) => {
                 // GossipSub v1.0 -- no peer exchange, the peer won't be able to parse it anyway
@@ -865,10 +870,7 @@ where
                     backoff: None,
                 };
             }
-            None => {
-                error!("Attempted to Prune an unknown peer");
-            }
-            _ => {} // Gossipsub 1.1 peer perform the `Prune`
+            Some(PeerKind::Gossipsubv1_1) | Some(PeerKind::Gossipsubv1_2) => {} // Gossipsub 1.1 peer perform the `Prune`
         }
 
         // Select peers for peer exchange
@@ -2442,6 +2444,80 @@ where
             &self.mesh,
             &mut self.episub_metrics,
         );
+
+        // Handle potential Fanout additions
+        let potential_mesh_additions = self.config.choking_strategy().fanout_addition(
+            &self.mesh,
+            &self.connected_peers,
+            &mut self.episub_metrics,
+        );
+
+        // Check our meshes to make sure there is room of these, if so, unchoke them and graft
+        // them.
+        for (topic, potential_peers) in potential_mesh_additions.into_iter() {
+            let mut peers_to_graft = HashSet::new();
+            if let Some(mesh_peers) = self.mesh.get_mut(&topic) {
+                for peer_id in potential_peers {
+                    // Check the score and mesh back-off times
+                    if mesh_peers.len() < self.config.mesh_n_high()
+                        && !Self::score_below_threshold_from_scores(
+                            &self.peer_score,
+                            &peer_id,
+                            |_| 0.0,
+                        )
+                        .0
+                        && !self.backoffs.is_backoff_with_slack(&topic, &peer_id)
+                    {
+                        // Update the choke state if needed.
+                        if let Some(choke_state) = self
+                            .topic_peers
+                            .get_mut(&topic)
+                            .and_then(|peers| peers.get_mut(&peer_id))
+                        {
+                            if choke_state.peer_is_choked {
+                                debug!("Unchoking fanout peer addition: {}", peer_id);
+                                choke_state.peer_is_choked = false;
+                            }
+                        }
+
+                        if mesh_peers.insert(peer_id) {
+                            debug!(
+                                "FANOUT ADDITION: Adding fanout peer {} to the mesh for topic {:?}",
+                                peer_id, topic
+                            );
+                            if let Some(m) = self.metrics.as_mut() {
+                                m.peers_included(&topic, Inclusion::FanoutAddition, 1)
+                            }
+                            // send graft to the peer
+                            debug!("Sending GRAFT to peer {} for topic {:?}", peer_id, topic);
+                            if let Some((peer_score, ..)) = &mut self.peer_score {
+                                peer_score.graft(&peer_id, topic.clone());
+                            }
+
+                            peers_to_graft.insert(peer_id);
+                        }
+                    }
+                }
+            }
+            for peer_id in peers_to_graft {
+                if self
+                    .send_message(
+                        peer_id,
+                        GossipsubRpc {
+                            subscriptions: Vec::new(),
+                            messages: Vec::new(),
+                            control_msgs: vec![GossipsubControlAction::Graft {
+                                topic_hash: topic.clone(),
+                            }],
+                        }
+                        .into_protobuf(),
+                    )
+                    .is_err()
+                {
+                    error!("Failed sending fanout addition grafts.");
+                }
+            }
+        }
     }
 
     /// Emits gossip - Send IHAVE messages to a random set of gossip peers. This is applied to mesh

@@ -48,8 +48,6 @@ pub struct GossipsubConfig<S: ChokingStrategy = DefaultStrat> {
     mesh_n: usize,
     mesh_n_low: usize,
     mesh_n_high: usize,
-    mesh_non_choke: usize,
-    mesh_max_fanout_addition: usize,
     episub_heartbeat_ticks: u64,
     choking_strategy: S,
     retain_scores: usize,
@@ -133,20 +131,6 @@ impl<S: ChokingStrategy> GossipsubConfig<S> {
         self.mesh_n_high
     }
 
-    // Episub parameters
-
-    /// The minimum number of peers in the mesh that cannot be choked. Ignored if
-    /// `disable_episub` is set.
-    pub fn mesh_non_choke(&self) -> usize {
-        self.mesh_non_choke
-    }
-
-    /// The maximum number of peers that can be added into the mesh from fanout if deemed
-    /// to be more efficient per episub_heartbeat_interval. Ignored if `disable_episub` is set.
-    pub fn mesh_max_fanout_addition(&self) -> usize {
-        self.mesh_max_fanout_addition
-    }
-
     /// The number of heartbeats required to form a `episub_heartbeat_interval`. This interval
     /// determines the frequency peers are choked/unchoked. The default value is 20.
     pub fn episub_heartbeat_ticks(&self) -> u64 {
@@ -158,8 +142,6 @@ impl<S: ChokingStrategy> GossipsubConfig<S> {
     pub fn choking_strategy(&self) -> &S {
         &self.choking_strategy
     }
-
-    // End Episub parameters
 
     /// Affects how peers are selected when pruning a mesh due to over subscription.
     ///
@@ -430,8 +412,6 @@ impl<S: ChokingStrategy + Default> Default for GossipsubConfigBuilder<S> {
                 mesh_n: 6,
                 mesh_n_low: 5,
                 mesh_n_high: 12,
-                mesh_non_choke: 2,
-                mesh_max_fanout_addition: 1,
                 episub_heartbeat_ticks: 20,
                 choking_strategy: S::default(),
                 retain_scores: 4,
@@ -540,23 +520,6 @@ impl<S: ChokingStrategy + Default> GossipsubConfigBuilder<S> {
         self
     }
 
-    // Episub parameters
-
-    /// The minimum number of peers in the mesh that cannot be choked. Ignored if
-    /// `disable_episub` is set. Default value is 2.
-    pub fn mesh_non_choke(mut self, mesh_non_choke: usize) -> Self {
-        self.config.mesh_non_choke = mesh_non_choke;
-        self
-    }
-
-    /// The maximum number of peers that can be added into the mesh from fanout if deemed
-    /// to be more efficient per episub_heartbeat_interval. Ignored if `disable_episub` is set.
-    /// Default value is 1.
-    pub fn mesh_max_fanout_addition(mut self, mesh_max_fanout_addition: usize) -> Self {
-        self.config.mesh_max_fanout_addition = mesh_max_fanout_addition;
-        self
-    }
-
     /// The number of heartbeats required to form a `episub_heartbeat_interval`. This interval
     /// determines the frequency peers are choked/unchoked. Default value is 20.
     pub fn episub_heartbeat_ticks(mut self, episub_heartbeat_ticks: u64) -> Self {
@@ -569,8 +532,6 @@ impl<S: ChokingStrategy + Default> GossipsubConfigBuilder<S> {
         self.config.choking_strategy = choking_strategy;
         self
     }
-
-    // End Episub parameters
 
     /// Affects how peers are selected when pruning a mesh due to over subscription.
     ///
