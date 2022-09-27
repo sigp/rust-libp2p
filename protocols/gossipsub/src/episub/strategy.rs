@@ -360,10 +360,6 @@ impl ChokingStrategy for DefaultStrat {
                         continue;
                     }
                     for (peer_id, message_percent) in peer_map.into_iter() {
-                        debug!(
-                            "Peer {}, message_percent_latency: {} threshold: {}",
-                            peer_id, message_percent, message_threshold
-                        );
                         if message_percent >= message_threshold {
                             // Choke the peer, if its in the mesh.
                             if choke_potential_peer(

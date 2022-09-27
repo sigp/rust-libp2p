@@ -5428,31 +5428,42 @@ mod tests {
         let topic_hash = Topic::new(topic).hash();
 
         // Send 10 messages, and have the last 10 peers always send later duplicates
-        for count in 0..10 {
-            let raw_message = RawGossipsubMessage {
-                source: None,
-                data: vec![count as u8],
-                sequence_number: Some(count as u64),
-                topic: topic_hash.clone(),
-                signature: None,
-                key: None,
-                validated: true,
-            };
-
-            for peer_id in peers.iter() {
-                gs.handle_received_message(raw_message.clone(), peer_id);
+        for peer_id in peers.iter() {
+            for count in 0..10 {
+                let raw_message = RawGossipsubMessage {
+                    source: None,
+                    data: vec![count as u8],
+                    sequence_number: Some(count as u64),
+                    topic: topic_hash.clone(),
+                    signature: None,
+                    key: None,
+                    validated: true,
+                };
+                gs.handle_received_message(raw_message, peer_id);
             }
         }
 
         // Running the episub heartbeat, should choke two peers by default, as there is only a
         // single topic.
-        gs.episub_heartbeat();
+        for run in 1..5 {
+            // Every time we run the heartbeat we should choke 2 peers.
+            gs.episub_heartbeat();
 
-        for (_topic, peers) in gs.episub_metrics.duplicates_percentage().iter() {
-            for (peer, percentage) in peers.iter() {
-                println!("Peer {} percentage {}", peer, percentage);
+            let mut choke_count = 0;
+            for (_topic, peers) in gs.topic_peers.iter() {
+                for (_peer_id, choke_state) in peers.iter() {
+                    if choke_state.peer_is_choked {
+                        choke_count += 1;
+                    }
+                }
             }
+            assert!(run * 2 >= choke_count);
         }
+
+        // Running it any amount of times, should leave 2 in the mesh
+        gs.episub_heartbeat();
+        gs.episub_heartbeat();
+        gs.episub_heartbeat();
 
         let mut choke_count = 0;
         for (_topic, peers) in gs.topic_peers.iter() {
@@ -5462,6 +5473,95 @@ mod tests {
                 }
             }
         }
-        assert_eq!(2, choke_count);
+        // There is variation in the latency, so we have to put upper bounds.
+        assert!(8 >= choke_count);
+    }
+
+    #[test]
+    /// Test that we actually do choke nodes with latency mixed in.
+    fn test_basic_choke_with_latency() {
+        // The node should:
+        // - Choke the default number of peers in the episub heartbeat.
+
+        let _ = env_logger::try_init();
+        let topic = String::from("test_choke");
+        let subscribe_topic = vec![topic.clone()];
+        let subscribe_topic_hash = vec![Topic::new(topic.clone()).hash()];
+        let (mut gs, peers, topic_hashes) = inject_nodes1()
+            .peer_no(10)
+            .topics(subscribe_topic)
+            .to_subscribe(true)
+            .create_network();
+
+        assert!(
+            gs.mesh.get(&topic_hashes[0]).is_some(),
+            "Subscribe should add a new entry to the mesh[topic] hashmap"
+        );
+
+        // The nodes each send a graft for the subscribe topic.
+        for peer_id in peers.iter() {
+            gs.handle_graft(&peer_id, subscribe_topic_hash.clone());
+        }
+
+        let topic_hash = Topic::new(topic).hash();
+
+        let deterministic_peers: Vec<_> = peers.iter().collect();
+
+        // Send 10 messages, and have the last 10 peers always send later duplicates
+        let start_time = Instant::now();
+        for peer_id in deterministic_peers.iter() {
+            println!(
+                "Peer id: {} message_latency: {}",
+                peer_id,
+                start_time.elapsed().as_millis()
+            );
+            for count in 0..10 {
+                let raw_message = RawGossipsubMessage {
+                    source: None,
+                    data: vec![count as u8],
+                    sequence_number: Some(count as u64),
+                    topic: topic_hash.clone(),
+                    signature: None,
+                    key: None,
+                    validated: true,
+                };
+                gs.handle_received_message(raw_message, peer_id);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // Running the episub heartbeat,
+        // Should only choke the top few peers based on them existing in the 70th percentile for
+        // latency.
+
+        gs.episub_heartbeat();
+        // Print latencies
+        for (_topic, map) in gs
+            .episub_metrics
+            .percentile_latency_per_topic_peer(70)
+            .iter()
+        {
+            for (peer_id, message_percent_in_percentile) in map.iter() {
+                println!(
+                    "PeerId {}, percent_in_latency: {}",
+                    peer_id, message_percent_in_percentile
+                );
+            }
+        }
+
+        // Running it any amount of times, should only choke 3 peers, in the top 70 percentile.
+        gs.episub_heartbeat();
+        gs.episub_heartbeat();
+        gs.episub_heartbeat();
+
+        let mut choke_count = 0;
+        for (_topic, peers) in gs.topic_peers.iter() {
+            for (_peer_id, choke_state) in peers.iter() {
+                if choke_state.peer_is_choked {
+                    choke_count += 1;
+                }
+            }
+        }
+        assert!(choke_count < 5);
     }
 }

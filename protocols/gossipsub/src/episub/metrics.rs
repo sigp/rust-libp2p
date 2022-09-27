@@ -314,21 +314,22 @@ impl EpisubMetrics {
         let mut message_count = HashMap::with_capacity(5);
         let mut data_points_count: HashMap<TopicHash, usize> = HashMap::with_capacity(5);
         let mut latency_percentiles = HashMap::new();
-        // Assume there's going to be quite a few messages.
 
         for (unique_message, delivery_data) in self.raw_deliveries.iter() {
             *message_count
                 .entry(unique_message.topic.clone())
                 .or_default() += 1;
 
+            // Assume there's going to be quite a few messages.
             let latency_percentile = latency_percentiles
                 .entry(unique_message.topic.clone())
                 .or_insert_with(|| std::collections::BinaryHeap::with_capacity(100));
+
+            // The first message sender counts as a data point with 0 latency
             latency_percentile.push(PercentileData {
                 peer_id: delivery_data.first_sender,
                 latency: 0,
             });
-            // The first message sender counts as a data point with 0 latency
             *data_points_count
                 .entry(unique_message.topic.clone())
                 .or_default() += 1;
@@ -344,13 +345,13 @@ impl EpisubMetrics {
             }
         }
 
-        // Count the number of times a peer ends up in the `percentile`, per topic
+        // Calculate the number of samples that exist inside the specified percentile.
         let percentile_cutoff = data_points_count
             .iter()
             .map(|(topic, count)| {
                 (
                     topic.clone(),
-                    ((percentile as f32 * (*count as f32) / 100.0).ceil()) as usize,
+                    ((percentile as f32 * (*count as f32) / 100.0).floor()) as usize,
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -359,12 +360,10 @@ impl EpisubMetrics {
             HashMap::new();
 
         // Remove the elements that should exist in the percentile
-        // The -1 is to account for the rounding in calculating the cutoff to account for
-        // percentiles that split data indexes. This makes the percentile inclusive.
         for (topic, cutoff) in percentile_cutoff.into_iter() {
             if let Some(latency_percentile) = latency_percentiles.get_mut(&topic) {
                 if let Some(count) = data_points_count.get(&topic) {
-                    for _ in cutoff.saturating_sub(1)..*count {
+                    for _ in cutoff..*count {
                         if let Some(PercentileData {
                             peer_id,
                             latency: _,
@@ -504,7 +503,7 @@ mod test {
             // Average latency for P2 = ( 10 + 0 + 28) /3 = 12
             // Average latency for P3 = ( 15 + 5 + 3 ) /3 = 7
             // Average latency for P4 = ( 25 + 15 + 28 ) /3 = 22
-            // Average latency for P5 = ( 25 + 15 + 0 ) /3 = 13
+            // Average latency for P5 = ( 25 + 15 + 1 ) /3 = 13
 
             // Expected average latencies
             let expected_latencies = [3, 12, 7, 22, 13];
@@ -520,10 +519,10 @@ mod test {
 
             // Percentile Latency Counts
             // M1P1, M2P2, M3P5, M2P1 (2ms), M3P3 (3ms), M2P3 (5ms), M3P1 (8ms) |50th Percentile|, M1P2 (10ms)   M1P3 (15ms), M1P4
-            // (15ms), M1P5 (15ms),| 80th Percentile| M1P4(25ms) , M1P5 (25ms) |90th Percentile|, M3P2 (28ms) , M3P4 (28ms).
+            // (15ms), M1P5 (15ms), M1P4(25ms) , | 80th Percentile| M1P5 (25ms) |90th Percentile|, M3P2 (28ms) , M3P4 (28ms).
 
             let expected_50_percentile_counts = [0, 66, 33, 100, 66];
-            let expected_80_percentile_counts = [0, 33, 0, 66, 33];
+            let expected_80_percentile_counts = [0, 33, 0, 33, 33];
             let expected_90_percentile_counts = [0, 33, 0, 33, 0];
             let expected_percentiles = [
                 expected_50_percentile_counts,
@@ -560,7 +559,7 @@ mod test {
                 topic.clone(),
                 message_ids[0].clone(),
                 peers[4].clone(),
-                start_time.clone() + Duration::from_millis(25),
+                start_time.clone() + Duration::from_millis(26),
             );
 
             // Second message
@@ -696,7 +695,7 @@ mod test {
         let mut run_test = |topic: TopicHash| {
             let start_time = Instant::now();
             // Lets have 5 Peer Ids. In the first 100ms the peers send messages as follows
-            // Message 1: P1, 10ms P2, 5ms P3, 10ms P4, P5
+            // Message 1: P1, 10ms P2, 5ms P3, 10ms P4, 11ms P5
             // Message 2: P2, 2ms P1, 3ms P3, 10ms, P4, P5
             // Message 3: P5, 3ms P3, 5ms P1, 20ms, P2, P4
 
@@ -704,7 +703,7 @@ mod test {
             // Average latency for P2 = ( 10 + 0 + 28) /3 = 12
             // Average latency for P3 = ( 15 + 5 + 3 ) /3 = 7
             // Average latency for P4 = ( 25 + 15 + 28 ) /3 = 22
-            // Average latency for P5 = ( 25 + 15 + 0 ) /3 = 13
+            // Average latency for P5 = ( 25 + 15 + 1 ) /3 = 14
 
             // Expected average latencies
             let expected_latencies = [3, 12, 7, 22, 13];
@@ -720,10 +719,10 @@ mod test {
 
             // Percentile Latency Counts
             // M1P1, M2P2, M3P5, M2P1 (2ms), M3P3 (3ms), M2P3 (5ms), M3P1 (8ms) |50th Percentile|, M1P2 (10ms)   M1P3 (15ms), M1P4
-            // (15ms), M1P5 (15ms),| 80th Percentile| M1P4(25ms) , M1P5 (25ms) |90th Percentile|, M3P2 (28ms) , M3P4 (28ms).
+            // (15ms), M1P5 (15ms), M1P4(25ms) , | 80th Percentile| M1P5 (26ms) |90th Percentile|, M3P2 (28ms) , M3P4 (28ms).
 
             let expected_50_percentile_counts = [0, 66, 33, 100, 66];
-            let expected_80_percentile_counts = [0, 33, 0, 66, 33];
+            let expected_80_percentile_counts = [0, 33, 0, 33, 33];
             let expected_90_percentile_counts = [0, 33, 0, 33, 0];
             let expected_percentiles = [
                 expected_50_percentile_counts,
@@ -795,7 +794,7 @@ mod test {
                 topic.clone(),
                 message_ids[0].clone(),
                 peers[4].clone(),
-                start_time.clone() + Duration::from_millis(25),
+                start_time.clone() + Duration::from_millis(26),
             );
             // Throw in a random message
             metrics.message_received(
@@ -1056,7 +1055,7 @@ mod test {
                 );
                 total_peers += 1;
             }
-            assert_eq!(total_peers, 4); // There should be 4 peers returned
+            assert_eq!(total_peers, 3); // There should be 3 peers returned
         }
     }
 }
