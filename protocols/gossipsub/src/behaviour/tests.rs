@@ -5396,4 +5396,72 @@ mod tests {
         // We unsubscribe from the topic.
         let _ = gs.unsubscribe(&Topic::new(topic));
     }
+
+    // Episub-based Tests
+
+    #[test]
+    /// Test that we actually do choke nodes.
+    fn test_basic_choke() {
+        // The node should:
+        // - Choke the default number of peers in the episub heartbeat.
+
+        let _ = env_logger::try_init();
+        let topic = String::from("test_choke");
+        let subscribe_topic = vec![topic.clone()];
+        let subscribe_topic_hash = vec![Topic::new(topic.clone()).hash()];
+        let (mut gs, peers, topic_hashes) = inject_nodes1()
+            .peer_no(10)
+            .topics(subscribe_topic)
+            .to_subscribe(true)
+            .create_network();
+
+        assert!(
+            gs.mesh.get(&topic_hashes[0]).is_some(),
+            "Subscribe should add a new entry to the mesh[topic] hashmap"
+        );
+
+        // The nodes each send a graft for the subscribe topic.
+        for peer_id in peers.iter() {
+            gs.handle_graft(&peer_id, subscribe_topic_hash.clone());
+        }
+
+        let topic_hash = Topic::new(topic).hash();
+
+        // Send 10 messages, and have the last 10 peers always send later duplicates
+        for count in 0..10 {
+            let raw_message = RawGossipsubMessage {
+                source: None,
+                data: vec![count as u8],
+                sequence_number: Some(count as u64),
+                topic: topic_hash.clone(),
+                signature: None,
+                key: None,
+                validated: true,
+            };
+
+            for peer_id in peers.iter() {
+                gs.handle_received_message(raw_message.clone(), peer_id);
+            }
+        }
+
+        // Running the episub heartbeat, should choke two peers by default, as there is only a
+        // single topic.
+        gs.episub_heartbeat();
+
+        for (_topic, peers) in gs.episub_metrics.duplicates_percentage().iter() {
+            for (peer, percentage) in peers.iter() {
+                println!("Peer {} percentage {}", peer, percentage);
+            }
+        }
+
+        let mut choke_count = 0;
+        for (_topic, peers) in gs.topic_peers.iter() {
+            for (_peer_id, choke_state) in peers.iter() {
+                if choke_state.peer_is_choked {
+                    choke_count += 1;
+                }
+            }
+        }
+        assert_eq!(2, choke_count);
+    }
 }

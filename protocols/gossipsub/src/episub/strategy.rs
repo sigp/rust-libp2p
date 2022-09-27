@@ -27,6 +27,7 @@ use crate::behaviour::ChokeState;
 use crate::types::{PeerConnections, PeerKind};
 use crate::TopicHash;
 use libp2p_core::PeerId;
+use log::debug;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub trait ChokingStrategy {
@@ -279,7 +280,7 @@ impl ChokingStrategy for DefaultStrat {
             // Check the peer satisfies the duplicates threshold constraint
             if let Some((threshold, metrics)) = duplicate_metrics.as_ref() {
                 if let Some(duplicates_seen) = metrics.get(topic).and_then(|map| map.get(peer_id)) {
-                    if duplicates_seen >= threshold {
+                    if duplicates_seen <= threshold {
                         return false;
                     }
                 }
@@ -292,6 +293,7 @@ impl ChokingStrategy for DefaultStrat {
             {
                 if peer_choke_state.peer_is_choked == false {
                     // Choke the peer and increment the counter
+                    debug!("EPISUB: Choking peer: {} in topic: {}", peer_id, topic);
                     peer_choke_state.peer_is_choked = true;
                     return true;
                 }
@@ -358,6 +360,10 @@ impl ChokingStrategy for DefaultStrat {
                         continue;
                     }
                     for (peer_id, message_percent) in peer_map.into_iter() {
+                        debug!(
+                            "Peer {}, message_percent_latency: {} threshold: {}",
+                            peer_id, message_percent, message_threshold
+                        );
                         if message_percent >= message_threshold {
                             // Choke the peer, if its in the mesh.
                             if choke_potential_peer(
@@ -437,6 +443,7 @@ impl ChokingStrategy for DefaultStrat {
                 .and_then(|set| set.get_mut(peer_id))
             {
                 if choke_state.peer_is_choked == true {
+                    debug!("Unchoking peer: {} in topic: {}", peer_id, topic);
                     choke_state.peer_is_choked = false;
                 }
             }

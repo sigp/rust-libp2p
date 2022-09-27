@@ -1280,7 +1280,6 @@ where
                             m.peers_included(&topic_hash, Inclusion::Subscribed, 1)
                         }
                     }
-
                     // If the peer did not previously exist in any mesh, inform the handler
                     peer_added_to_mesh(
                         *peer_id,
@@ -1898,7 +1897,6 @@ where
                             .is_backoff_with_slack(topic_hash, propagation_source)
                     {
                         if let Some(peers) = self.mesh.get_mut(topic_hash) {
-                            debug!("Peers: {}", peers.len());
                             if peers.len() < self.config.mesh_n_low()
                                 && peers.insert(*propagation_source)
                             {

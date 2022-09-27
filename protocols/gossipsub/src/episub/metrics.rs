@@ -42,8 +42,8 @@ pub struct EpisubMetrics {
     ihave_msgs: TimeCache<UniqueMessage, HashSet<PeerId>>,
     /// The number of duplicates per peer, per topic, in the moving window.
     current_duplicates_per_topic_peer: HashMap<TopicHash, HashMap<PeerId, usize>>,
-    /// The total number of messages received for a topic.
-    total_messages: HashMap<TopicHash, usize>,
+    /// The total number of messages received for a topic. Excluding duplicates.
+    total_unique_messages: HashMap<TopicHash, usize>,
 }
 
 /// A struct for storing message data along with their duplicates for building basic
@@ -118,7 +118,7 @@ impl EpisubMetrics {
             raw_deliveries: TimeCache::new(window_duration),
             ihave_msgs: TimeCache::new(window_duration),
             current_duplicates_per_topic_peer: HashMap::new(),
-            total_messages: HashMap::new(),
+            total_unique_messages: HashMap::new(),
         }
     }
 
@@ -136,7 +136,7 @@ impl EpisubMetrics {
             // This is the first time we have seen this message in this window
             Entry::Vacant(vacant_entry) => {
                 vacant_entry.insert(DeliveryData::new(peer_id, received));
-                *self.total_messages.entry(topic).or_default() += 1;
+                *self.total_unique_messages.entry(topic).or_default() += 1;
             }
             Entry::Occupied(occupied_entry) => {
                 // This a is a duplicate. Register it in the DeliveryData.
@@ -149,14 +149,16 @@ impl EpisubMetrics {
                 let order = delivery_data.duplicates.len() + 1; // We add 1 as the first entry gets the 0
                                                                 // score.
                 let dupe = BasicStat { order, latency };
-                delivery_data.duplicates.insert(peer_id, dupe);
-
-                *self
-                    .current_duplicates_per_topic_peer
-                    .entry(topic)
-                    .or_default()
-                    .entry(peer_id)
-                    .or_default() += 1;
+                if delivery_data.first_sender != peer_id {
+                    if delivery_data.duplicates.insert(peer_id, dupe).is_none() {
+                        *self
+                            .current_duplicates_per_topic_peer
+                            .entry(topic)
+                            .or_default()
+                            .entry(peer_id)
+                            .or_default() += 1;
+                    }
+                }
             }
         }
     }
@@ -177,8 +179,6 @@ impl EpisubMetrics {
                     .entry(peer_id)
                     .or_default() -= 1;
             }
-
-            *self.total_messages.entry(topic).or_default() -= 1;
         }
     }
 
@@ -209,17 +209,6 @@ impl EpisubMetrics {
         }
     }
 
-    /// Returns the current number of duplicates a peer has sent us in this moving window.
-    /// NOTE: This may contain expired elements and `prune_expired_elements()` should be called to remove these
-    /// elements.
-    pub fn duplicates(&self, topic: &TopicHash, peer_id: &PeerId) -> usize {
-        *self
-            .current_duplicates_per_topic_peer
-            .get(topic)
-            .and_then(|map| map.get(peer_id))
-            .unwrap_or(&0)
-    }
-
     /// Calculates the percentage of duplicates sent for each peer in the given moving window. This
     /// removes expired elements.
     /// For efficiency, this calculates the duplicate percentages for all known topics. Therefore
@@ -231,7 +220,7 @@ impl EpisubMetrics {
 
         for (topic, peer_map) in self.current_duplicates_per_topic_peer.iter() {
             // We should have a value, if not use 1 to avoid a div by 0.
-            let message_total = self.total_messages.get(topic).unwrap_or(&1);
+            let message_total = self.total_unique_messages.get(topic).unwrap_or(&1);
 
             let topic_peer_hashmap: HashMap<PeerId, u8> = peer_map
                 .iter()
@@ -451,7 +440,8 @@ impl EpisubMetrics {
                         .map(|(peer_id, message_count)| {
                             (
                                 peer_id,
-                                (message_count / self.total_messages.get(&topic).unwrap_or(&1))
+                                (message_count
+                                    / self.total_unique_messages.get(&topic).unwrap_or(&1))
                                     as u8,
                             )
                         })
@@ -477,9 +467,9 @@ impl EpisubMetrics {
                     .or_default() -= 1;
             }
 
-            // Decrement the total message stats
+            // Decrement the total unique message stats
             *self
-                .total_messages
+                .total_unique_messages
                 .entry(unique_message.topic.clone())
                 .or_default() -= 1;
         }
@@ -691,6 +681,282 @@ mod test {
     }
 
     #[test]
+    // This test throws assorted messages in various other topics, as a test to ensure that all
+    // metrics are correctly segregated by topic and other topics do not effect the result of any
+    // given topic.
+    fn test_latency_order_and_percentile_with_mixed_topics() {
+        let mut metrics = EpisubMetrics::new(Duration::from_millis(100));
+        // Used to keep track of expired messages.
+
+        let peers: Vec<PeerId> = (0..5).map(|_| PeerId::random()).collect();
+        let message_ids: Vec<MessageId> = (0..3).map(|id| MessageId::new(&[id as u8])).collect();
+
+        // Make this a closure so we can run it multiple times to make sure pruning is working as
+        // expected.
+        let mut run_test = |topic: TopicHash| {
+            let start_time = Instant::now();
+            // Lets have 5 Peer Ids. In the first 100ms the peers send messages as follows
+            // Message 1: P1, 10ms P2, 5ms P3, 10ms P4, P5
+            // Message 2: P2, 2ms P1, 3ms P3, 10ms, P4, P5
+            // Message 3: P5, 3ms P3, 5ms P1, 20ms, P2, P4
+
+            // Average latency for P1 = ( 0 + 2 + 8 ) /3 = 3
+            // Average latency for P2 = ( 10 + 0 + 28) /3 = 12
+            // Average latency for P3 = ( 15 + 5 + 3 ) /3 = 7
+            // Average latency for P4 = ( 25 + 15 + 28 ) /3 = 22
+            // Average latency for P5 = ( 25 + 15 + 0 ) /3 = 13
+
+            // Expected average latencies
+            let expected_latencies = [3, 12, 7, 22, 13];
+
+            // Average Order for P1 = ( 0 + 1 + 2 ) /3 = 1
+            // Average Order for P2 = ( 1 + 0 + 3 ) /3 = 1
+            // Average Order for P3 = ( 2 + 2 + 1 ) /3 = 1
+            // Average Order for P4 = ( 3 + 3 + 4 ) /3 = 3
+            // Average Order for P5 = ( 4 + 4 + 0 ) /3 = 2
+
+            // Expected average orders
+            let expected_orders = [1, 1, 1, 3, 2];
+
+            // Percentile Latency Counts
+            // M1P1, M2P2, M3P5, M2P1 (2ms), M3P3 (3ms), M2P3 (5ms), M3P1 (8ms) |50th Percentile|, M1P2 (10ms)   M1P3 (15ms), M1P4
+            // (15ms), M1P5 (15ms),| 80th Percentile| M1P4(25ms) , M1P5 (25ms) |90th Percentile|, M3P2 (28ms) , M3P4 (28ms).
+
+            let expected_50_percentile_counts = [0, 66, 33, 100, 66];
+            let expected_80_percentile_counts = [0, 33, 0, 66, 33];
+            let expected_90_percentile_counts = [0, 33, 0, 33, 0];
+            let expected_percentiles = [
+                expected_50_percentile_counts,
+                expected_80_percentile_counts,
+                expected_90_percentile_counts,
+            ];
+
+            let random_topic_1 = TopicHash::from_raw("random_topic_not_pick_this_for_test");
+            let random_topic_2 =
+                TopicHash::from_raw("this_string_is_as_random_as_a_prng_would_choose");
+
+            // First message
+            metrics.message_received(
+                topic.clone(),
+                message_ids[0].clone(),
+                peers[0].clone(),
+                start_time.clone(),
+            );
+            // Throw in a random message
+            metrics.message_received(
+                random_topic_1.clone(),
+                message_ids[0].clone(),
+                peers[0].clone(),
+                start_time.clone(),
+            );
+
+            // Throw in a random message
+            metrics.message_received(
+                random_topic_2.clone(),
+                message_ids[0].clone(),
+                peers[2].clone(),
+                start_time.clone(),
+            );
+
+            metrics.message_received(
+                topic.clone(),
+                message_ids[0].clone(),
+                peers[1].clone(),
+                start_time.clone() + Duration::from_millis(10),
+            );
+            // Throw in a random message
+            metrics.message_received(
+                random_topic_1.clone(),
+                message_ids[0].clone(),
+                peers[0].clone(),
+                start_time.clone() + Duration::from_millis(12),
+            );
+
+            metrics.message_received(
+                topic.clone(),
+                message_ids[0].clone(),
+                peers[2].clone(),
+                start_time.clone() + Duration::from_millis(15),
+            );
+            metrics.message_received(
+                topic.clone(),
+                message_ids[0].clone(),
+                peers[3].clone(),
+                start_time.clone() + Duration::from_millis(25),
+            );
+            // Throw in a random message
+            metrics.message_received(
+                random_topic_1.clone(),
+                message_ids[0].clone(),
+                peers[3].clone(),
+                start_time.clone() + Duration::from_millis(12),
+            );
+            metrics.message_received(
+                topic.clone(),
+                message_ids[0].clone(),
+                peers[4].clone(),
+                start_time.clone() + Duration::from_millis(25),
+            );
+            // Throw in a random message
+            metrics.message_received(
+                random_topic_1.clone(),
+                message_ids[0].clone(),
+                peers[1].clone(),
+                start_time.clone() + Duration::from_millis(25),
+            );
+
+            // Second message
+            metrics.message_received(
+                topic.clone(),
+                message_ids[1].clone(),
+                peers[1].clone(),
+                start_time.clone(),
+            );
+            metrics.message_received(
+                topic.clone(),
+                message_ids[1].clone(),
+                peers[0].clone(),
+                start_time.clone() + Duration::from_millis(2),
+            );
+            // Throw in a random message
+            metrics.message_received(
+                random_topic_1.clone(),
+                message_ids[0].clone(),
+                peers[0].clone(),
+                start_time.clone() + Duration::from_millis(16),
+            );
+            metrics.message_received(
+                topic.clone(),
+                message_ids[1].clone(),
+                peers[2].clone(),
+                start_time.clone() + Duration::from_millis(5),
+            );
+            metrics.message_received(
+                topic.clone(),
+                message_ids[1].clone(),
+                peers[3].clone(),
+                start_time.clone() + Duration::from_millis(15),
+            );
+            metrics.message_received(
+                topic.clone(),
+                message_ids[1].clone(),
+                peers[4].clone(),
+                start_time.clone() + Duration::from_millis(15),
+            );
+            // Throw in a random message
+            metrics.message_received(
+                random_topic_2.clone(),
+                message_ids[0].clone(),
+                peers[1].clone(),
+                start_time.clone() + Duration::from_millis(11),
+            );
+
+            // Third message
+            metrics.message_received(
+                topic.clone(),
+                message_ids[2].clone(),
+                peers[4].clone(),
+                start_time.clone(),
+            );
+            metrics.message_received(
+                topic.clone(),
+                message_ids[2].clone(),
+                peers[2].clone(),
+                start_time.clone() + Duration::from_millis(3),
+            );
+            // Throw in a random message
+            metrics.message_received(
+                random_topic_2.clone(),
+                message_ids[0].clone(),
+                peers[0].clone(),
+                start_time.clone() + Duration::from_millis(2),
+            );
+            metrics.message_received(
+                topic.clone(),
+                message_ids[2].clone(),
+                peers[0].clone(),
+                start_time.clone() + Duration::from_millis(8),
+            );
+            metrics.message_received(
+                topic.clone(),
+                message_ids[2].clone(),
+                peers[1].clone(),
+                start_time.clone() + Duration::from_millis(28),
+            );
+            // Throw in a random message
+            metrics.message_received(
+                random_topic_2.clone(),
+                message_ids[0].clone(),
+                peers[2].clone(),
+                start_time.clone() + Duration::from_millis(19),
+            );
+            metrics.message_received(
+                topic.clone(),
+                message_ids[2].clone(),
+                peers[3].clone(),
+                start_time.clone() + Duration::from_millis(28),
+            );
+
+            // Check the results
+            for (topics, map) in metrics.average_stat_per_topic_peer() {
+                for (peer_id, basic_stat) in map.iter() {
+                    if topic != topics {
+                        continue;
+                    }
+                    let peer_idx = peers
+                        .iter()
+                        .position(|peer| peer == peer_id)
+                        .expect("Must exist");
+                    println!("Peer: {} Avg_Latency: {}", peer_idx + 1, basic_stat.latency);
+                    assert_eq!(expected_latencies[peer_idx], basic_stat.latency);
+                    println!("Peer: {} Avg_Order: {}", peer_idx + 1, basic_stat.order);
+                    assert_eq!(expected_orders[peer_idx], basic_stat.order);
+                }
+            }
+
+            // Check the percentile calculations
+            let latency_checks = [50u8, 80, 90];
+
+            let mut check_id = 0;
+            for latency_check in latency_checks {
+                for (current_topic, map) in metrics
+                    .percentile_latency_per_topic_peer(latency_check)
+                    .into_iter()
+                {
+                    if topic != current_topic {
+                        continue;
+                    }
+                    for (peer_id, percentage_count) in map.iter() {
+                        let peer_idx = peers
+                            .iter()
+                            .position(|peer| peer == peer_id)
+                            .expect("Must exist");
+                        println!(
+                            "Peer: {}, {} ,  {}_percentile_latency: {}",
+                            peer_idx + 1,
+                            peer_id,
+                            latency_check,
+                            percentage_count
+                        );
+                        assert_eq!(expected_percentiles[check_id][peer_idx], *percentage_count);
+                    }
+                }
+                // Keep track of expected result id.
+                check_id += 1;
+            }
+        };
+
+        let topic = TopicHash::from_raw("test");
+        // Perform the test.
+        run_test(topic.clone());
+
+        // Test to make sure we prune expired elements.
+        std::thread::sleep(Duration::from_millis(100));
+
+        run_test(topic);
+    }
+
+    #[test]
     fn test_ihave_message_percent() {
         let mut metrics = EpisubMetrics::new(Duration::from_millis(100));
 
@@ -733,6 +999,64 @@ mod test {
                 println!("Peer: {}, {}", peer_idx + 1, ihave_percentage);
                 assert_eq!(expected_percentages[peer_idx], ihave_percentage);
             }
+        }
+    }
+
+    #[test]
+    // Tests the percentile latency cut off if all messages are sent fairly close to each other.
+    fn test_latency_percentile() {
+        let mut metrics = EpisubMetrics::new(Duration::from_millis(100));
+        // Used to keep track of expired messages.
+
+        // 10 peers, all send 10 messages at the same time.
+        let peers: Vec<PeerId> = (0..10).map(|_| PeerId::random()).collect();
+        let message_id = MessageId::new(&[1u8]);
+        let start_time = Instant::now();
+        let topic = TopicHash::from_raw("test");
+
+        for _ in 0..10 {
+            for peer in &peers {
+                metrics.message_received(
+                    topic.clone(),
+                    message_id.clone(),
+                    peer.clone(),
+                    start_time.clone(),
+                );
+            }
+        }
+
+        // Check duplicates percentages
+        for (_topic, map) in metrics.duplicates_percentage().iter() {
+            for (peer_id, percentage) in map.iter() {
+                let peer_idx = peers
+                    .iter()
+                    .position(|peer| peer == peer_id)
+                    .expect("Must exist");
+                println!(
+                    "Peer: {}, {} ,  duplicates_percentage: {}",
+                    peer_idx + 1,
+                    peer_id,
+                    percentage
+                );
+            }
+        }
+
+        for (_topic, map) in metrics.percentile_latency_per_topic_peer(70).iter() {
+            let mut total_peers = 0;
+            for (peer_id, percentage_count) in map.iter() {
+                let peer_idx = peers
+                    .iter()
+                    .position(|peer| peer == peer_id)
+                    .expect("Must exist");
+                println!(
+                    "Peer: {}, {} ,  70_percentile_latency: {}",
+                    peer_idx + 1,
+                    peer_id,
+                    percentage_count
+                );
+                total_peers += 1;
+            }
+            assert_eq!(total_peers, 4); // There should be 4 peers returned
         }
     }
 }
