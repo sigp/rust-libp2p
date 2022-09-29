@@ -106,13 +106,16 @@ impl TopicSubscriptionFilter for WhitelistSubscriptionFilter {
 }
 
 /// Adds a max count to a given subscription filter
-pub struct MaxCountSubscriptionFilter<T: TopicSubscriptionFilter> {
+#[derive(Default, Clone)]
+pub struct MaxCountSubscriptionFilter<T: TopicSubscriptionFilter + Default> {
     pub filter: T,
     pub max_subscribed_topics: usize,
     pub max_subscriptions_per_request: usize,
 }
 
-impl<T: TopicSubscriptionFilter> TopicSubscriptionFilter for MaxCountSubscriptionFilter<T> {
+impl<T: TopicSubscriptionFilter + Default> TopicSubscriptionFilter
+    for MaxCountSubscriptionFilter<T>
+{
     fn can_subscribe(&mut self, topic_hash: &TopicHash) -> bool {
         self.filter.can_subscribe(topic_hash)
     }
