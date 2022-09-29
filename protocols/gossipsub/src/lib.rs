@@ -162,6 +162,10 @@ pub use self::behaviour::{
     builder::{GossipsubBuilder, MessageAuthenticity, ValidationMode},
     Gossipsub, GossipsubEvent,
 };
+pub use behaviour::subscription_filter::{
+    CombinedSubscriptionFilters, MaxCountSubscriptionFilter, TopicSubscriptionFilter,
+    WhitelistSubscriptionFilter,
+};
 pub use behaviour::transform::{DataTransform, IdentityTransform};
 
 pub use self::config::{GossipsubConfig, GossipsubConfigBuilder, GossipsubVersion};
