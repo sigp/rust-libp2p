@@ -95,12 +95,12 @@ pub enum ChokeStrategy {
     /// Set a latency (in milliseconds) such that any peer gets choked that send messages who's
     /// average exceeds this cutoff. This cannot be used in conjunction with
     /// `percentile_latency_cut_off` or `latency_order_cut_off`.
-    RawLatencyCutoff(usize),
+    RawLatency(usize),
     /// Set a percentile latency cut off and message percent threshold respectively. If a
     /// peer sends messages in the last specified percentile over the message percent threshold, it
     /// gets choked. I.e percentile: 80 and message_threshold: 10 would specify that if a peer exists in the 80th percentile of
     /// latency with more than 10% of the messages it has sent, it will get choked.
-    PercentileLatencyCutoff {
+    PercentileLatency {
         /// The latency percentile at which we start counting messages.
         percentile: u8,
         /// The message percentage threshold over which a peer will get choked.
@@ -108,7 +108,7 @@ pub enum ChokeStrategy {
     },
     /// Choke based on the average order of duplicates sent to us. If a peer's average is over this
     /// order, consider it for choking.
-    LatencyOrderCutoff(u8),
+    LatencyOrder(u8),
 }
 
 /// The list of possible strategies one can use to unchoke a peer. More can be added in the future..
@@ -128,7 +128,7 @@ impl Default for DefaultStrat {
             choke_churn: 2,
             choke_duplicates_threshold: Some(30), // If 30% of messages from a peer are duplicates,
             // make them eligible for choking
-            choke_strategy: ChokeStrategy::PercentileLatencyCutoff {
+            choke_strategy: ChokeStrategy::PercentileLatency {
                 percentile: 70, // Additionally if the peer sends messages in the last 70th
                 // percentile of message latency
                 message_threshold: 10, // And 10% of their messages exist in this percentile, choke
@@ -226,13 +226,9 @@ impl ChokingStrategy for DefaultStrat {
     ) {
         // If we have a duplicates threshold, calculate the duplicates and see which peers
         // are actually eligible to be choked.
-        let duplicate_metrics = {
-            if let Some(threshold) = self.choke_duplicates_threshold {
-                Some((threshold, metrics.duplicates_percentage()))
-            } else {
-                None
-            }
-        };
+        let duplicate_metrics = self
+            .choke_duplicates_threshold
+            .map(|threshold| (threshold, metrics.duplicates_percentage()));
 
         // NOTE: Ended up having to use functions rather than closures due to the mutable borrow of
         // the topic_peers in choke_potential_peer.
@@ -250,7 +246,7 @@ impl ChokingStrategy for DefaultStrat {
             if let Some(peers) = mesh_peers.get(topic) {
                 for peer_id in peers.iter() {
                     if let Some(more_peers) = topic_peers.get(topic) {
-                        if let Some(choke_state) = more_peers.get(&peer_id) {
+                        if let Some(choke_state) = more_peers.get(peer_id) {
                             if !choke_state.peer_is_choked {
                                 unchoked_peers += 1
                             }
@@ -265,6 +261,7 @@ impl ChokingStrategy for DefaultStrat {
         // unchoked.
         // Returns true, if the peer became choked. The return value is required so we can count
         // the number of peers we have choked to ensure we don't go over any limit.
+        #[allow(clippy::type_complexity)]
         fn choke_potential_peer(
             topic: &TopicHash,
             peer_id: &PeerId,
@@ -272,8 +269,8 @@ impl ChokingStrategy for DefaultStrat {
             mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
             duplicate_metrics: Option<&(u8, HashMap<TopicHash, HashMap<PeerId, u8>>)>,
         ) -> bool {
-            // Check if the peer exists in the mesh
-            if !(mesh_peers.get(topic).map(|peers| peers.contains(&peer_id)) == Some(true)) {
+            // Check if the peer exists in the mesh. End if it does not.
+            if mesh_peers.get(topic).map(|peers| peers.contains(peer_id)) != Some(true) {
                 return false;
             }
 
@@ -288,10 +285,10 @@ impl ChokingStrategy for DefaultStrat {
 
             // If the peer is in the unchoked state, choke it
             if let Some(peer_choke_state) = topic_peers
-                .get_mut(&topic)
-                .and_then(|set| set.get_mut(&peer_id))
+                .get_mut(topic)
+                .and_then(|set| set.get_mut(peer_id))
             {
-                if peer_choke_state.peer_is_choked == false {
+                if !peer_choke_state.peer_is_choked {
                     // Choke the peer and increment the counter
                     debug!("EPISUB: Choking peer: {} in topic: {}", peer_id, topic);
                     peer_choke_state.peer_is_choked = true;
@@ -305,7 +302,7 @@ impl ChokingStrategy for DefaultStrat {
         // Perform the choking strategy logic.
         match self.choke_strategy {
             // Check if the peer is unchoked
-            ChokeStrategy::RawLatencyCutoff(cutoff) => {
+            ChokeStrategy::RawLatency(cutoff) => {
                 // Obtain the average latency for all peers and filter those that have an average
                 // latency larger than this cut-off
                 'mesh_loop: for (topic, peer_map) in
@@ -341,7 +338,7 @@ impl ChokingStrategy for DefaultStrat {
                     }
                 }
             }
-            ChokeStrategy::PercentileLatencyCutoff {
+            ChokeStrategy::PercentileLatency {
                 percentile,
                 message_threshold,
             } => {
@@ -381,7 +378,7 @@ impl ChokingStrategy for DefaultStrat {
                     }
                 }
             }
-            ChokeStrategy::LatencyOrderCutoff(cutoff) => {
+            ChokeStrategy::LatencyOrder(cutoff) => {
                 // Obtain the average message order for each peer and apply the cutoff.
                 'mesh_loop: for (topic, peer_map) in
                     metrics.average_stat_per_topic_peer().into_iter()
@@ -429,7 +426,7 @@ impl ChokingStrategy for DefaultStrat {
         // Returns true, if the peer was choked.
         let mut unchoke_peer = |topic: &TopicHash, peer_id: &PeerId| {
             // Is the peer in the mesh
-            if !(mesh_peers.get(topic).map(|peers| peers.contains(peer_id)) == Some(true)) {
+            if mesh_peers.get(topic).map(|peers| peers.contains(peer_id)) != Some(true) {
                 // Doesn't fit the requirements of in/out of mesh
                 return false;
             }
@@ -438,7 +435,7 @@ impl ChokingStrategy for DefaultStrat {
                 .get_mut(topic)
                 .and_then(|set| set.get_mut(peer_id))
             {
-                if choke_state.peer_is_choked == true {
+                if choke_state.peer_is_choked {
                     debug!("Unchoking peer: {} in topic: {}", peer_id, topic);
                     choke_state.peer_is_choked = false;
                 }
@@ -453,12 +450,10 @@ impl ChokingStrategy for DefaultStrat {
                 'main: for (topic, map) in metrics.ihave_messages_stats().into_iter() {
                     let mut unchoked_count = 0;
                     for (peer_id, message_percent) in map.iter() {
-                        if *message_percent >= percent {
-                            if unchoke_peer(&topic, peer_id) {
-                                unchoked_count += 1;
-                                if unchoked_count >= self.unchoke_churn {
-                                    continue 'main;
-                                }
+                        if *message_percent >= percent && unchoke_peer(&topic, peer_id) {
+                            unchoked_count += 1;
+                            if unchoked_count >= self.unchoke_churn {
+                                continue 'main;
                             }
                         }
                     }
@@ -483,25 +478,22 @@ impl ChokingStrategy for DefaultStrat {
                     let mut inserted_peers = 0;
                     // Only consider adding peers to the mesh if there is room.
                     for (peer_id, message_percent) in map.iter() {
-                        if *message_percent >= percent {
+                        if *message_percent >= percent &&
                             // Only consider connected peers not currently in the mesh
-                            if mesh_peers.get(&topic).map(|set| !set.contains(peer_id))
+                            mesh_peers.get(&topic).map(|set| !set.contains(peer_id))
                                 == Some(true)
                                 && !matches!(
                                     connected_peers.get(peer_id).map(|v| &v.kind),
                                     None | Some(PeerKind::NotSupported) | Some(PeerKind::Floodsub)
                                 )
-                            {
-                                if proposed_peers
-                                    .entry(topic.clone())
-                                    .or_default()
-                                    .insert(*peer_id)
-                                {
-                                    inserted_peers += 1;
-                                    if inserted_peers >= self.fanout_churn {
-                                        continue 'mesh_loop;
-                                    }
-                                }
+                            && proposed_peers
+                                .entry(topic.clone())
+                                .or_default()
+                                .insert(*peer_id)
+                        {
+                            inserted_peers += 1;
+                            if inserted_peers >= self.fanout_churn {
+                                continue 'mesh_loop;
                             }
                         }
                     }

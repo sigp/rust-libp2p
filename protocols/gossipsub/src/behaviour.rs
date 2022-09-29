@@ -113,7 +113,7 @@ type GossipsubNetworkBehaviourAction =
     NetworkBehaviourAction<GossipsubEvent, GossipsubHandler, Arc<GossipsubHandlerIn>>;
 
 /// (Episub) the choke status of a peer
-#[derive(Default, PartialEq, Debug, Clone)]
+#[derive(Default, PartialEq, Eq, Debug, Clone)]
 pub struct ChokeState {
     /// Whether we have choked this peer.
     pub peer_is_choked: bool,
@@ -1690,7 +1690,7 @@ where
             Err(e) => {
                 let message_id = fast_message_id.as_ref().and_then(|f_msg_id| {
                     self.fast_message_id_cache
-                        .get(&f_msg_id)
+                        .get(f_msg_id)
                         .map(|(msg_id, _topic)| msg_id.clone())
                 });
                 debug!("Invalid message. Transform error: {:?}", e);
@@ -1798,11 +1798,11 @@ where
     ) {
         if let Some((peer_score, .., gossip_promises)) = &mut self.peer_score {
             if let Some(metrics) = self.metrics.as_mut() {
-                metrics.register_invalid_message(&topic);
+                metrics.register_invalid_message(topic);
             }
 
             if let Some(msg_id) = message_id {
-                peer_score.reject_message(propagation_source, msg_id, &topic, reject_reason);
+                peer_score.reject_message(propagation_source, msg_id, topic, reject_reason);
                 gossip_promises.reject_message(msg_id, &reject_reason);
             } else {
                 // The message is invalid, we reject it ignoring any gossip promises. If a peer is
@@ -2596,7 +2596,7 @@ where
             // about.
             let recent_msg_ids = self.mcache.get_gossip_message_ids(topic_hash, true);
             for peer in peers {
-                match self.topic_peers.get(&topic_hash) {
+                match self.topic_peers.get(topic_hash) {
                     None => error!(
                         "Mesh topic does not exist in known topics. Topic: {}",
                         topic_hash

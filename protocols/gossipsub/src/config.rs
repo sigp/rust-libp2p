@@ -62,6 +62,7 @@ pub struct GossipsubConfig<S: ChokingStrategy = DefaultStrat> {
     duplicate_cache_time: Duration,
     validate_messages: bool,
     message_id_fn: Arc<dyn Fn(&GossipsubMessage) -> MessageId + Send + Sync + 'static>,
+    #[allow(clippy::type_complexity)]
     fast_message_id_fn:
         Option<Arc<dyn Fn(&RawGossipsubMessage) -> FastMessageId + Send + Sync + 'static>>,
     allow_self_origin: bool,

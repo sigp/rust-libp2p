@@ -78,14 +78,14 @@ where
         if let Some(element) = self.list.pop_front() {
             if element.expires > Instant::now() {
                 self.list.push_front(element);
-                return None;
+                None
             } else {
                 // The element has expired.
                 if let Some(internal_element) = self.map.remove(&element.element) {
-                    return Some((element.element, internal_element.element));
+                    Some((element.element, internal_element.element))
                 } else {
                     // This should never happen, return None and fail quietly.
-                    return None;
+                    None
                 }
             }
         } else {
@@ -131,6 +131,11 @@ where
     /// Returns the number of elements in the cache.
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+
+    /// Returns if the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 
     /// Empties the entire cache.

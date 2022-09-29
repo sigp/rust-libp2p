@@ -149,15 +149,15 @@ impl EpisubMetrics {
                 let order = delivery_data.duplicates.len() + 1; // We add 1 as the first entry gets the 0
                                                                 // score.
                 let dupe = BasicStat { order, latency };
-                if delivery_data.first_sender != peer_id {
-                    if delivery_data.duplicates.insert(peer_id, dupe).is_none() {
-                        *self
-                            .current_duplicates_per_topic_peer
-                            .entry(topic)
-                            .or_default()
-                            .entry(peer_id)
-                            .or_default() += 1;
-                    }
+                if delivery_data.first_sender != peer_id
+                    && delivery_data.duplicates.insert(peer_id, dupe).is_none()
+                {
+                    *self
+                        .current_duplicates_per_topic_peer
+                        .entry(topic)
+                        .or_default()
+                        .entry(peer_id)
+                        .or_default() += 1;
                 }
             }
         }
@@ -204,7 +204,7 @@ impl EpisubMetrics {
             // Add this peer to the list
             self.ihave_msgs
                 .entry(unique_message)
-                .or_insert_with(|| HashSet::new())
+                .or_insert_with(HashSet::new)
                 .insert(peer_id);
         }
     }
