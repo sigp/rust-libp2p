@@ -436,7 +436,7 @@ impl ChokingStrategy for DefaultStrat {
                 .and_then(|set| set.get_mut(peer_id))
             {
                 if choke_state.peer_is_choked {
-                    debug!("Unchoking peer: {} in topic: {}", peer_id, topic);
+                    debug!("EPISUB: Unchoking peer: {} in topic: {}", peer_id, topic);
                     choke_state.peer_is_choked = false;
                 }
             }

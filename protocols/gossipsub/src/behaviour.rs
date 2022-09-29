@@ -2473,7 +2473,7 @@ where
                             .and_then(|peers| peers.get_mut(&peer_id))
                         {
                             if choke_state.peer_is_choked {
-                                debug!("Unchoking fanout peer addition: {}", peer_id);
+                                debug!("EPISUB: Unchoking fanout peer addition: {}", peer_id);
                                 choke_state.peer_is_choked = false;
                             }
                         }

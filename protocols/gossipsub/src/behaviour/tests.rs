@@ -5564,4 +5564,163 @@ mod tests {
         }
         assert!(choke_count < 5);
     }
+
+    #[test]
+    /// Test that we actually do choke nodes with latency mixed in.
+    fn test_basic_unchoke() {
+        // The node should:
+        // - Unchoke peers that is has choked.
+
+        let _ = env_logger::try_init();
+        let topic = String::from("test_choke");
+        let subscribe_topic = vec![topic.clone()];
+        let (mut gs, peers, topic_hashes) = inject_nodes1()
+            .peer_no(10)
+            .topics(subscribe_topic)
+            .to_subscribe(true)
+            .create_network();
+
+        assert!(
+            gs.mesh.get(&topic_hashes[0]).is_some(),
+            "Subscribe should add a new entry to the mesh[topic] hashmap"
+        );
+
+        let topic_hash = Topic::new(topic).hash();
+
+        // The nodes each send a graft for the subscribe topic.
+        for peer_id in peers.iter() {
+            gs.handle_graft(&peer_id, vec![topic_hash.clone()]);
+        }
+
+        // Send 10 messages, and have the last 10 peers always send later duplicates
+        let start_time = Instant::now();
+        let deterministic_peers: Vec<_> = peers.iter().collect();
+        for peer_id in deterministic_peers.iter() {
+            println!(
+                "Peer id: {} message_latency: {}",
+                peer_id,
+                start_time.elapsed().as_millis()
+            );
+            for count in 0..10 {
+                let raw_message = RawGossipsubMessage {
+                    source: None,
+                    data: vec![count as u8],
+                    sequence_number: Some(count as u64),
+                    topic: topic_hash.clone(),
+                    signature: None,
+                    key: None,
+                    validated: true,
+                };
+                gs.handle_received_message(raw_message, peer_id);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Run the heartbeat a number of times to get the maximum number of peers choked.
+        std::thread::sleep(Duration::from_millis(100));
+        gs.episub_heartbeat();
+        gs.episub_heartbeat();
+        gs.episub_heartbeat();
+        gs.episub_heartbeat();
+
+        std::thread::sleep(Duration::from_millis(100));
+        // Print latencies
+        for (_topic, map) in gs
+            .episub_metrics
+            .percentile_latency_per_topic_peer(70)
+            .iter()
+        {
+            for (peer_id, message_percent_in_percentile) in map.iter() {
+                println!(
+                    "PeerId {}, percent_in_latency: {}",
+                    peer_id, message_percent_in_percentile
+                );
+            }
+        }
+
+        for (_topic, map) in gs.episub_metrics.duplicates_percentage().iter() {
+            for (peer_id, duplicate_percentage) in map.iter() {
+                println!(
+                    "PeerId {}, duplicate_percentage: {}",
+                    peer_id, duplicate_percentage
+                );
+            }
+        }
+
+        let mut choked_peers = HashSet::new();
+        for (_topic, peers) in gs.topic_peers.iter() {
+            for (peer_id, choke_state) in peers.iter() {
+                if choke_state.peer_is_choked {
+                    choked_peers.insert(*peer_id);
+                }
+            }
+        }
+        // Should at least choke one peer.
+        assert!(!choked_peers.is_empty());
+
+        // Lets say another 10 messages are about to come.
+        // The choked peers send IHAVE messages before we see these 10 messages.
+        let mut ihave_msgs = Vec::new();
+        ihave_msgs.push((topic_hash.clone(), Vec::new()));
+        for count in 10..20 {
+            let raw_message = RawGossipsubMessage {
+                source: None,
+                data: vec![count as u8],
+                sequence_number: Some(count as u64),
+                topic: topic_hash.clone(),
+                signature: None,
+                key: None,
+                validated: true,
+            };
+            let message = gs
+                .data_transform
+                .inbound_transform(raw_message.clone())
+                .unwrap();
+            let message_id = gs.config.message_id(&message);
+            ihave_msgs[0].1.push(message_id);
+        }
+
+        // The choked peers send us IHAVE messages.
+        for peer_id in choked_peers.iter() {
+            gs.handle_ihave(peer_id, ihave_msgs.clone());
+        }
+
+        // We then receive the messages from the unchoked peers
+        for count in 10..20 {
+            let raw_message = RawGossipsubMessage {
+                source: None,
+                data: vec![count as u8],
+                sequence_number: Some(count as u64),
+                topic: topic_hash.clone(),
+                signature: None,
+                key: None,
+                validated: true,
+            };
+
+            for peer_id in peers.iter() {
+                if !choked_peers.contains(peer_id) {
+                    gs.handle_received_message(raw_message.clone(), peer_id);
+                }
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+        gs.episub_heartbeat();
+        gs.episub_heartbeat();
+        gs.episub_heartbeat();
+        gs.episub_heartbeat();
+        std::thread::sleep(Duration::from_millis(100));
+
+        // Our choked peers should be unchoked now.
+        for peer_id in choked_peers.iter() {
+            assert_eq!(
+                gs.topic_peers
+                    .get(&topic_hash)
+                    .unwrap()
+                    .get(peer_id)
+                    .unwrap()
+                    .peer_is_choked,
+                false
+            );
+        }
+    }
 }
