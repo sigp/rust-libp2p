@@ -2423,15 +2423,134 @@ where
         }
     }
 
+    /// Handles choking of our peers. Used within the episub heartbeat.
+    fn choke_peers(&mut self) {
+        // Handle Choking
+
+        // Pre-requisites before doing any metric calculations:
+
+        // Are any of our mesh peers capable of being choked and do we have enough peers left that
+        // can be choked.
+        // Build a mapping of Topic -> (unchoked_peers, peers_that_can_be_choked)
+        let current_mesh_stats = {
+            let mut mesh_stats = HashMap::new();
+            for (topic, mesh_peers) in self.mesh.iter() {
+                let mut unchoked_peers = 0;
+                let mut can_be_choked_peers = 0;
+
+                for peer_id in mesh_peers {
+                    if let Some(topic_peers) = self.topic_peers.get(topic) {
+                        if let Some(choke_state) = topic_peers.get(peer_id) {
+                            if !choke_state.peer_is_choked {
+                                unchoked_peers += 1
+                            }
+                        }
+                        if let Some(peer_connections) = self.connected_peers.get(peer_id) {
+                            // Can only choke v1_2 peers
+                            if peer_connections.is_episub_compat() {
+                                can_be_choked_peers += 1;
+                            }
+                        }
+                    }
+                }
+                current_mesh_stats.insert(topic.clone(), (unchoked_peers, can_be_choked_peers));
+            }
+            mesh_stats
+        };
+
+        // If we cannot choke any more peers, return early.
+        let mut return_early = true;
+        for (topic, (unchoked_peers, peers_than_can_be_choked)) in current_mesh_stats.iter() {
+            if peers_that_can_be_choked == 0 {
+                continue;
+            }
+
+            if unchoked_peers > self.config.mesh_non_choke {
+                return_early = false;
+                break;
+            }
+        }
+        if return_early {
+            return;
+        }
+
+        // Handle the actual choking here
+
+        // Obtain any eligible peers to choke
+        let eligible_choke_peers = self
+            .config
+            .choking_strategy()
+            .choke_peers(&mut self.episub_metrics);
+
+
+        // Go through the list and determine if any are eligible to choke, if so send choke
+        // messages to them.
+        for (topic, eligible_peers) in eligible_choke_peers.into_iter() {
+
+            // End early if there is nothing we can do for this topic
+            if let Some((unchoked_peers, peers_can_be_choked)) = current_mesh_stats.get(topic) { 
+                if peers_can_be_choked == 0 {
+                    continue;
+                }
+
+                if unchoked_peers <= self.config.mesh_non_choke {
+                    continue;
+                }
+            }
+
+            // Filter out peers that are of the correct type and are currently unchoked
+            let filtered_peers = eligible_peers.iter().filter(|peer_id| {
+                // Must support episub
+                if let Some(peer_connections) = self.connected_peers.get(peer_id) {
+                    if !peer_connections.is_episub_compat() {
+                        return false;
+                    }
+                } else {
+                    // Must be connected
+                    return false;
+                }
+                // Must be in a mesh
+                if let Some(mesh_peers) = self.mesh.get(topic) {
+                    if !mesh_peers.contains(peer_id) {
+                        return false;
+                    }
+                } else {
+                    // Must correspond to a mesh
+                    return false;
+                }
+
+                // Must currently be unchoked
+                if let Some(topic_peers) = self.topic_peers.get(topic) {
+                    if let Some(choke_state) = topic_peers.get(peer_id) {
+                        if choke_state.peer_is_choked {
+                            // Peer is already choked
+                            return false;
+                        }
+                    } else {
+                        // Peer is not in the topic_peers map
+                        return false;
+                    }
+                } else {
+                    // Peer is not in the topic_peers map
+                    return false;
+                }
+                true
+            }).collect();
+                
+                    
+
+
+
+
+
+
+
+
+    }
+
     // This regulates the CHOKING and UNCHOKING of peers in our mesh's. It can also add better
     // performing peers into the mesh if need be.
     fn episub_heartbeat(&mut self) {
-        // Handle Choking
-        self.config.choking_strategy().choke_peers(
-            &mut self.topic_peers,
-            &self.mesh,
-            &mut self.episub_metrics,
-        );
 
         // Handle Unchoking
         self.config.choking_strategy().unchoke_peers(

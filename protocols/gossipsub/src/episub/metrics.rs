@@ -411,6 +411,8 @@ impl EpisubMetrics {
     // Therefore we only count IHAVE messages that correspond to a message that was later received
     // by another peer.
     pub fn ihave_messages_stats(&mut self) -> HashMap<TopicHash, HashMap<PeerId, u8>> {
+        self.prune_expired_elements();
+
         let mut ihave_count: HashMap<TopicHash, HashMap<PeerId, usize>> = HashMap::new();
         for (unique_message, peer_id_hashset) in self.ihave_msgs.iter() {
             // Make sure we actually received this message from another peer.

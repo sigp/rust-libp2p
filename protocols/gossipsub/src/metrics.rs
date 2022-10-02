@@ -174,6 +174,31 @@ pub struct Metrics {
     /// The number of times we have decided that an IWANT control message is required for this
     /// topic. A very high metric might indicate an underperforming network.
     topic_iwant_msgs: Family<TopicHash, Counter>,
+
+    /* Episub Metrics */
+    /// The number of choked peers in each mesh.
+    episub_current_choked_peers_in_mesh: Family<TopicHash, Gauge>,
+    /// The number of choked peers in total.
+    episub_current_choked_peers_total: Family<TopicHash, Gauge>,
+    /// The number of peers that have been choked per topic.
+    episub_peers_choked_per_topic: Family<TopicHash, Counter>,
+    /// The number of peers that have been unchoked per topic.
+    episub_peers_unchoked_per_topic: Family<TopicHash, Counter>,
+    /// The number of times we have added a fanout peer to the mesh.
+    episub_fanout_additions: Family<TopicHash, Counter>,
+    /// The number of peers that have choked us per mesh.
+    episub_current_peers_choked_us: Family<TopicHash, Counter>,
+    /// The number of choked messages we have received per mesh.
+    episub_received_choke_messages: Family<TopicHash, Counter>,
+    /// The number of unchoked messages we have received per mesh.
+    episub_received_unchoke_messages: Family<TopicHash, Counter>,
+    /// Episub heartbeat running time.
+    episub_heartbeat_duration: Histogram,
+    /// The message latency per mesh we observe.
+    episub_mesh_message_latency: Family<TopicHash, Histogram, HistBuilderLinear>,
+    /// The percentage of messages we received IHAVE messages before receiving the message on the
+    /// mesh.
+    episub_ihave_message_stats: Family<TopicHash, Gauge>,
 }
 
 impl Metrics {
@@ -302,6 +327,62 @@ impl Metrics {
             metric
         };
 
+        // Episub Metrics
+
+        let episub_current_choked_peers_in_mesh = register_family!(
+            "episub_current_choked_peers_in_mesh",
+            "Number of choked peers in each mesh"
+        );
+        let episub_current_choked_peers_total = register_family!(
+            "episub_current_choked_peers_total",
+            "Total number of connected choked peers in each topic"
+        );
+        let episub_peers_choked_per_topic = register_family!(
+            "episub_peers_choked_per_topic",
+            "Number of peers that have been choked per topic"
+        );
+        let episub_peers_unchoked_per_topic = register_family!(
+            "episub_peers_unchoked_per_topic",
+            "Number of peers that have been unchoked per topic"
+        );
+        let episub_fanout_additions = register_family!(
+            "episub_fanout_additions",
+            "Number of peers added to a mesh from fanout"
+        );
+        let episub_current_peers_choked_us = register_family!(
+            "episub_current_peers_choked_us",
+            "Current number of peers that have choked us in each mesh."
+        );
+        let episub_received_choke_messages = register_family!(
+            "episub_received_choke_messages",
+            "Number of choke messages we have received"
+        );
+        let episub_received_unchoke_messages = register_family!(
+            "episub_received_unchoke_messages",
+            "Number of unchoke messages we have received"
+        );
+        let episub_heartbeat_duration = Histogram::new(linear_buckets(0.0, 200.0, 20));
+        registry.register(
+            "episub_heartbeat_duration",
+            "The duration of an episub heartbeat",
+            Box::new(episub_heartbeat_duration.clone()),
+        );
+        let episub_mesh_message_latency = Family::new_with_constructor(HistBuilderLinear {
+            start: 0.0,
+            width: 2000.0,
+            length: 20,
+        });
+        registry.register(
+            "episub_mesh_message_latency",
+            "The mesh message latency",
+            Box::new(episub_mesh_message_latency.clone()),
+        );
+
+        let episub_ihave_message_stats = register_family!(
+            "episub_ihave_message_stats",
+            "Histogram displaying the IHAVE message received stats"
+        );
+
         Self {
             max_topics,
             max_never_subscribed_topics,
@@ -327,6 +408,17 @@ impl Metrics {
             heartbeat_duration,
             memcache_misses,
             topic_iwant_msgs,
+            episub_current_choked_peers_in_mesh,
+            episub_current_choked_peers_total,
+            episub_peers_choked_per_topic,
+            episub_peers_unchoked_per_topic,
+            episub_fanout_additions,
+            episub_current_peers_choked_us,
+            episub_received_choke_messages,
+            episub_received_unchoke_messages,
+            episub_heartbeat_duration,
+            episub_mesh_message_latency,
+            episub_ihave_message_stats,
         }
     }
 
@@ -601,5 +693,18 @@ struct HistBuilder {
 impl MetricConstructor<Histogram> for HistBuilder {
     fn new_metric(&self) -> Histogram {
         Histogram::new(self.buckets.clone().into_iter())
+    }
+}
+
+#[derive(Clone)]
+struct HistBuilderLinear {
+    start: f64,
+    width: f64,
+    length: u16,
+}
+
+impl MetricConstructor<Histogram> for HistBuilderLinear {
+    fn new_metric(&self) -> Histogram {
+        Histogram::new(linear_buckets(self.start, self.width, self.length))
     }
 }

@@ -31,24 +31,19 @@ use log::debug;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub trait ChokingStrategy {
-    /// The router will call this function every episub heartbeat, giving access to the router's `topic_peers` map. The [`ChokingStrategy`], based on the supplied metrics, can then choke peers as it sees fit.
+    /// This should return a list of peers that are eligible to choke. The router will decide if
+    /// the peers are ultimately choked.
     fn choke_peers(
         &self,
-        topic_peers: &mut HashMap<TopicHash, BTreeMap<PeerId, ChokeState>>,
-        mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
         metrics: &mut EpisubMetrics,
-    );
+    ) -> HashMap<TopicHash, HashSet<PeerId>;
 
-    /// This function defines which peers should be UNCHOKE'd given a set mesh peers and episub metrics. The resulting
-    /// peers will the be unchoked by the gossipsub router.
-    /// This should also handle adding fanout peers into the mesh. i.e If the result returns a
-    /// peer that is not in the mesh, that peer will be added into the mesh if possible.
+    /// This should return a list of peers that are eligible to unchoke. The router will decide if
+    /// the peers are ultimately unchoked.
     fn unchoke_peers(
         &self,
-        topic_peers: &mut HashMap<TopicHash, BTreeMap<PeerId, ChokeState>>,
-        mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
         metrics: &mut EpisubMetrics,
-    );
+    ) -> HashMap<TopicHash, HashSet<PeerId>;
 
     /// Proposes a set of peers for the router to consider adding to the mesh. The router will
     /// decide if the mesh can handle extra peers, then handle the necessary control messages to
@@ -57,8 +52,6 @@ pub trait ChokingStrategy {
     /// the router.
     fn fanout_addition(
         &self,
-        mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
-        connected_peers: &HashMap<PeerId, PeerConnections>,
         metrics: &mut EpisubMetrics,
     ) -> HashMap<TopicHash, HashSet<PeerId>>;
 }
