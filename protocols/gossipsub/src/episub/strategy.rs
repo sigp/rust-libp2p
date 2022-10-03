@@ -33,27 +33,18 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 pub trait ChokingStrategy {
     /// This should return a list of peers that are eligible to choke. The router will decide if
     /// the peers are ultimately choked.
-    fn choke_peers(
-        &self,
-        metrics: &mut EpisubMetrics,
-    ) -> HashMap<TopicHash, HashSet<PeerId>;
+    fn choke_peers(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>>;
 
     /// This should return a list of peers that are eligible to unchoke. The router will decide if
     /// the peers are ultimately unchoked.
-    fn unchoke_peers(
-        &self,
-        metrics: &mut EpisubMetrics,
-    ) -> HashMap<TopicHash, HashSet<PeerId>;
+    fn unchoke_peers(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>>;
 
     /// Proposes a set of peers for the router to consider adding to the mesh. The router will
     /// decide if the mesh can handle extra peers, then handle the necessary control messages to
     /// add proposed peers to the mesh.
     /// The strategy should makes sure the peers are not already in the mesh and are connected to
     /// the router.
-    fn fanout_addition(
-        &self,
-        metrics: &mut EpisubMetrics,
-    ) -> HashMap<TopicHash, HashSet<PeerId>>;
+    fn fanout_addition(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>>;
 }
 
 /// A built-in struct that implements [`ChokingStrategy`] to allow for easy access to some simple
@@ -211,12 +202,7 @@ impl DefaultStratBuilder {
 // Now the magic for the strategy implementation
 
 impl ChokingStrategy for DefaultStrat {
-    fn choke_peers(
-        &self,
-        topic_peers: &mut HashMap<TopicHash, BTreeMap<PeerId, ChokeState>>,
-        mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
-        metrics: &mut EpisubMetrics,
-    ) {
+    fn choke_peers(&self, metrics: &mut EpisubMetrics) {
         // If we have a duplicates threshold, calculate the duplicates and see which peers
         // are actually eligible to be choked.
         let duplicate_metrics = self
@@ -408,12 +394,7 @@ impl ChokingStrategy for DefaultStrat {
 
     // NOTE: This function returns a list of peers, the list can include peers that are not in
     // the mesh. These peers are fanout peers and the router may add them into the mesh.
-    fn unchoke_peers(
-        &self,
-        topic_peers: &mut HashMap<TopicHash, BTreeMap<PeerId, ChokeState>>,
-        mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
-        metrics: &mut EpisubMetrics,
-    ) {
+    fn unchoke_peers(&self, metrics: &mut EpisubMetrics) {
         // Unchoke's a peer if it is currently choked. `in_mesh` decides whether to unchoke peers
         // that are in the mesh or outside the mesh (fanout).
         // Returns true, if the peer was choked.
@@ -458,12 +439,7 @@ impl ChokingStrategy for DefaultStrat {
     /// Proposes a set of peers for the router to consider adding to the mesh. The router will
     /// decide if the mesh can handle extra peers, then handle the necessary control messages to
     /// add proposed peers to the mesh.
-    fn fanout_addition(
-        &self,
-        mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
-        connected_peers: &HashMap<PeerId, PeerConnections>,
-        metrics: &mut EpisubMetrics,
-    ) -> HashMap<TopicHash, HashSet<PeerId>> {
+    fn fanout_addition(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>> {
         let mut proposed_peers: HashMap<TopicHash, HashSet<PeerId>> = HashMap::new();
         match self.fanout_addition_strategy {
             UnchokeStrategy::IHaveMessagePercent(percent) => {
