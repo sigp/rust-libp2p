@@ -94,6 +94,13 @@ pub struct PeerConnections {
     pub connections: Vec<ConnectionId>,
 }
 
+impl PeerConnections {
+    /// Returns true if this peer supports episub.
+    pub fn is_episub_compat(&self) -> bool {
+        !matches!(self.kind, PeerKind::Gossipsubv1_2)
+    }
+}
+
 /// Describes the types of peers that can exist in the gossipsub context.
 #[derive(Debug, Clone, PartialEq, Hash, Encode, Eq)]
 pub enum PeerKind {

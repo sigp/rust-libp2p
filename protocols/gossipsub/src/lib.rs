@@ -163,8 +163,8 @@ pub use self::behaviour::{
     Gossipsub, GossipsubEvent,
 };
 pub use behaviour::subscription_filter::{
-    CombinedSubscriptionFilters, MaxCountSubscriptionFilter, TopicSubscriptionFilter,
-    WhitelistSubscriptionFilter,
+    AllowAllSubscriptionFilter, CombinedSubscriptionFilters, MaxCountSubscriptionFilter,
+    TopicSubscriptionFilter, WhitelistSubscriptionFilter,
 };
 pub use behaviour::transform::{DataTransform, IdentityTransform};
 

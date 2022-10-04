@@ -593,7 +593,7 @@ mod tests {
         let mesh_peers = gs.mesh.get(&topic_hashes[1]).unwrap();
         for new_peer in new_peers {
             assert!(
-                mesh_peers.contains(&new_peer),
+                mesh_peers.contains_key(&new_peer),
                 "Fanout peer should be included in the mesh"
             );
         }
@@ -896,12 +896,7 @@ mod tests {
         for topic_hash in topic_hashes[..3].iter() {
             let topic_peers = gs.topic_peers.get(topic_hash).unwrap().clone();
             assert!(
-                topic_peers
-                    == peers[..2]
-                        .into_iter()
-                        .cloned()
-                        .map(|peer| (peer, ChokeState::default()))
-                        .collect(),
+                topic_peers == peers[..2].into_iter().cloned().collect(),
                 "Two peers should be added to the first three topics"
             );
         }
@@ -924,12 +919,7 @@ mod tests {
 
         let topic_peers = gs.topic_peers.get(&topic_hashes[0]).unwrap().clone(); // only gossipsub at the moment
         assert!(
-            topic_peers
-                == peers[1..2]
-                    .into_iter()
-                    .cloned()
-                    .map(|peer| (peer, ChokeState::default()))
-                    .collect(),
+            topic_peers == peers[1..2].into_iter().cloned().collect(),
             "Only the second peers should be in the first topic"
         );
     }
@@ -953,14 +943,8 @@ mod tests {
             peers.push(PeerId::random())
         }
 
-        gs.topic_peers.insert(
-            topic_hash.clone(),
-            peers
-                .iter()
-                .cloned()
-                .map(|peer| (peer, ChokeState::default()))
-                .collect(),
-        );
+        gs.topic_peers
+            .insert(topic_hash.clone(), peers.iter().cloned().collect());
 
         gs.connected_peers = peers
             .iter()
@@ -1255,7 +1239,10 @@ mod tests {
         gs.handle_graft(&peers[7], topic_hashes.clone());
 
         assert!(
-            gs.mesh.get(&topic_hashes[0]).unwrap().contains(&peers[7]),
+            gs.mesh
+                .get(&topic_hashes[0])
+                .unwrap()
+                .contains_key(&peers[7]),
             "Expected peer to have been added to mesh"
         );
     }
@@ -1276,7 +1263,10 @@ mod tests {
         );
 
         assert!(
-            !gs.mesh.get(&topic_hashes[0]).unwrap().contains(&peers[7]),
+            !gs.mesh
+                .get(&topic_hashes[0])
+                .unwrap()
+                .contains_key(&peers[7]),
             "Expected peer to have been added to mesh"
         );
     }
@@ -1305,7 +1295,10 @@ mod tests {
 
         for i in 0..2 {
             assert!(
-                gs.mesh.get(&topic_hashes[i]).unwrap().contains(&peers[7]),
+                gs.mesh
+                    .get(&topic_hashes[i])
+                    .unwrap()
+                    .contains_key(&peers[7]),
                 "Expected peer to be in the mesh for the first 2 topics"
             );
         }
@@ -1326,10 +1319,18 @@ mod tests {
             .create_network();
 
         // insert peer into our mesh for 'topic1'
-        gs.mesh
-            .insert(topic_hashes[0].clone(), peers.iter().cloned().collect());
+        gs.mesh.insert(
+            topic_hashes[0].clone(),
+            peers
+                .iter()
+                .map(|peer_id| (*peer_id, ChokeState::default()))
+                .collect(),
+        );
         assert!(
-            gs.mesh.get(&topic_hashes[0]).unwrap().contains(&peers[7]),
+            gs.mesh
+                .get(&topic_hashes[0])
+                .unwrap()
+                .contains_key(&peers[7]),
             "Expected peer to be in mesh"
         );
 
@@ -1341,7 +1342,10 @@ mod tests {
                 .collect(),
         );
         assert!(
-            !gs.mesh.get(&topic_hashes[0]).unwrap().contains(&peers[7]),
+            !gs.mesh
+                .get(&topic_hashes[0])
+                .unwrap()
+                .contains_key(&peers[7]),
             "Expected peer to be removed from mesh"
         );
     }
@@ -1513,10 +1517,12 @@ mod tests {
             .explicit(1)
             .create_network();
 
-        //only peer 1 is in the mesh not peer 0 (which is an explicit peer)
+        // Only peer 1 is in the mesh not peer 0 (which is an explicit peer)
         assert_eq!(
             gs.mesh[&topic_hashes[0]],
-            vec![peers[1].clone()].into_iter().collect()
+            vec![(peers[1], ChokeState::default())]
+                .into_iter()
+                .collect()
         );
 
         //assert that graft gets created to non-explicit peer
@@ -1554,10 +1560,10 @@ mod tests {
 
         gs.heartbeat();
 
-        //mesh stays empty
-        assert_eq!(gs.mesh[&topic_hashes[0]], BTreeSet::new());
+        // Mesh stays empty
+        assert_eq!(gs.mesh[&topic_hashes[0]], BTreeMap::new());
 
-        //assert that no graft gets created to explicit peer
+        // Assert that no graft gets created to explicit peer
         assert_eq!(
             count_control_msgs(&gs, |peer_id, m| peer_id == &others[0]
                 && match m {
@@ -1647,7 +1653,9 @@ mod tests {
         //only peer 1 is in the mesh not peer 0 (which is an explicit peer)
         assert_eq!(
             gs.mesh[&topic_hash],
-            vec![peers[1].clone()].into_iter().collect()
+            vec![(peers[1], ChokeState::default())]
+                .into_iter()
+                .collect()
         );
 
         //assert that graft gets created to non-explicit peer
@@ -1706,7 +1714,9 @@ mod tests {
         //only peer 1 is in the mesh not peer 0 (which is an explicit peer)
         assert_eq!(
             gs.mesh[&topic_hash],
-            vec![peers[1].clone()].into_iter().collect()
+            vec![(peers[1], ChokeState::default())]
+                .into_iter()
+                .collect()
         );
 
         //assert that graft gets created to non-explicit peer
@@ -2349,10 +2359,10 @@ mod tests {
         assert_eq!(gs.mesh[&topics[0]].len(), config.mesh_n_high() + 1);
 
         //inbound is not in mesh
-        assert!(!gs.mesh[&topics[0]].contains(&inbound));
+        assert!(!gs.mesh[&topics[0]].contains_key(&inbound));
 
         //outbound is in mesh
-        assert!(gs.mesh[&topics[0]].contains(&outbound));
+        assert!(gs.mesh[&topics[0]].contains_key(&outbound));
     }
 
     #[test]
@@ -2399,7 +2409,7 @@ mod tests {
         assert_eq!(gs.mesh.get(&topics[0]).unwrap().len(), n);
 
         //all outbound peers are still in the mesh
-        assert!(outbound.iter().all(|p| gs.mesh[&topics[0]].contains(p)));
+        assert!(outbound.iter().all(|p| gs.mesh[&topics[0]].contains_key(p)));
     }
 
     #[test]
@@ -2520,7 +2530,7 @@ mod tests {
 
         //assert that mesh only contains p2
         assert_eq!(gs.mesh.get(&topics[0]).unwrap().len(), 1);
-        assert!(gs.mesh.get(&topics[0]).unwrap().contains(&p2));
+        assert!(gs.mesh.get(&topics[0]).unwrap().contains_key(&p2));
     }
 
     ///Note that in this test also without a penalty the px would be ignored because of the
@@ -3244,8 +3254,9 @@ mod tests {
 
         assert_eq!(gs.mesh[&topics[0]].len(), config.mesh_n());
 
-        //mesh contains retain_scores best peers
-        assert!(gs.mesh[&topics[0]].is_superset(
+        // Mesh contains retain_scores best peers
+        let mesh: HashSet<PeerId> = gs.mesh[&topics[0]].keys().cloned().collect();
+        assert!(mesh.is_superset(
             &peers[(n - config.retain_scores())..]
                 .iter()
                 .cloned()
@@ -4389,8 +4400,14 @@ mod tests {
             .map(|_| add_peer(&mut gs, &topics, false, false))
             .collect();
 
-        //currently mesh equals peers
-        assert_eq!(gs.mesh[&topics[0]], peers.iter().cloned().collect());
+        // Currently mesh equals peers
+        assert_eq!(
+            gs.mesh[&topics[0]],
+            peers
+                .iter()
+                .map(|peer_id| (*peer_id, ChokeState::default()))
+                .collect()
+        );
 
         //give others high scores (but the first two have not high enough scores)
         for i in 0..5 {
@@ -4432,13 +4449,14 @@ mod tests {
             "opportunistic grafting should have added 2 peers"
         );
 
+        let mesh: HashSet<PeerId> = gs.mesh[&topics[0]].keys().cloned().collect();
         assert!(
-            gs.mesh[&topics[0]].is_superset(&peers.iter().cloned().collect()),
+            mesh.is_superset(&peers.iter().cloned().collect()),
             "old peers are still part of the mesh"
         );
 
         assert!(
-            gs.mesh[&topics[0]].is_disjoint(&others.iter().cloned().take(2).collect()),
+            mesh.is_disjoint(&others.iter().cloned().take(2).collect()),
             "peers below or equal to median should not be added in opportunistic grafting"
         );
     }
@@ -4938,7 +4956,7 @@ mod tests {
             add_peer_with_addr_and_kind(&mut gs, &topics, false, false, Multiaddr::empty(), None);
 
         //p1 and p2 are not in the mesh
-        assert!(!gs.mesh[&topics[0]].contains(&p1) && !gs.mesh[&topics[0]].contains(&p2));
+        assert!(!gs.mesh[&topics[0]].contains_key(&p1) && !gs.mesh[&topics[0]].contains_key(&p2));
 
         //publish a message
         let publish_data = vec![0; 42];
@@ -5187,7 +5205,7 @@ mod tests {
 
         assert_eq!(
             gs.mesh_peers(&TopicHash::from_raw("topic1"))
-                .cloned()
+                .map(|(peer_id, choke_state)| *peer_id)
                 .collect::<BTreeSet<_>>(),
             peers,
             "Expected peers for a registered topic to contain all peers."
@@ -5450,7 +5468,7 @@ mod tests {
             gs.episub_heartbeat();
 
             let mut choke_count = 0;
-            for (_topic, peers) in gs.topic_peers.iter() {
+            for (_topic, peers) in gs.mesh.iter() {
                 for (_peer_id, choke_state) in peers.iter() {
                     if choke_state.peer_is_choked {
                         choke_count += 1;
@@ -5458,6 +5476,7 @@ mod tests {
                 }
             }
             assert!(run * 2 >= choke_count);
+            assert!(choke_count > 0);
         }
 
         // Running it any amount of times, should leave 2 in the mesh
@@ -5466,7 +5485,7 @@ mod tests {
         gs.episub_heartbeat();
 
         let mut choke_count = 0;
-        for (_topic, peers) in gs.topic_peers.iter() {
+        for (_topic, peers) in gs.mesh.iter() {
             for (_peer_id, choke_state) in peers.iter() {
                 if choke_state.peer_is_choked {
                     choke_count += 1;
@@ -5555,7 +5574,7 @@ mod tests {
         gs.episub_heartbeat();
 
         let mut choke_count = 0;
-        for (_topic, peers) in gs.topic_peers.iter() {
+        for (_topic, peers) in gs.mesh.iter() {
             for (_peer_id, choke_state) in peers.iter() {
                 if choke_state.peer_is_choked {
                     choke_count += 1;
@@ -5618,8 +5637,11 @@ mod tests {
         // Run the heartbeat a number of times to get the maximum number of peers choked.
         std::thread::sleep(Duration::from_millis(100));
         gs.episub_heartbeat();
+        gs.episub_metrics.reset_cache();
         gs.episub_heartbeat();
+        gs.episub_metrics.reset_cache();
         gs.episub_heartbeat();
+        gs.episub_metrics.reset_cache();
         gs.episub_heartbeat();
 
         std::thread::sleep(Duration::from_millis(100));
@@ -5647,7 +5669,7 @@ mod tests {
         }
 
         let mut choked_peers = HashSet::new();
-        for (_topic, peers) in gs.topic_peers.iter() {
+        for (_topic, peers) in gs.mesh.iter() {
             for (peer_id, choke_state) in peers.iter() {
                 if choke_state.peer_is_choked {
                     choked_peers.insert(*peer_id);
@@ -5705,6 +5727,7 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(100));
         gs.episub_heartbeat();
+        gs.episub_metrics.reset_cache();
         gs.episub_heartbeat();
         gs.episub_heartbeat();
         gs.episub_heartbeat();
@@ -5713,7 +5736,7 @@ mod tests {
         // Our choked peers should be unchoked now.
         for peer_id in choked_peers.iter() {
             assert_eq!(
-                gs.topic_peers
+                gs.mesh
                     .get(&topic_hash)
                     .unwrap()
                     .get(peer_id)

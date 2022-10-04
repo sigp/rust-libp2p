@@ -411,6 +411,8 @@ impl EpisubMetrics {
     // Therefore we only count IHAVE messages that correspond to a message that was later received
     // by another peer.
     pub fn ihave_messages_stats(&mut self) -> HashMap<TopicHash, HashMap<PeerId, u8>> {
+        self.prune_expired_elements();
+
         let mut ihave_count: HashMap<TopicHash, HashMap<PeerId, usize>> = HashMap::new();
         for (unique_message, peer_id_hashset) in self.ihave_msgs.iter() {
             // Make sure we actually received this message from another peer.
@@ -475,6 +477,15 @@ impl EpisubMetrics {
 
         // Remove the ihave_msgs_cache.
         self.ihave_msgs.remove_expired();
+    }
+
+    #[cfg(test)]
+    /// Used for testing to simulate a period of running over expiry of the cache
+    pub fn reset_cache(&mut self) {
+        self.raw_deliveries.clear();
+        self.ihave_msgs.clear();
+        self.current_duplicates_per_topic_peer.clear();
+        self.total_unique_messages.clear();
     }
 }
 

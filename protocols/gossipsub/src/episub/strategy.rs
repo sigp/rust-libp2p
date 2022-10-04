@@ -23,44 +23,37 @@
 //! CHOKE'ing and UNCHOKE'ing peers.
 
 use super::metrics::EpisubMetrics;
-use crate::behaviour::ChokeState;
-use crate::types::{PeerConnections, PeerKind};
 use crate::TopicHash;
 use libp2p_core::PeerId;
-use log::debug;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 pub trait ChokingStrategy {
-    /// The router will call this function every episub heartbeat, giving access to the router's `topic_peers` map. The [`ChokingStrategy`], based on the supplied metrics, can then choke peers as it sees fit.
-    fn choke_peers(
-        &self,
-        topic_peers: &mut HashMap<TopicHash, BTreeMap<PeerId, ChokeState>>,
-        mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
-        metrics: &mut EpisubMetrics,
-    );
+    /// This should return a list of peers that are eligible to choke. The router will decide if
+    /// the peers are ultimately choked.
+    fn choke_peers(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>>;
 
-    /// This function defines which peers should be UNCHOKE'd given a set mesh peers and episub metrics. The resulting
-    /// peers will the be unchoked by the gossipsub router.
-    /// This should also handle adding fanout peers into the mesh. i.e If the result returns a
-    /// peer that is not in the mesh, that peer will be added into the mesh if possible.
-    fn unchoke_peers(
-        &self,
-        topic_peers: &mut HashMap<TopicHash, BTreeMap<PeerId, ChokeState>>,
-        mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
-        metrics: &mut EpisubMetrics,
-    );
+    /// This should return a list of peers that are eligible to unchoke. The router will decide if
+    /// the peers are ultimately unchoked.
+    fn unchoke_peers(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>>;
 
     /// Proposes a set of peers for the router to consider adding to the mesh. The router will
     /// decide if the mesh can handle extra peers, then handle the necessary control messages to
     /// add proposed peers to the mesh.
     /// The strategy should makes sure the peers are not already in the mesh and are connected to
     /// the router.
-    fn fanout_addition(
-        &self,
-        mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
-        connected_peers: &HashMap<PeerId, PeerConnections>,
-        metrics: &mut EpisubMetrics,
-    ) -> HashMap<TopicHash, HashSet<PeerId>>;
+    fn fanout_addition(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>>;
+
+    /// The number of peers in the mesh that should remain unchoked
+    fn mesh_non_choke(&self) -> usize;
+
+    /// The maximum number of peers to choke per episub heartbeat.
+    fn choke_churn(&self) -> usize;
+
+    /// The maximum number of peers to unchoke per episub heartbeat.
+    fn unchoke_churn(&self) -> usize;
+
+    /// The maximum number of peers to add to the mesh per episub heartbeat.
+    fn fanout_churn(&self) -> usize;
 }
 
 /// A built-in struct that implements [`ChokingStrategy`] to allow for easy access to some simple
@@ -71,19 +64,19 @@ pub struct DefaultStrat {
     mesh_non_choke: usize,
     /// The maximum number of peers to return for each invocation of `choke_peers` per topic.
     /// Default value is 2.
-    choke_churn: u8,
+    choke_churn: usize,
     /// Require a percentage of duplicates for each peer before making them eligible to be
     /// choked.
     choke_duplicates_threshold: Option<u8>,
     /// The specific choking strategy to use. See [`ChokeStrat`] for more details.
     choke_strategy: ChokeStrategy,
     /// The maximum number of peers to return that are in the mesh and currently choked per topic. The default value is 2.
-    unchoke_churn: u8,
+    unchoke_churn: usize,
     /// The specific UNCHOKE'ing strategy to use. See [`UnchokeStrat`] for more details.
     unchoke_strategy: UnchokeStrategy,
     /// The maximum number of peers to consider to add into the mesh from the fanout if they
     /// pass the fanout_addition_strategy per topic.
-    fanout_churn: u8,
+    fanout_churn: usize,
     /// The strategy to use to consider fanout peers for addition into the mesh.
     fanout_addition_strategy: UnchokeStrategy,
 }
@@ -165,7 +158,7 @@ impl DefaultStratBuilder {
     }
 
     /// The maximum number of peers to consider to be choked per invocation of `choke_peers()`.
-    pub fn choke_churn(mut self, churn: u8) -> Self {
+    pub fn choke_churn(mut self, churn: usize) -> Self {
         self.default_strat.choke_churn = churn;
         self
     }
@@ -184,7 +177,7 @@ impl DefaultStratBuilder {
     }
 
     /// The maximum number of peers that are in the mesh and choked to consider to be unchoked.
-    pub fn unchoke_churn(mut self, churn: u8) -> Self {
+    pub fn unchoke_churn(mut self, churn: usize) -> Self {
         self.default_strat.unchoke_churn = churn;
         self
     }
@@ -195,9 +188,9 @@ impl DefaultStratBuilder {
         self
     }
 
-    /// The maximum number of peers that are in the fanout that can be considered to be added to
+    /// The maximum number of peers that are in the fanout that can be added to
     /// the mesh.
-    pub fn fanout_churn(mut self, churn: u8) -> Self {
+    pub fn fanout_churn(mut self, churn: usize) -> Self {
         self.default_strat.unchoke_churn = churn;
         self
     }
@@ -218,62 +211,31 @@ impl DefaultStratBuilder {
 // Now the magic for the strategy implementation
 
 impl ChokingStrategy for DefaultStrat {
-    fn choke_peers(
-        &self,
-        topic_peers: &mut HashMap<TopicHash, BTreeMap<PeerId, ChokeState>>,
-        mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
-        metrics: &mut EpisubMetrics,
-    ) {
+    fn mesh_non_choke(&self) -> usize {
+        self.mesh_non_choke
+    }
+
+    fn choke_churn(&self) -> usize {
+        self.choke_churn
+    }
+
+    fn unchoke_churn(&self) -> usize {
+        self.unchoke_churn
+    }
+
+    fn fanout_churn(&self) -> usize {
+        self.fanout_churn
+    }
+
+    fn choke_peers(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>> {
         // If we have a duplicates threshold, calculate the duplicates and see which peers
         // are actually eligible to be choked.
         let duplicate_metrics = self
             .choke_duplicates_threshold
             .map(|threshold| (threshold, metrics.duplicates_percentage()));
 
-        // NOTE: Ended up having to use functions rather than closures due to the mutable borrow of
-        // the topic_peers in choke_potential_peer.
-        //
-        // The following are two helper functions used to simplify and de-duplicate code used in
-        // handling specific strategies.
-
-        // Get the number of unchoked peers for a given topic
-        fn unchoked_peers(
-            topic: &TopicHash,
-            topic_peers: &HashMap<TopicHash, BTreeMap<PeerId, ChokeState>>,
-            mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
-        ) -> usize {
-            let mut unchoked_peers = 0;
-            if let Some(peers) = mesh_peers.get(topic) {
-                for peer_id in peers.iter() {
-                    if let Some(more_peers) = topic_peers.get(topic) {
-                        if let Some(choke_state) = more_peers.get(peer_id) {
-                            if !choke_state.peer_is_choked {
-                                unchoked_peers += 1
-                            }
-                        }
-                    }
-                }
-            }
-            unchoked_peers
-        }
-
-        // Chokes a peer if it passes the duplicates threshold, exists in the mesh and is currently
-        // unchoked.
-        // Returns true, if the peer became choked. The return value is required so we can count
-        // the number of peers we have choked to ensure we don't go over any limit.
-        #[allow(clippy::type_complexity)]
-        fn choke_potential_peer(
-            topic: &TopicHash,
-            peer_id: &PeerId,
-            topic_peers: &mut HashMap<TopicHash, BTreeMap<PeerId, ChokeState>>,
-            mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
-            duplicate_metrics: Option<&(u8, HashMap<TopicHash, HashMap<PeerId, u8>>)>,
-        ) -> bool {
-            // Check if the peer exists in the mesh. End if it does not.
-            if mesh_peers.get(topic).map(|peers| peers.contains(peer_id)) != Some(true) {
-                return false;
-            }
-
+        // Chokes a peer if it passes the duplicates threshold
+        let passes_duplicate_threshold = |topic: &TopicHash, peer_id: &PeerId| {
             // Check the peer satisfies the duplicates threshold constraint
             if let Some((threshold, metrics)) = duplicate_metrics.as_ref() {
                 if let Some(duplicates_seen) = metrics.get(topic).and_then(|map| map.get(peer_id)) {
@@ -282,22 +244,8 @@ impl ChokingStrategy for DefaultStrat {
                     }
                 }
             }
-
-            // If the peer is in the unchoked state, choke it
-            if let Some(peer_choke_state) = topic_peers
-                .get_mut(topic)
-                .and_then(|set| set.get_mut(peer_id))
-            {
-                if !peer_choke_state.peer_is_choked {
-                    // Choke the peer and increment the counter
-                    debug!("EPISUB: Choking peer: {} in topic: {}", peer_id, topic);
-                    peer_choke_state.peer_is_choked = true;
-                    return true;
-                }
-            }
-
-            false
-        }
+            true
+        };
 
         // Perform the choking strategy logic.
         match self.choke_strategy {
@@ -305,38 +253,29 @@ impl ChokingStrategy for DefaultStrat {
             ChokeStrategy::RawLatency(cutoff) => {
                 // Obtain the average latency for all peers and filter those that have an average
                 // latency larger than this cut-off
-                'mesh_loop: for (topic, peer_map) in
-                    metrics.average_stat_per_topic_peer().into_iter()
-                {
-                    let mut choked_peers = 0;
-                    // Count the number of un-choked mesh peers to ensure we don't choke beyond
-                    // this limit.
-                    let unchoked_peers = unchoked_peers(&topic, topic_peers, mesh_peers);
-                    if unchoked_peers <= self.mesh_non_choke {
-                        continue;
-                    }
-
-                    for (peer_id, stat) in peer_map.into_iter() {
-                        if stat.latency >= cutoff {
-                            // Choke the peer, if its in the mesh.
-                            if choke_potential_peer(
-                                &topic,
-                                &peer_id,
-                                topic_peers,
-                                mesh_peers,
-                                duplicate_metrics.as_ref(),
-                            ) {
-                                choked_peers += 1;
-                                if choked_peers >= self.choke_churn as usize
-                                    || unchoked_peers.saturating_sub(choked_peers)
-                                        <= self.mesh_non_choke
-                                {
-                                    continue 'mesh_loop;
+                metrics
+                    .average_stat_per_topic_peer()
+                    .into_iter()
+                    .filter_map(|(topic, peer_map)| {
+                        let filtered_map: HashSet<PeerId> = peer_map
+                            .into_iter()
+                            .filter_map(|(peer_id, stat)| {
+                                if stat.latency >= cutoff {
+                                    // Mark the peer as eligible if it passes the duplicate threshold also.
+                                    if passes_duplicate_threshold(&topic, &peer_id) {
+                                        return Some(peer_id);
+                                    }
                                 }
-                            }
+                                None
+                            })
+                            .collect();
+                        if !filtered_map.is_empty() {
+                            Some((topic, filtered_map))
+                        } else {
+                            None
                         }
-                    }
-                }
+                    })
+                    .collect()
             }
             ChokeStrategy::PercentileLatency {
                 percentile,
@@ -344,120 +283,88 @@ impl ChokingStrategy for DefaultStrat {
             } => {
                 // Obtain the message counts for peers lying in this percentile and filter them
                 // based on the message_threshold.
-                'mesh_loop: for (topic, peer_map) in metrics
+                metrics
                     .percentile_latency_per_topic_peer(percentile)
                     .into_iter()
-                {
-                    let mut choked_peers = 0;
-                    // Count the number of un-choked mesh peers to ensure we don't choke beyond
-                    // this limit.
-                    let unchoked_peers = unchoked_peers(&topic, topic_peers, mesh_peers);
-
-                    if unchoked_peers <= self.mesh_non_choke {
-                        continue;
-                    }
-                    for (peer_id, message_percent) in peer_map.into_iter() {
-                        if message_percent >= message_threshold {
-                            // Choke the peer, if its in the mesh.
-                            if choke_potential_peer(
-                                &topic,
-                                &peer_id,
-                                topic_peers,
-                                mesh_peers,
-                                duplicate_metrics.as_ref(),
-                            ) {
-                                choked_peers += 1;
-                                if choked_peers >= self.choke_churn as usize
-                                    || unchoked_peers.saturating_sub(choked_peers)
-                                        <= self.mesh_non_choke
-                                {
-                                    continue 'mesh_loop;
+                    .filter_map(|(topic, peer_map)| {
+                        let filtered_map: HashSet<PeerId> = peer_map
+                            .into_iter()
+                            .filter_map(|(peer_id, message_percent)| {
+                                if message_percent >= message_threshold {
+                                    // Mark the peer as eligible if it passes the duplicate threshold also.
+                                    if passes_duplicate_threshold(&topic, &peer_id) {
+                                        return Some(peer_id);
+                                    }
                                 }
-                            }
+                                None
+                            })
+                            .collect();
+                        if !filtered_map.is_empty() {
+                            Some((topic, filtered_map))
+                        } else {
+                            None
                         }
-                    }
-                }
+                    })
+                    .collect()
             }
             ChokeStrategy::LatencyOrder(cutoff) => {
                 // Obtain the average message order for each peer and apply the cutoff.
-                'mesh_loop: for (topic, peer_map) in
-                    metrics.average_stat_per_topic_peer().into_iter()
-                {
-                    let mut choked_peers = 0;
-                    // Count the number of un-choked mesh peers to ensure we don't choke beyond
-                    // this limit.
-                    let unchoked_peers = unchoked_peers(&topic, topic_peers, mesh_peers);
-
-                    for (peer_id, stat) in peer_map.into_iter() {
-                        if stat.order as u8 >= cutoff {
-                            // Choke the peer, if its in the mesh.
-                            if choke_potential_peer(
-                                &topic,
-                                &peer_id,
-                                topic_peers,
-                                mesh_peers,
-                                duplicate_metrics.as_ref(),
-                            ) {
-                                choked_peers += 1;
-                                if choked_peers >= self.choke_churn as usize
-                                    || unchoked_peers.saturating_sub(choked_peers)
-                                        <= self.mesh_non_choke
-                                {
-                                    continue 'mesh_loop;
+                metrics
+                    .average_stat_per_topic_peer()
+                    .into_iter()
+                    .filter_map(|(topic, peer_map)| {
+                        let filtered_map: HashSet<PeerId> = peer_map
+                            .into_iter()
+                            .filter_map(|(peer_id, stat)| {
+                                if stat.order as u8 >= cutoff {
+                                    // Mark the peer as eligible if it passes the duplicate threshold also.
+                                    if passes_duplicate_threshold(&topic, &peer_id) {
+                                        return Some(peer_id);
+                                    }
                                 }
-                            }
+                                None
+                            })
+                            .collect();
+                        if !filtered_map.is_empty() {
+                            Some((topic, filtered_map))
+                        } else {
+                            None
                         }
-                    }
-                }
+                    })
+                    .collect()
             }
         }
     }
 
     // NOTE: This function returns a list of peers, the list can include peers that are not in
     // the mesh. These peers are fanout peers and the router may add them into the mesh.
-    fn unchoke_peers(
-        &self,
-        topic_peers: &mut HashMap<TopicHash, BTreeMap<PeerId, ChokeState>>,
-        mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
-        metrics: &mut EpisubMetrics,
-    ) {
-        // Unchoke's a peer if it is currently choked. `in_mesh` decides whether to unchoke peers
-        // that are in the mesh or outside the mesh (fanout).
-        // Returns true, if the peer was choked.
-        let mut unchoke_peer = |topic: &TopicHash, peer_id: &PeerId| {
-            // Is the peer in the mesh
-            if mesh_peers.get(topic).map(|peers| peers.contains(peer_id)) != Some(true) {
-                // Doesn't fit the requirements of in/out of mesh
-                return false;
-            }
-
-            if let Some(choke_state) = topic_peers
-                .get_mut(topic)
-                .and_then(|set| set.get_mut(peer_id))
-            {
-                if choke_state.peer_is_choked {
-                    debug!("EPISUB: Unchoking peer: {} in topic: {}", peer_id, topic);
-                    choke_state.peer_is_choked = false;
-                }
-            }
-            false
-        };
-
+    fn unchoke_peers(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>> {
         match self.unchoke_strategy {
             UnchokeStrategy::IHaveMessagePercent(percent) => {
                 // Determine the percentage of messages we have received that a peer has sent
                 // IHAVE messages before receiving them on the mesh.
-                'main: for (topic, map) in metrics.ihave_messages_stats().into_iter() {
-                    let mut unchoked_count = 0;
-                    for (peer_id, message_percent) in map.iter() {
-                        if *message_percent >= percent && unchoke_peer(&topic, peer_id) {
-                            unchoked_count += 1;
-                            if unchoked_count >= self.unchoke_churn {
-                                continue 'main;
-                            }
+                metrics
+                    .ihave_messages_stats()
+                    .into_iter()
+                    .filter_map(|(topic, peer_map)| {
+                        let filtered_map: HashSet<PeerId> = peer_map
+                            .into_iter()
+                            .filter_map(|(peer_id, message_percent)| {
+                                if message_percent >= percent {
+                                    Some(peer_id)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+
+                        if !filtered_map.is_empty() {
+                            Some((topic, filtered_map))
+                        } else {
+                            None
                         }
-                    }
-                }
+                    })
+                    .collect()
             }
         }
     }
@@ -465,13 +372,9 @@ impl ChokingStrategy for DefaultStrat {
     /// Proposes a set of peers for the router to consider adding to the mesh. The router will
     /// decide if the mesh can handle extra peers, then handle the necessary control messages to
     /// add proposed peers to the mesh.
-    fn fanout_addition(
-        &self,
-        mesh_peers: &HashMap<TopicHash, BTreeSet<PeerId>>,
-        connected_peers: &HashMap<PeerId, PeerConnections>,
-        metrics: &mut EpisubMetrics,
-    ) -> HashMap<TopicHash, HashSet<PeerId>> {
+    fn fanout_addition(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>> {
         let mut proposed_peers: HashMap<TopicHash, HashSet<PeerId>> = HashMap::new();
+        /*
         match self.fanout_addition_strategy {
             UnchokeStrategy::IHaveMessagePercent(percent) => {
                 'mesh_loop: for (topic, map) in metrics.ihave_messages_stats().into_iter() {
@@ -500,6 +403,7 @@ impl ChokingStrategy for DefaultStrat {
                 }
             }
         }
+        */
 
         proposed_peers
     }
