@@ -2456,383 +2456,6 @@ where
         }
     }
 
-    /* EPISUB Internal Functions */
-
-    // This regulates the CHOKING and UNCHOKING of peers in our mesh's. It can also add better
-    // performing peers into the mesh if need be.
-    fn episub_heartbeat(&mut self) {
-        // Handle choking
-        self.choke_peers();
-
-        // Handle unchoking
-        self.unchoke_peers();
-
-        self.episub_fanout_additions();
-    }
-
-    /// Handles choking of our peers. Used within the episub heartbeat.
-    fn choke_peers(&mut self) {
-        // Handle Choking
-
-        // Pre-requisites before doing any metric calculations:
-
-        // Are any of our mesh peers capable of being choked and do we have enough peers left that
-        // can be choked.
-        // Build a mapping of Topic -> (unchoked_peers, peers_that_can_be_choked)
-        let current_mesh_stats = {
-            let mut mesh_stats = HashMap::new();
-            for (topic, mesh_peers) in self.mesh.iter() {
-                let mut unchoked_peers = 0;
-                let mut can_be_choked_peers = 0;
-
-                for (peer_id, choke_state) in mesh_peers {
-                    if !choke_state.peer_is_choked {
-                        unchoked_peers += 1
-                    }
-                    if let Some(peer_connections) = self.connected_peers.get(peer_id) {
-                        // Can only choke v1_2 peers
-                        if peer_connections.is_episub_compat() {
-                            can_be_choked_peers += 1;
-                        }
-                    }
-                }
-                mesh_stats.insert(topic.clone(), (unchoked_peers, can_be_choked_peers));
-            }
-            mesh_stats
-        };
-
-        // If we cannot choke any more peers, return early.
-        let mut return_early = true;
-        for (_topic, (unchoked_peers, peers_that_can_be_choked)) in current_mesh_stats.iter() {
-            if *peers_that_can_be_choked == 0 {
-                continue;
-            }
-
-            if *unchoked_peers > self.config.choking_strategy().mesh_non_choke() {
-                return_early = false;
-                break;
-            }
-        }
-        if return_early {
-            return;
-        }
-
-        // Handle the actual choking here
-
-        // Obtain any eligible peers to choke
-        let eligible_choke_peers = self
-            .config
-            .choking_strategy()
-            .choke_peers(&mut self.episub_metrics);
-
-        // For efficiency, we try and group the control messages as best we can into a single RPC
-        // message. We collect messages to send in this hashmap.
-        let mut choke_messages_to_send: HashMap<PeerId, Vec<_>> = HashMap::new();
-
-        // Go through the list and determine if any are eligible to choke, if so send choke
-        // messages to them.
-        for (topic, eligible_peers) in eligible_choke_peers.into_iter() {
-            // End early if there is nothing we can do for this topic
-            // Only process this topic if we have a mesh for it.
-            if let Some((unchoked_peers, peers_that_can_be_choked)) = current_mesh_stats.get(&topic)
-            {
-                if *peers_that_can_be_choked == 0 {
-                    continue;
-                }
-
-                if *unchoked_peers <= self.config.choking_strategy().mesh_non_choke() {
-                    continue;
-                }
-
-                // Filter out peers that are of the correct type and are currently unchoked
-                let filtered_peers: HashSet<PeerId> = eligible_peers
-                    .into_iter()
-                    .filter(|peer_id| {
-                        // Must support episub
-                        if let Some(peer_connections) = self.connected_peers.get(peer_id) {
-                            if !peer_connections.is_episub_compat() {
-                                return false;
-                            }
-                        } else {
-                            // Must be connected
-                            return false;
-                        }
-                        // Must be in a mesh and be unchoked
-                        if let Some(mesh_peers) = self.mesh.get(&topic) {
-                            if let Some(choke_state) = mesh_peers.get(peer_id) {
-                                if choke_state.peer_is_choked {
-                                    // Peer is already choked
-                                    return false;
-                                }
-                            } else {
-                                // Peer is not in the mesh
-                                return false;
-                            }
-                        } else {
-                            // Must correspond to a mesh
-                            return false;
-                        }
-                        true
-                    })
-                    // We can't choke more than `mesh_non_choke` allows. So ensure we stay under this
-                    // limit
-                    .take(std::cmp::min(
-                        (*unchoked_peers)
-                            .saturating_sub(self.config.choking_strategy().mesh_non_choke()),
-                        self.config.choking_strategy().choke_churn(),
-                    ))
-                    .collect();
-
-                // Register these peers as choked and send CHOKE messages to them.
-                for peer_id in filtered_peers {
-                    // Queue the CHOKE message
-                    choke_messages_to_send.entry(peer_id).or_default().push(
-                        GossipsubControlAction::Choke {
-                            topic_hash: topic.clone(),
-                        },
-                    );
-                    debug!("EPISUB: Choking peer: {} for topic: {}", peer_id, topic);
-
-                    // Mark the peers as being choked.
-                    if let Some(choke_state) = self
-                        .mesh
-                        .get_mut(&topic)
-                        .and_then(|peers| peers.get_mut(&peer_id))
-                    {
-                        choke_state.peer_is_choked = true;
-                    } else {
-                        error!("EPISUB: Could not find peer to choke: {}", peer_id);
-                    }
-                }
-            }
-        }
-
-        // If we have peers to choke, send the grouped messages. If the message send fails, we need
-        // to revert the choking status.
-        for (peer_id, control_msgs) in choke_messages_to_send.into_iter() {
-            let topic_list: Vec<TopicHash> = control_msgs
-                .iter()
-                .filter_map(|control_msg| {
-                    if let GossipsubControlAction::Choke { topic_hash } = control_msg {
-                        Some(topic_hash.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if self
-                .send_message(
-                    peer_id,
-                    GossipsubRpc {
-                        subscriptions: Vec::new(),
-                        messages: Vec::new(),
-                        control_msgs,
-                    }
-                    .into_protobuf(),
-                )
-                .is_err()
-            {
-                error!("EPISUB: Failed sending choke to peer: {}.", peer_id);
-                // Undo the incorrect assigning of choking status
-                for topic in topic_list {
-                    if let Some(choke_state) = self
-                        .mesh
-                        .get_mut(&topic)
-                        .and_then(|peers| peers.get_mut(&peer_id))
-                    {
-                        choke_state.peer_is_choked = false;
-                    } else {
-                        error!("EPISUB: Failed reverting choke state for peer: {}", peer_id);
-                    }
-                }
-            }
-        }
-    }
-
-    /// Handles un-choking of our peers. Used within the episub heartbeat.
-    fn unchoke_peers(&mut self) {
-        // Pre-requisites before doing any metric calculations:
-
-        // Are any of our mesh peers currently choked?
-        // Build a mapping of Topic -> choked_peers
-        let current_mesh_choked_peers: HashMap<TopicHash, HashSet<PeerId>> = {
-            let mut unchoked_peers: HashMap<TopicHash, HashSet<PeerId>> = HashMap::new();
-            for (topic, mesh_peers) in self.mesh.iter() {
-                for (peer_id, choke_state) in mesh_peers {
-                    if choke_state.peer_is_choked {
-                        unchoked_peers
-                            .entry(topic.clone())
-                            .or_default()
-                            .insert(*peer_id);
-                    }
-                }
-            }
-            unchoked_peers
-        };
-
-        // If we cannot choke any more peers, return early.
-        if current_mesh_choked_peers.is_empty() {
-            return;
-        }
-
-        // Handle the actual un-choking here
-
-        // Obtain any eligible peers to unchoke
-        let eligible_unchoke_peers = self
-            .config
-            .choking_strategy()
-            .unchoke_peers(&mut self.episub_metrics);
-
-        // For efficiency, we try and group the control messages as best we can into a single RPC
-        // message. We collect messages to send in this hashmap.
-        let mut unchoke_messages_to_send: HashMap<PeerId, Vec<_>> = HashMap::new();
-
-        // Go through the list and determine if any are eligible to choke, if so send choke
-        // messages to them.
-        for (topic, eligible_peers) in eligible_unchoke_peers.into_iter() {
-            // End early if there is nothing we can do for this topic
-            if let Some(peers_to_unchoke) = current_mesh_choked_peers.get(&topic) {
-                if peers_to_unchoke.is_empty() {
-                    continue;
-                }
-
-                // If any eligible peers can be unchoked, queue the unchoke message
-                for peer_id in eligible_peers
-                    .into_iter()
-                    .take(self.config.choking_strategy().unchoke_churn())
-                {
-                    // Queue the CHOKE message
-                    if peers_to_unchoke.contains(&peer_id) {
-                        unchoke_messages_to_send.entry(peer_id).or_default().push(
-                            GossipsubControlAction::UnChoke {
-                                topic_hash: topic.clone(),
-                            },
-                        );
-                    }
-                    debug!("EPISUB: Unchoking peer: {} for topic: {}", peer_id, topic);
-
-                    // Mark the peers as being unchoked.
-                    if let Some(choke_state) = self
-                        .mesh
-                        .get_mut(&topic)
-                        .and_then(|peers| peers.get_mut(&peer_id))
-                    {
-                        choke_state.peer_is_choked = false;
-                    } else {
-                        error!("EPISUB: Could not find peer to unchoke: {}", peer_id);
-                    }
-                }
-            }
-        }
-
-        // If we have peers to unchoke, send the grouped messages. If the message send fails, we need
-        // to revert the choking status.
-        for (peer_id, control_msgs) in unchoke_messages_to_send.into_iter() {
-            let topic_list: Vec<TopicHash> = control_msgs
-                .iter()
-                .filter_map(|control_msg| {
-                    if let GossipsubControlAction::UnChoke { topic_hash } = control_msg {
-                        Some(topic_hash.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if self
-                .send_message(
-                    peer_id,
-                    GossipsubRpc {
-                        subscriptions: Vec::new(),
-                        messages: Vec::new(),
-                        control_msgs,
-                    }
-                    .into_protobuf(),
-                )
-                .is_err()
-            {
-                error!("EPISUB: Failed sending unchoke to peer: {}.", peer_id);
-                // Undo the incorrect assigning of choking status
-                for topic in topic_list {
-                    if let Some(choke_state) = self
-                        .mesh
-                        .get_mut(&topic)
-                        .and_then(|peers| peers.get_mut(&peer_id))
-                    {
-                        choke_state.peer_is_choked = true;
-                    } else {
-                        error!("EPISUB: Failed reverting choke state for peer: {}", peer_id);
-                    }
-                }
-            }
-        }
-    }
-
-    /// Attempts to add peers into the mesh if there are any capable of being added.
-    /// We attempt to fill peers up to our `mesh_n_high` configuration, based on their performance
-    /// of chosen choking strategy.
-    fn episub_fanout_additions(&mut self) {
-        // Handle potential Fanout additions
-        let potential_mesh_additions = self
-            .config
-            .choking_strategy()
-            .fanout_addition(&mut self.episub_metrics);
-
-        // Check our meshes to make sure there is room of these, if so, unchoke them and graft
-        // them.
-        for (topic, potential_peers) in potential_mesh_additions.into_iter() {
-            let mut peers_to_graft = HashSet::new();
-            if let Some(mesh_peers) = self.mesh.get_mut(&topic) {
-                for peer_id in potential_peers {
-                    // Check the score and mesh back-off times
-                    if mesh_peers.len() < self.config.mesh_n_high()
-                        && !Self::score_below_threshold_from_scores(
-                            &self.peer_score,
-                            &peer_id,
-                            |_| 0.0,
-                        )
-                        .0
-                        && !self.backoffs.is_backoff_with_slack(&topic, &peer_id)
-                        && !mesh_peers.contains_key(&peer_id)
-                    {
-                        mesh_peers.insert(peer_id, ChokeState::default());
-                        debug!(
-                            "EPISUB: Adding fanout peer {} to the mesh for topic {:?}",
-                            peer_id, topic
-                        );
-                        if let Some(m) = self.metrics.as_mut() {
-                            m.peers_included(&topic, Inclusion::FanoutAddition, 1)
-                        }
-                        // Send graft to the peer
-                        debug!("Sending GRAFT to peer {} for topic {:?}", peer_id, topic);
-                        if let Some((peer_score, ..)) = &mut self.peer_score {
-                            peer_score.graft(&peer_id, topic.clone());
-                        }
-
-                        peers_to_graft.insert(peer_id);
-                    }
-                }
-            }
-            for peer_id in peers_to_graft {
-                if self
-                    .send_message(
-                        peer_id,
-                        GossipsubRpc {
-                            subscriptions: Vec::new(),
-                            messages: Vec::new(),
-                            control_msgs: vec![GossipsubControlAction::Graft {
-                                topic_hash: topic.clone(),
-                            }],
-                        }
-                        .into_protobuf(),
-                    )
-                    .is_err()
-                {
-                    error!("Failed sending fanout addition grafts.");
-                }
-            }
-        }
-    }
-
     /// Emits gossip - Send IHAVE messages to a random set of gossip peers. This is not applied to mesh
     /// and fanout peers.
     fn emit_gossip(&mut self) {
@@ -3435,6 +3058,388 @@ where
         }
 
         Ok(rpc_list)
+    }
+
+    /* EPISUB Internal Functions */
+
+    // This regulates the CHOKING and UNCHOKING of peers in our mesh's. It can also add better
+    // performing peers into the mesh if need be.
+    fn episub_heartbeat(&mut self) {
+        // Handle choking
+        self.choke_peers();
+
+        // Handle unchoking
+        self.unchoke_peers();
+
+        // Handle potential additions to the mesh
+        self.episub_mesh_additions();
+    }
+
+    /// Handles choking of our peers. Used within the episub heartbeat.
+    fn choke_peers(&mut self) {
+        // Pre-requisites before doing any metric calculations:
+
+        // Are any of our mesh peers capable of being choked and do we have enough peers left that
+        // can be choked.
+        // Build a mapping of Topic -> (unchoked_peers, peers_that_can_be_choked)
+        let current_mesh_stats = {
+            let mut mesh_stats = HashMap::new();
+            for (topic, mesh_peers) in self.mesh.iter() {
+                let mut unchoked_peers = 0;
+                let mut can_be_choked_peers = 0;
+
+                for (peer_id, choke_state) in mesh_peers {
+                    if !choke_state.peer_is_choked {
+                        unchoked_peers += 1
+                    }
+                    if let Some(peer_connections) = self.connected_peers.get(peer_id) {
+                        // Can only choke v1_2 peers
+                        if peer_connections.is_episub_compat() {
+                            can_be_choked_peers += 1;
+                        }
+                    }
+                }
+                mesh_stats.insert(topic.clone(), (unchoked_peers, can_be_choked_peers));
+            }
+            mesh_stats
+        };
+
+        // If we cannot choke any more peers, return early.
+        let mut return_early = true;
+        for (_topic, (unchoked_peers, peers_that_can_be_choked)) in current_mesh_stats.iter() {
+            if *peers_that_can_be_choked == 0 {
+                continue;
+            }
+
+            if *unchoked_peers > self.config.choking_strategy().mesh_non_choke() {
+                return_early = false;
+                break;
+            }
+        }
+        if return_early {
+            return;
+        }
+
+        // Handle the actual choking here
+
+        // Obtain any eligible peers to choke
+        let eligible_choke_peers = self
+            .config
+            .choking_strategy()
+            .choke_peers(&mut self.episub_metrics);
+
+        // For efficiency, we try and group the control messages as best we can into a single RPC
+        // message. We collect messages to send in this hashmap.
+        let mut choke_messages_to_send: HashMap<PeerId, Vec<_>> = HashMap::new();
+
+        // Go through the list and determine if any are eligible to choke, if so send choke
+        // messages to them.
+        for (topic, eligible_peers) in eligible_choke_peers.into_iter() {
+            // End early if there is nothing we can do for this topic
+            // Only process this topic if we have a mesh for it.
+            if let Some((unchoked_peers, peers_that_can_be_choked)) = current_mesh_stats.get(&topic)
+            {
+                if *peers_that_can_be_choked == 0 {
+                    continue;
+                }
+
+                if *unchoked_peers <= self.config.choking_strategy().mesh_non_choke() {
+                    continue;
+                }
+
+                // Filter out peers that are of the correct type and are currently unchoked
+                let filtered_peers: HashSet<PeerId> = eligible_peers
+                    .into_iter()
+                    .filter(|peer_id| {
+                        // Must support episub
+                        if let Some(peer_connections) = self.connected_peers.get(peer_id) {
+                            if !peer_connections.is_episub_compat() {
+                                return false;
+                            }
+                        } else {
+                            // Must be connected
+                            return false;
+                        }
+                        // Must be in a mesh and be unchoked
+                        if let Some(mesh_peers) = self.mesh.get(&topic) {
+                            if let Some(choke_state) = mesh_peers.get(peer_id) {
+                                if choke_state.peer_is_choked {
+                                    // Peer is already choked
+                                    return false;
+                                }
+                            } else {
+                                // Peer is not in the mesh
+                                return false;
+                            }
+                        } else {
+                            // Must correspond to a mesh
+                            return false;
+                        }
+                        true
+                    })
+                    // We can't choke more than `mesh_non_choke` allows. So ensure we stay under this
+                    // limit
+                    .take(std::cmp::min(
+                        (*unchoked_peers)
+                            .saturating_sub(self.config.choking_strategy().mesh_non_choke()),
+                        self.config.choking_strategy().choke_churn(),
+                    ))
+                    .collect();
+
+                // Register these peers as choked and send CHOKE messages to them.
+                for peer_id in filtered_peers {
+                    // Queue the CHOKE message
+                    choke_messages_to_send.entry(peer_id).or_default().push(
+                        GossipsubControlAction::Choke {
+                            topic_hash: topic.clone(),
+                        },
+                    );
+                    debug!("EPISUB: Choking peer: {} for topic: {}", peer_id, topic);
+
+                    // Mark the peers as being choked.
+                    if let Some(choke_state) = self
+                        .mesh
+                        .get_mut(&topic)
+                        .and_then(|peers| peers.get_mut(&peer_id))
+                    {
+                        choke_state.peer_is_choked = true;
+                    } else {
+                        error!("EPISUB: Could not find peer to choke: {}", peer_id);
+                    }
+                }
+            }
+        }
+
+        // If we have peers to choke, send the grouped messages. If the message send fails, we need
+        // to revert the choking status.
+        for (peer_id, control_msgs) in choke_messages_to_send.into_iter() {
+            let topic_list: Vec<TopicHash> = control_msgs
+                .iter()
+                .filter_map(|control_msg| {
+                    if let GossipsubControlAction::Choke { topic_hash } = control_msg {
+                        Some(topic_hash.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if self
+                .send_message(
+                    peer_id,
+                    GossipsubRpc {
+                        subscriptions: Vec::new(),
+                        messages: Vec::new(),
+                        control_msgs,
+                    }
+                    .into_protobuf(),
+                )
+                .is_err()
+            {
+                error!("EPISUB: Failed sending choke to peer: {}.", peer_id);
+                // Undo the incorrect assigning of choking status
+                for topic in topic_list {
+                    if let Some(choke_state) = self
+                        .mesh
+                        .get_mut(&topic)
+                        .and_then(|peers| peers.get_mut(&peer_id))
+                    {
+                        choke_state.peer_is_choked = false;
+                    } else {
+                        error!("EPISUB: Failed reverting choke state for peer: {}", peer_id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handles un-choking of our peers. Used within the episub heartbeat.
+    fn unchoke_peers(&mut self) {
+        // Pre-requisites before doing any metric calculations:
+
+        // Are any of our mesh peers currently choked?
+        // Build a mapping of Topic -> choked_peers
+        let current_mesh_choked_peers: HashMap<TopicHash, HashSet<PeerId>> = {
+            let mut unchoked_peers: HashMap<TopicHash, HashSet<PeerId>> = HashMap::new();
+            for (topic, mesh_peers) in self.mesh.iter() {
+                for (peer_id, choke_state) in mesh_peers {
+                    if choke_state.peer_is_choked {
+                        unchoked_peers
+                            .entry(topic.clone())
+                            .or_default()
+                            .insert(*peer_id);
+                    }
+                }
+            }
+            unchoked_peers
+        };
+
+        // If we cannot choke any more peers, return early.
+        if current_mesh_choked_peers.is_empty() {
+            return;
+        }
+
+        // Handle the actual un-choking here
+
+        // Obtain any eligible peers to unchoke
+        let eligible_unchoke_peers = self
+            .config
+            .choking_strategy()
+            .unchoke_peers(&mut self.episub_metrics);
+
+        // For efficiency, we try and group the control messages as best we can into a single RPC
+        // message. We collect messages to send in this hashmap.
+        let mut unchoke_messages_to_send: HashMap<PeerId, Vec<_>> = HashMap::new();
+
+        // Go through the list and determine if any are eligible to choke, if so send choke
+        // messages to them.
+        for (topic, eligible_peers) in eligible_unchoke_peers.into_iter() {
+            // End early if there is nothing we can do for this topic
+            if let Some(peers_to_unchoke) = current_mesh_choked_peers.get(&topic) {
+                if peers_to_unchoke.is_empty() {
+                    continue;
+                }
+
+                // If any eligible peers can be unchoked, queue the unchoke message
+                for peer_id in eligible_peers
+                    .into_iter()
+                    .take(self.config.choking_strategy().unchoke_churn())
+                {
+                    // Queue the CHOKE message
+                    if peers_to_unchoke.contains(&peer_id) {
+                        unchoke_messages_to_send.entry(peer_id).or_default().push(
+                            GossipsubControlAction::UnChoke {
+                                topic_hash: topic.clone(),
+                            },
+                        );
+                    }
+                    debug!("EPISUB: Unchoking peer: {} for topic: {}", peer_id, topic);
+
+                    // Mark the peers as being unchoked.
+                    if let Some(choke_state) = self
+                        .mesh
+                        .get_mut(&topic)
+                        .and_then(|peers| peers.get_mut(&peer_id))
+                    {
+                        choke_state.peer_is_choked = false;
+                    } else {
+                        error!("EPISUB: Could not find peer to unchoke: {}", peer_id);
+                    }
+                }
+            }
+        }
+
+        // If we have peers to unchoke, send the grouped messages. If the message send fails, we need
+        // to revert the choking status.
+        for (peer_id, control_msgs) in unchoke_messages_to_send.into_iter() {
+            let topic_list: Vec<TopicHash> = control_msgs
+                .iter()
+                .filter_map(|control_msg| {
+                    if let GossipsubControlAction::UnChoke { topic_hash } = control_msg {
+                        Some(topic_hash.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if self
+                .send_message(
+                    peer_id,
+                    GossipsubRpc {
+                        subscriptions: Vec::new(),
+                        messages: Vec::new(),
+                        control_msgs,
+                    }
+                    .into_protobuf(),
+                )
+                .is_err()
+            {
+                error!("EPISUB: Failed sending unchoke to peer: {}.", peer_id);
+                // Undo the incorrect assigning of choking status
+                for topic in topic_list {
+                    if let Some(choke_state) = self
+                        .mesh
+                        .get_mut(&topic)
+                        .and_then(|peers| peers.get_mut(&peer_id))
+                    {
+                        choke_state.peer_is_choked = true;
+                    } else {
+                        error!("EPISUB: Failed reverting choke state for peer: {}", peer_id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Attempts to add peers into the mesh if there are any capable of being added.
+    /// We attempt to fill peers up to our `mesh_n_high` configuration, based on their performance
+    /// of chosen choking strategy.
+    fn episub_mesh_additions(&mut self) {
+        // Handle potential mesh additions
+        let potential_mesh_additions = self
+            .config
+            .choking_strategy()
+            .mesh_addition(&mut self.episub_metrics);
+
+        // Check our meshes to make sure there is room of these, if so, unchoke them and graft
+        // them.
+        for (topic, potential_peers) in potential_mesh_additions.into_iter() {
+            let mut peers_to_graft = HashSet::new();
+            if let Some(mesh_peers) = self.mesh.get_mut(&topic) {
+                for peer_id in potential_peers {
+                    // Only add peers up to the churn limit.
+                    if peers_to_graft.len() >= self.config.choking_strategy().mesh_addition_churn()
+                    {
+                        break;
+                    }
+
+                    // Check the score and mesh back-off times
+                    if mesh_peers.len() < self.config.mesh_n_high()
+                        && !Self::score_below_threshold_from_scores(
+                            &self.peer_score,
+                            &peer_id,
+                            |_| 0.0,
+                        )
+                        .0
+                        && !self.backoffs.is_backoff_with_slack(&topic, &peer_id)
+                        && !mesh_peers.contains_key(&peer_id)
+                    {
+                        mesh_peers.insert(peer_id, ChokeState::default());
+                        debug!(
+                            "EPISUB: Adding fanout peer {} to the mesh for topic {:?}",
+                            peer_id, topic
+                        );
+                        if let Some(m) = self.metrics.as_mut() {
+                            m.peers_included(&topic, Inclusion::FanoutAddition, 1)
+                        }
+                        // Send graft to the peer
+                        debug!("Sending GRAFT to peer {} for topic {:?}", peer_id, topic);
+                        if let Some((peer_score, ..)) = &mut self.peer_score {
+                            peer_score.graft(&peer_id, topic.clone());
+                        }
+
+                        peers_to_graft.insert(peer_id);
+                    }
+                }
+            }
+            for peer_id in peers_to_graft {
+                if self
+                    .send_message(
+                        peer_id,
+                        GossipsubRpc {
+                            subscriptions: Vec::new(),
+                            messages: Vec::new(),
+                            control_msgs: vec![GossipsubControlAction::Graft {
+                                topic_hash: topic.clone(),
+                            }],
+                        }
+                        .into_protobuf(),
+                    )
+                    .is_err()
+                {
+                    error!("Failed sending fanout addition grafts.");
+                }
+            }
+        }
     }
 }
 

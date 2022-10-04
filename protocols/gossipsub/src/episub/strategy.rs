@@ -41,7 +41,7 @@ pub trait ChokingStrategy {
     /// add proposed peers to the mesh.
     /// The strategy should makes sure the peers are not already in the mesh and are connected to
     /// the router.
-    fn fanout_addition(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>>;
+    fn mesh_addition(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>>;
 
     /// The number of peers in the mesh that should remain unchoked
     fn mesh_non_choke(&self) -> usize;
@@ -53,7 +53,7 @@ pub trait ChokingStrategy {
     fn unchoke_churn(&self) -> usize;
 
     /// The maximum number of peers to add to the mesh per episub heartbeat.
-    fn fanout_churn(&self) -> usize;
+    fn mesh_addition_churn(&self) -> usize;
 }
 
 /// A built-in struct that implements [`ChokingStrategy`] to allow for easy access to some simple
@@ -74,11 +74,11 @@ pub struct DefaultStrat {
     unchoke_churn: usize,
     /// The specific UNCHOKE'ing strategy to use. See [`UnchokeStrat`] for more details.
     unchoke_strategy: UnchokeStrategy,
-    /// The maximum number of peers to consider to add into the mesh from the fanout if they
-    /// pass the fanout_addition_strategy per topic.
-    fanout_churn: usize,
-    /// The strategy to use to consider fanout peers for addition into the mesh.
-    fanout_addition_strategy: UnchokeStrategy,
+    /// The maximum number of peers to consider to add into the mesh from the mesh_addition if they
+    /// pass the mesh_addition_addition_strategy per topic.
+    mesh_addition_churn: usize,
+    /// The strategy to use to consider mesh_addition peers for addition into the mesh.
+    mesh_addition_strategy: UnchokeStrategy,
 }
 
 /// The list of possible choking strategies that can be used to CHOKE peers. More can be added in
@@ -131,10 +131,10 @@ impl Default for DefaultStrat {
             unchoke_strategy: UnchokeStrategy::IHaveMessagePercent(30), // If a peer sends us IHAVE
             // messages for 30% of messages we have
             // received, we unchoke it.
-            fanout_churn: 1,
-            // If a fanout peer sends us IHAVE messages for 30% of messages we have received, attempt to add
+            mesh_addition_churn: 1,
+            // If a mesh_addition peer sends us IHAVE messages for 30% of messages we have received, attempt to add
             // them to the mesh.
-            fanout_addition_strategy: UnchokeStrategy::IHaveMessagePercent(30),
+            mesh_addition_strategy: UnchokeStrategy::IHaveMessagePercent(30),
         }
     }
 }
@@ -188,17 +188,17 @@ impl DefaultStratBuilder {
         self
     }
 
-    /// The maximum number of peers that are in the fanout that can be added to
+    /// The maximum number of peers that are in the mesh_addition that can be added to
     /// the mesh.
-    pub fn fanout_churn(mut self, churn: usize) -> Self {
+    pub fn mesh_addition_churn(mut self, churn: usize) -> Self {
         self.default_strat.unchoke_churn = churn;
         self
     }
 
-    /// Sets the specific unchoking strategy to use when considering adding fanout peers to the
+    /// Sets the specific unchoking strategy to use when considering adding mesh_addition peers to the
     /// mesh. See [`UnChokeStrat`] for further details.
-    pub fn fanout_addition_strategy(mut self, unchoke_strat: UnchokeStrategy) -> Self {
-        self.default_strat.fanout_addition_strategy = unchoke_strat;
+    pub fn mesh_addition_strategy(mut self, unchoke_strat: UnchokeStrategy) -> Self {
+        self.default_strat.mesh_addition_strategy = unchoke_strat;
         self
     }
 
@@ -223,8 +223,8 @@ impl ChokingStrategy for DefaultStrat {
         self.unchoke_churn
     }
 
-    fn fanout_churn(&self) -> usize {
-        self.fanout_churn
+    fn mesh_addition_churn(&self) -> usize {
+        self.mesh_addition_churn
     }
 
     fn choke_peers(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>> {
@@ -337,7 +337,7 @@ impl ChokingStrategy for DefaultStrat {
     }
 
     // NOTE: This function returns a list of peers, the list can include peers that are not in
-    // the mesh. These peers are fanout peers and the router may add them into the mesh.
+    // the mesh. These peers are mesh_addition peers and the router may add them into the mesh.
     fn unchoke_peers(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>> {
         match self.unchoke_strategy {
             UnchokeStrategy::IHaveMessagePercent(percent) => {
@@ -372,39 +372,30 @@ impl ChokingStrategy for DefaultStrat {
     /// Proposes a set of peers for the router to consider adding to the mesh. The router will
     /// decide if the mesh can handle extra peers, then handle the necessary control messages to
     /// add proposed peers to the mesh.
-    fn fanout_addition(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>> {
-        let mut proposed_peers: HashMap<TopicHash, HashSet<PeerId>> = HashMap::new();
-        /*
-        match self.fanout_addition_strategy {
-            UnchokeStrategy::IHaveMessagePercent(percent) => {
-                'mesh_loop: for (topic, map) in metrics.ihave_messages_stats().into_iter() {
-                    let mut inserted_peers = 0;
-                    // Only consider adding peers to the mesh if there is room.
-                    for (peer_id, message_percent) in map.iter() {
-                        if *message_percent >= percent &&
-                            // Only consider connected peers not currently in the mesh
-                            mesh_peers.get(&topic).map(|set| !set.contains(peer_id))
-                                == Some(true)
-                                && !matches!(
-                                    connected_peers.get(peer_id).map(|v| &v.kind),
-                                    None | Some(PeerKind::NotSupported) | Some(PeerKind::Floodsub)
-                                )
-                            && proposed_peers
-                                .entry(topic.clone())
-                                .or_default()
-                                .insert(*peer_id)
-                        {
-                            inserted_peers += 1;
-                            if inserted_peers >= self.fanout_churn {
-                                continue 'mesh_loop;
+    fn mesh_addition(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>> {
+        match self.mesh_addition_strategy {
+            UnchokeStrategy::IHaveMessagePercent(percent) => metrics
+                .ihave_messages_stats()
+                .into_iter()
+                .filter_map(|(topic, peer_map)| {
+                    let filtered_map: HashSet<PeerId> = peer_map
+                        .into_iter()
+                        .filter_map(|(peer_id, message_percent)| {
+                            if message_percent >= percent {
+                                Some(peer_id)
+                            } else {
+                                None
                             }
-                        }
-                    }
-                }
-            }
-        }
-        */
+                        })
+                        .collect();
 
-        proposed_peers
+                    if !filtered_map.is_empty() {
+                        Some((topic, filtered_map))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        }
     }
 }
