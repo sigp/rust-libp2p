@@ -272,7 +272,7 @@ where
     pub fn all_mesh_peers(&self) -> impl Iterator<Item = &PeerId> {
         let mut res = BTreeSet::new();
         for topic_peers in self.mesh.values() {
-            for (peer_id, _choke_state) in topic_peers {
+            for peer_id in topic_peers.keys() {
                 res.insert(peer_id);
             }
         }
@@ -780,7 +780,7 @@ where
 
         let fanaout_added = added_peers.len();
         if let Some(m) = self.metrics.as_mut() {
-            m.peers_included(topic_hash, Inclusion::Fanout, fanaout_added)
+            m.peers_included(topic_hash, Inclusion::EpisubAddition, fanaout_added)
         }
 
         // check if we need to get more peers, which we randomly select
@@ -923,7 +923,7 @@ where
             if let Some(m) = self.metrics.as_mut() {
                 m.left(topic_hash)
             }
-            for (peer_id, _choke_state) in peers {
+            for (peer_id, choke_state) in peers {
                 // Send a PRUNE control message
                 debug!("LEAVE: Sending PRUNE to peer: {}", peer_id);
                 let on_unsubscribe = true;
@@ -932,6 +932,14 @@ where
                 Self::control_pool_add(&mut self.control_pool, peer_id, control);
 
                 // NOTE: We do not send an unchoke message. It is assumed via the PRUNE message.
+                if let Some(m) = self.metrics.as_mut() {
+                    if choke_state.peer_is_choked {
+                        m.decrement_current_choked_peers(topic_hash)
+                    }
+                    if choke_state.choked_by_peer {
+                        m.decrement_choked_us(topic_hash);
+                    }
+                }
 
                 // If the peer did not previously exist in any mesh, inform the handler
                 peer_removed_from_mesh(
@@ -1355,6 +1363,9 @@ where
 
         // Register our node as being choked by the peer
         for topic in topics {
+            if let Some(m) = self.metrics.as_mut() {
+                m.received_choke_message(&topic)
+            }
             match self.mesh.get_mut(&topic) {
                 None => {
                     warn!(
@@ -1375,6 +1386,12 @@ where
                                     peer_id, topic
                                 );
                             } else {
+                                // Add this to the episub metrics
+                                if let Some(m) = self.metrics.as_mut() {
+                                    if choke_state.choked_by_peer {
+                                        m.increment_choked_us(&topic);
+                                    }
+                                }
                                 choke_state.choked_by_peer = true;
                             }
                         }
@@ -1392,6 +1409,9 @@ where
 
         // Register us as being not being choked by the peer
         for topic in topics {
+            if let Some(m) = self.metrics.as_mut() {
+                m.received_unchoke_message(&topic)
+            }
             match self.mesh.get_mut(&topic) {
                 None => {
                     warn!(
@@ -1412,6 +1432,11 @@ where
                                     peer_id, topic
                                 );
                             } else {
+                                if let Some(m) = self.metrics.as_mut() {
+                                    if choke_state.choked_by_peer {
+                                        m.decrement_choked_us(&topic);
+                                    }
+                                }
                                 choke_state.choked_by_peer = false;
                             }
                         }
@@ -1446,6 +1471,22 @@ where
                 }
 
                 update_backoff = true;
+
+                // Update episub metrics
+                if let Some(m) = self.metrics.as_mut() {
+                    if let Some(choke_state) = self
+                        .mesh
+                        .get(topic_hash)
+                        .and_then(|peers| peers.get(peer_id))
+                    {
+                        if choke_state.peer_is_choked {
+                            m.decrement_current_choked_peers(topic_hash)
+                        }
+                        if choke_state.choked_by_peer {
+                            m.decrement_choked_us(topic_hash);
+                        }
+                    }
+                }
 
                 // inform the handler
                 peer_removed_from_mesh(
@@ -2673,6 +2714,20 @@ where
                 );
                 remaining_prunes.push(prune);
                 // inform the handler
+
+                if let Some(m) = self.metrics.as_mut() {
+                    if let Some(choke_state) =
+                        self.mesh.get(topic_hash).and_then(|peers| peers.get(peer))
+                    {
+                        if choke_state.peer_is_choked {
+                            m.decrement_current_choked_peers(topic_hash)
+                        }
+                        if choke_state.choked_by_peer {
+                            m.decrement_choked_us(topic_hash);
+                        }
+                    }
+                }
+
                 peer_removed_from_mesh(
                     *peer,
                     topic_hash,
@@ -3065,6 +3120,7 @@ where
     // This regulates the CHOKING and UNCHOKING of peers in our mesh's. It can also add better
     // performing peers into the mesh if need be.
     fn episub_heartbeat(&mut self) {
+        let heartbeat_start = Instant::now();
         // Handle choking
         self.choke_peers();
 
@@ -3073,6 +3129,28 @@ where
 
         // Handle potential additions to the mesh
         self.episub_mesh_additions();
+
+        // Record the heartbeat
+        if let Some(m) = self.metrics.as_mut() {
+            // NOTE: These are computationally expensive and may be removed in the future.
+            for (topic_hash, latencies) in self.episub_metrics.raw_latencies() {
+                if self.mesh.contains_key(&topic_hash) {
+                    for latency in latencies {
+                        m.observe_mesh_message_latency(&topic_hash, latency);
+                    }
+                }
+            }
+
+            for (topic_hash, peers) in self.episub_metrics.ihave_messages_stats() {
+                if self.mesh.contains_key(&topic_hash) {
+                    for (_peer, percent) in peers {
+                        m.observe_ihave_message_percent(&topic_hash, percent);
+                    }
+                }
+
+                m.observe_episub_heartbeat_duration(heartbeat_start.elapsed().as_millis() as u64);
+            }
+        }
     }
 
     /// Handles choking of our peers. Used within the episub heartbeat.
@@ -3196,6 +3274,10 @@ where
                     );
                     debug!("EPISUB: Choking peer: {} for topic: {}", peer_id, topic);
 
+                    if let Some(m) = self.metrics.as_mut() {
+                        m.increment_current_choked_peers(&topic)
+                    }
+
                     // Mark the peers as being choked.
                     if let Some(choke_state) = self
                         .mesh
@@ -3314,6 +3396,10 @@ where
                     }
                     debug!("EPISUB: Unchoking peer: {} for topic: {}", peer_id, topic);
 
+                    if let Some(m) = self.metrics.as_mut() {
+                        m.decrement_current_choked_peers(&topic)
+                    }
+
                     // Mark the peers as being unchoked.
                     if let Some(choke_state) = self
                         .mesh
@@ -3409,7 +3495,8 @@ where
                             peer_id, topic
                         );
                         if let Some(m) = self.metrics.as_mut() {
-                            m.peers_included(&topic, Inclusion::FanoutAddition, 1)
+                            m.peers_included(&topic, Inclusion::FanoutAddition, 1);
+                            m.mesh_addition_added(&topic);
                         }
                         // Send graft to the peer
                         debug!("Sending GRAFT to peer {} for topic {:?}", peer_id, topic);

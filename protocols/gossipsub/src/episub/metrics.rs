@@ -479,6 +479,20 @@ impl EpisubMetrics {
         self.ihave_msgs.remove_expired();
     }
 
+    /// Just a collection of raw latencies, used for metrics gathering.
+    pub fn raw_latencies(&mut self) -> HashMap<TopicHash, Vec<usize>> {
+        self.raw_deliveries
+            .iter()
+            .map(|(unique_message, data)| {
+                let mut latency = vec![0]; // first sender has 0 latency
+                for (_peer_id, basic_stat) in data.duplicates.iter() {
+                    latency.push(basic_stat.latency);
+                }
+                (unique_message.topic.clone(), latency)
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     /// Used for testing to simulate a period of running over expiry of the cache
     pub fn reset_cache(&mut self) {

@@ -5205,7 +5205,7 @@ mod tests {
 
         assert_eq!(
             gs.mesh_peers(&TopicHash::from_raw("topic1"))
-                .map(|(peer_id, choke_state)| *peer_id)
+                .map(|(peer_id, _choke_state)| *peer_id)
                 .collect::<BTreeSet<_>>(),
             peers,
             "Expected peers for a registered topic to contain all peers."

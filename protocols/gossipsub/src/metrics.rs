@@ -178,16 +178,10 @@ pub struct Metrics {
     /* Episub Metrics */
     /// The number of choked peers in each mesh.
     episub_current_choked_peers_in_mesh: Family<TopicHash, Gauge>,
-    /// The number of choked peers in total.
-    episub_current_choked_peers_total: Family<TopicHash, Gauge>,
-    /// The number of peers that have been choked per topic.
-    episub_peers_choked_per_topic: Family<TopicHash, Counter>,
-    /// The number of peers that have been unchoked per topic.
-    episub_peers_unchoked_per_topic: Family<TopicHash, Counter>,
-    /// The number of times we have added a fanout peer to the mesh.
-    episub_fanout_additions: Family<TopicHash, Counter>,
+    /// The number of times we have added a new peer to the mesh from episub.
+    episub_mesh_additions: Family<TopicHash, Counter>,
     /// The number of peers that have choked us per mesh.
-    episub_current_peers_choked_us: Family<TopicHash, Counter>,
+    episub_current_peers_choked_us: Family<TopicHash, Gauge>,
     /// The number of choked messages we have received per mesh.
     episub_received_choke_messages: Family<TopicHash, Counter>,
     /// The number of unchoked messages we have received per mesh.
@@ -197,8 +191,8 @@ pub struct Metrics {
     /// The message latency per mesh we observe.
     episub_mesh_message_latency: Family<TopicHash, Histogram, HistBuilderLinear>,
     /// The percentage of messages we received IHAVE messages before receiving the message on the
-    /// mesh.
-    episub_ihave_message_stats: Family<TopicHash, Gauge>,
+    /// mesh for each peer.
+    episub_ihave_message_stats: Family<TopicHash, Histogram, HistBuilderLinear>,
 }
 
 impl Metrics {
@@ -333,21 +327,9 @@ impl Metrics {
             "episub_current_choked_peers_in_mesh",
             "Number of choked peers in each mesh"
         );
-        let episub_current_choked_peers_total = register_family!(
-            "episub_current_choked_peers_total",
-            "Total number of connected choked peers in each topic"
-        );
-        let episub_peers_choked_per_topic = register_family!(
-            "episub_peers_choked_per_topic",
-            "Number of peers that have been choked per topic"
-        );
-        let episub_peers_unchoked_per_topic = register_family!(
-            "episub_peers_unchoked_per_topic",
-            "Number of peers that have been unchoked per topic"
-        );
-        let episub_fanout_additions = register_family!(
-            "episub_fanout_additions",
-            "Number of peers added to a mesh from fanout"
+        let episub_mesh_additions = register_family!(
+            "episub_mesh_additions",
+            "Number of peers added to a mesh due to episub"
         );
         let episub_current_peers_choked_us = register_family!(
             "episub_current_peers_choked_us",
@@ -378,9 +360,15 @@ impl Metrics {
             Box::new(episub_mesh_message_latency.clone()),
         );
 
-        let episub_ihave_message_stats = register_family!(
+        let episub_ihave_message_stats = Family::new_with_constructor(HistBuilderLinear {
+            start: 0.0,
+            width: 100.0,
+            length: 20,
+        });
+        registry.register(
             "episub_ihave_message_stats",
-            "Histogram displaying the IHAVE message received stats"
+            "Histogram displaying the IHAVE message received stats",
+            Box::new(episub_ihave_message_stats.clone()),
         );
 
         Self {
@@ -409,10 +397,7 @@ impl Metrics {
             memcache_misses,
             topic_iwant_msgs,
             episub_current_choked_peers_in_mesh,
-            episub_current_choked_peers_total,
-            episub_peers_choked_per_topic,
-            episub_peers_unchoked_per_topic,
-            episub_fanout_additions,
+            episub_mesh_additions,
             episub_current_peers_choked_us,
             episub_received_choke_messages,
             episub_received_unchoke_messages,
@@ -614,13 +599,83 @@ impl Metrics {
             metric.set(metric.get() - 1);
         }
     }
+
+    /// Register a peer has been choked in the specified mesh.
+    pub fn increment_current_choked_peers(&mut self, topic: &TopicHash) {
+        self.episub_current_choked_peers_in_mesh
+            .get_or_create(topic)
+            .inc();
+    }
+
+    /// Register a peer has been unchoked in the specified mesh.
+    pub fn decrement_current_choked_peers(&mut self, topic: &TopicHash) {
+        self.episub_current_choked_peers_in_mesh
+            .get_or_create(topic)
+            .dec();
+    }
+
+    /// Register a peer has been choked in the specified mesh.
+    pub fn increment_choked_us(&mut self, topic: &TopicHash) {
+        self.episub_current_peers_choked_us
+            .get_or_create(topic)
+            .inc();
+    }
+
+    /// Register a peer has been unchoked in the specified mesh.
+    pub fn decrement_choked_us(&mut self, topic: &TopicHash) {
+        self.episub_current_peers_choked_us
+            .get_or_create(topic)
+            .dec();
+    }
+
+    /// Register an choke message has been received.
+    pub fn received_choke_message(&mut self, topic: &TopicHash) {
+        self.episub_received_choke_messages
+            .get_or_create(topic)
+            .inc();
+    }
+
+    /// Register an unchoke message has been received.
+    pub fn received_unchoke_message(&mut self, topic: &TopicHash) {
+        self.episub_received_unchoke_messages
+            .get_or_create(topic)
+            .inc();
+    }
+
+    /// Register an unchoke message has been received.
+    pub fn mesh_addition_added(&mut self, topic: &TopicHash) {
+        self.episub_mesh_additions.get_or_create(topic).inc();
+    }
+
+    /// Observes an episub heartbeat duration.
+    pub fn observe_episub_heartbeat_duration(&mut self, millis: u64) {
+        self.episub_heartbeat_duration.observe(millis as f64);
+    }
+
+    /// Observe a set of message latency for each mesh topic.
+    pub fn observe_mesh_message_latency(&mut self, topic: &TopicHash, latency: usize) {
+        if self.register_topic(topic).is_ok() {
+            self.episub_mesh_message_latency
+                .get_or_create(topic)
+                .observe(latency as f64);
+        }
+    }
+
+    /// Observe a set of IHAVE message percentages for each mesh topic.
+    pub fn observe_ihave_message_percent(&mut self, topic: &TopicHash, percent: u8) {
+        if self.register_topic(topic).is_ok() {
+            self.episub_ihave_message_stats
+                .get_or_create(topic)
+                .observe(percent as f64);
+        }
+    }
 }
 
 /// Reasons why a peer was included in the mesh.
 #[derive(PartialEq, Eq, Hash, Encode, Clone)]
 pub enum Inclusion {
-    /// Peer was a fanout peer.
-    Fanout,
+    /// Peer was added by episub.
+    EpisubAddition,
     /// Included from random selection.
     Random,
     /// Peer subscribed.
