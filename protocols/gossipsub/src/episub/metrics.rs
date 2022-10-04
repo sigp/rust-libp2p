@@ -478,6 +478,15 @@ impl EpisubMetrics {
         // Remove the ihave_msgs_cache.
         self.ihave_msgs.remove_expired();
     }
+
+    #[cfg(test)]
+    /// Used for testing to simulate a period of running over expiry of the cache
+    pub fn reset_cache(&mut self) {
+        self.raw_deliveries.clear();
+        self.ihave_msgs.clear();
+        self.current_duplicates_per_topic_peer.clear();
+        self.total_unique_messages.clear();
+    }
 }
 
 #[cfg(test)]
