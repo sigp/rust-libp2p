@@ -97,7 +97,7 @@ pub struct PeerConnections {
 impl PeerConnections {
     /// Returns true if this peer supports episub.
     pub fn is_episub_compat(&self) -> bool {
-        !matches!(self.kind, PeerKind::Gossipsubv1_2)
+        matches!(self.kind, PeerKind::Gossipsubv1_2)
     }
 }
 
