@@ -3367,7 +3367,7 @@ where
             unchoked_peers
         };
 
-        // If we cannot choke any more peers, return early.
+        // If we cannot unchoke any more peers, return early.
         if current_mesh_choked_peers.is_empty() {
             return;
         }
@@ -3405,22 +3405,22 @@ where
                                 topic_hash: topic.clone(),
                             },
                         );
-                    }
-                    debug!("EPISUB: Unchoking peer: {} for topic: {}", peer_id, topic);
+                        debug!("EPISUB: Unchoking peer: {} for topic: {}", peer_id, topic);
 
-                    if let Some(m) = self.metrics.as_mut() {
-                        m.decrement_current_choked_peers(&topic)
-                    }
+                        if let Some(m) = self.metrics.as_mut() {
+                            m.decrement_current_choked_peers(&topic)
+                        }
 
-                    // Mark the peers as being unchoked.
-                    if let Some(choke_state) = self
-                        .mesh
-                        .get_mut(&topic)
-                        .and_then(|peers| peers.get_mut(&peer_id))
-                    {
-                        choke_state.peer_is_choked = false;
-                    } else {
-                        error!("EPISUB: Could not find peer to unchoke: {}", peer_id);
+                        // Mark the peers as being unchoked.
+                        if let Some(choke_state) = self
+                            .mesh
+                            .get_mut(&topic)
+                            .and_then(|peers| peers.get_mut(&peer_id))
+                        {
+                            choke_state.peer_is_choked = false;
+                        } else {
+                            error!("EPISUB: Could not find peer to unchoke: {}", peer_id);
+                        }
                     }
                 }
             }
