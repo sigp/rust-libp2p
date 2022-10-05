@@ -365,8 +365,8 @@ impl Metrics {
         );
         let episub_mesh_message_latency = Family::new_with_constructor(HistBuilderLinear {
             start: 0.0,
-            width: 2000.0,
-            length: 20,
+            width: 100.0,
+            length: 30,
         });
         registry.register(
             "episub_mesh_message_latency",
@@ -376,7 +376,7 @@ impl Metrics {
 
         let episub_ihave_message_stats = Family::new_with_constructor(HistBuilderLinear {
             start: 0.0,
-            width: 100.0,
+            width: 5.0,
             length: 20,
         });
         registry.register(
