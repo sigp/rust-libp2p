@@ -727,8 +727,6 @@ pub enum Inclusion {
     Subscribed,
     /// Peer was included to fill the outbound quota.
     Outbound,
-    /// Peer was added via an episub FanoutAddition.
-    FanoutAddition,
 }
 
 /// Reasons why a peer was removed from the mesh.

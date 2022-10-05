@@ -3503,11 +3503,11 @@ where
                     {
                         mesh_peers.insert(peer_id, ChokeState::default());
                         debug!(
-                            "EPISUB: Adding fanout peer {} to the mesh for topic {:?}",
+                            "EPISUB: Adding peer {} to the mesh for topic {:?}",
                             peer_id, topic
                         );
                         if let Some(m) = self.metrics.as_mut() {
-                            m.peers_included(&topic, Inclusion::FanoutAddition, 1);
+                            m.peers_included(&topic, Inclusion::EpisubAddition, 1);
                             m.mesh_addition_added(&topic);
                         }
                         // Send graft to the peer
