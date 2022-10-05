@@ -70,6 +70,11 @@ impl MessageCache {
         }
     }
 
+    /// Obtains the current number of messages in the memcache
+    pub fn len(&self) -> usize {
+        self.msgs.len()
+    }
+
     /// Put a message into the memory cache.
     ///
     /// Returns true if the message didn't already exist in the cache.

@@ -175,6 +175,9 @@ pub struct Metrics {
     /// topic. A very high metric might indicate an underperforming network.
     topic_iwant_msgs: Family<TopicHash, Counter>,
 
+    /// The current size of the memcache before being pruned.
+    memcache_size: Gauge,
+
     /* Episub Metrics */
     /// The number of choked peers in each mesh.
     episub_current_choked_peers_in_mesh: Family<TopicHash, Gauge>,
@@ -193,6 +196,10 @@ pub struct Metrics {
     /// The percentage of messages we received IHAVE messages before receiving the message on the
     /// mesh for each peer.
     episub_ihave_message_stats: Family<TopicHash, Histogram, HistBuilderLinear>,
+    /// The size of the message duplicates cache.
+    episub_metrics_cache_size: Gauge,
+    /// The size of the IHAVE message cache.
+    episub_metrics_ihave_cache_size: Gauge,
 }
 
 impl Metrics {
@@ -321,6 +328,13 @@ impl Metrics {
             metric
         };
 
+        let memcache_size = Gauge::default();
+        registry.register(
+            "memcache_size",
+            "Current size of the memcache before shifting a heartbeat",
+            Box::new(memcache_size.clone()),
+        );
+
         // Episub Metrics
 
         let episub_current_choked_peers_in_mesh = register_family!(
@@ -371,6 +385,19 @@ impl Metrics {
             Box::new(episub_ihave_message_stats.clone()),
         );
 
+        let episub_metrics_cache_size = Gauge::default();
+        registry.register(
+            "episub_metrics_cache_size",
+            "Current size of the episub cache updated every episub heartbeat",
+            Box::new(episub_metrics_cache_size.clone()),
+        );
+
+        let episub_metrics_ihave_cache_size = Gauge::default();
+        registry.register(
+            "episub_metrics_ihave_cache_size",
+            "Current size of the episub ihave cache updated every episub heartbeat",
+            Box::new(episub_metrics_ihave_cache_size.clone()),
+        );
         Self {
             max_topics,
             max_never_subscribed_topics,
@@ -396,6 +423,7 @@ impl Metrics {
             heartbeat_duration,
             memcache_misses,
             topic_iwant_msgs,
+            memcache_size,
             episub_current_choked_peers_in_mesh,
             episub_mesh_additions,
             episub_current_peers_choked_us,
@@ -404,6 +432,8 @@ impl Metrics {
             episub_heartbeat_duration,
             episub_mesh_message_latency,
             episub_ihave_message_stats,
+            episub_metrics_cache_size,
+            episub_metrics_ihave_cache_size,
         }
     }
 
@@ -600,6 +630,11 @@ impl Metrics {
         }
     }
 
+    /// Register the current size of the memache.
+    pub fn observe_memcache_size(&mut self, size: usize) {
+        self.memcache_size.set(size as u64);
+    }
+
     /// Register a peer has been choked in the specified mesh.
     pub fn increment_current_choked_peers(&mut self, topic: &TopicHash) {
         self.episub_current_choked_peers_in_mesh
@@ -668,6 +703,16 @@ impl Metrics {
                 .get_or_create(topic)
                 .observe(percent as f64);
         }
+    }
+
+    /// Register the current size of the metrics delivery cache.
+    pub fn observe_episub_metrics_cache_size(&mut self, size: usize) {
+        self.episub_metrics_cache_size.set(size as u64);
+    }
+
+    /// Register the current size of the episub ihave metrics cache.
+    pub fn observe_episub_metrics_ihave_cache_size(&mut self, size: usize) {
+        self.episub_metrics_ihave_cache_size.set(size as u64);
     }
 }
 

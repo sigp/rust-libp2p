@@ -2480,6 +2480,9 @@ where
         // piggyback pooled control messages
         self.flush_control_pool();
 
+        if let Some(metrics) = self.metrics.as_mut() {
+            metrics.observe_memcache_size(self.mcache.len());
+        }
         // shift the memcache
         self.mcache.shift();
 
@@ -3121,6 +3124,15 @@ where
     // performing peers into the mesh if need be.
     fn episub_heartbeat(&mut self) {
         let heartbeat_start = Instant::now();
+
+        // Record the cache sizes before old messages are expired. This gives a good estimate of
+        // the maximum size of the cache.
+        if let Some(metrics) = self.metrics.as_mut() {
+            metrics.observe_episub_metrics_cache_size(self.episub_metrics.message_len());
+            metrics
+                .observe_episub_metrics_ihave_cache_size(self.episub_metrics.ihave_message_len());
+        }
+
         // Handle choking
         self.choke_peers();
 

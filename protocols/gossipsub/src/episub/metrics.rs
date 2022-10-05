@@ -122,6 +122,16 @@ impl EpisubMetrics {
         }
     }
 
+    /// Returns the number of delivered messages currently in the cache.
+    pub fn message_len(&self) -> usize {
+        self.raw_deliveries.len()
+    }
+
+    /// Returns the number of Ihave messages received before messages, currently in the cache.
+    pub fn ihave_message_len(&self) -> usize {
+        self.ihave_msgs.len()
+    }
+
     /// Record that a message has been received.
     pub fn message_received(
         &mut self,
@@ -219,8 +229,12 @@ impl EpisubMetrics {
         let mut result = HashMap::with_capacity(self.current_duplicates_per_topic_peer.len());
 
         for (topic, peer_map) in self.current_duplicates_per_topic_peer.iter() {
-            // We should have a value, if not use 1 to avoid a div by 0.
-            let message_total = self.total_unique_messages.get(topic).unwrap_or(&1);
+            let message_total = self.total_unique_messages.get(topic).unwrap_or(&0);
+
+            // If there are no messages, or we do not know of the topic, skip the topic.
+            if *message_total == 0 {
+                continue;
+            }
 
             let topic_peer_hashmap: HashMap<PeerId, u8> = peer_map
                 .iter()
