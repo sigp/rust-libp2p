@@ -174,7 +174,7 @@ mod tests {
             outbound,
             explicit,
             address,
-            Some(PeerKind::Gossipsubv1_1),
+            Some(PeerKind::Gossipsubv1_2),
         )
     }
 
@@ -5582,6 +5582,7 @@ mod tests {
             }
         }
         assert!(choke_count < 5);
+        assert!(choke_count > 0);
     }
 
     #[test]

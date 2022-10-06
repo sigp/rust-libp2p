@@ -99,6 +99,11 @@ impl PeerConnections {
     pub fn is_episub_compat(&self) -> bool {
         matches!(self.kind, PeerKind::Gossipsubv1_2)
     }
+
+    /// Returns true if this peer supports gossipsub features.
+    pub fn is_gossipsub_compat(&self) -> bool {
+        matches!(self.kind, PeerKind::Gossipsubv1_2 | PeerKind::Gossipsubv1_1)
+    }
 }
 
 /// Describes the types of peers that can exist in the gossipsub context.

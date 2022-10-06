@@ -3484,6 +3484,26 @@ where
             let mut peers_to_graft = HashSet::new();
             if let Some(mesh_peers) = self.mesh.get_mut(&topic) {
                 for peer_id in potential_peers {
+                    // Make sure the Peer is connected and supports gossipsub
+                    if self
+                        .connected_peers
+                        .get(&peer_id)
+                        .map(|connections| connections.is_gossipsub_compat())
+                        != Some(true)
+                    {
+                        continue;
+                    }
+
+                    // Make sure the peer is still subscribed to the topic
+                    if self
+                        .topic_peers
+                        .get(&topic)
+                        .map(|topic_peers| topic_peers.contains(&peer_id))
+                        != Some(true)
+                    {
+                        continue;
+                    }
+
                     // Only add peers up to the churn limit.
                     if peers_to_graft.len() >= self.config.choking_strategy().mesh_addition_churn()
                     {
