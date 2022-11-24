@@ -33,7 +33,7 @@ _serde = { package = "serde", version = "1.0", optional = true, features = ["der
 thiserror = "1"
 
 [dev-dependencies]
-env_logger = "0.9.0"
+env_logger = "0.10.0"
 futures-timer = "3.0"
 libp2p-noise = { path = "../../transports/noise" }
 libp2p-yamux = { path = "../../muxers/yamux" }

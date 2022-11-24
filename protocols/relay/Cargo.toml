@@ -33,7 +33,7 @@ void = "1"
 prost-build = "0.11"
 
 [dev-dependencies]
-env_logger = "0.9.0"
+env_logger = "0.10.0"
 libp2p = { path = "../..", default-features = false, features = ["identify", "relay", "ping", "noise", "plaintext", "tcp-async-io"] }
 libp2p-identify = { path = "../identify" }
 libp2p-kad = { path = "../kad" }
