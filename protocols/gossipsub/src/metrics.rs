@@ -144,6 +144,8 @@ pub struct Metrics {
     topic_msg_sent_bytes: Family<TopicHash, Counter>,
     /// Number of gossipsub messages published to each topic.
     topic_msg_published: Family<TopicHash, Counter>,
+    /// Bytes sent for last gossip message for each topic.
+    topic_msg_last_sent_bytes: Family<TopicHash, Gauge>,
 
     /// Number of gossipsub messages received on each topic (without filtering duplicates).
     topic_msg_recv_counts_unfiltered: Family<TopicHash, Counter>,
@@ -151,6 +153,8 @@ pub struct Metrics {
     topic_msg_recv_counts: Family<TopicHash, Counter>,
     /// Bytes received from gossip messages for each topic.
     topic_msg_recv_bytes: Family<TopicHash, Counter>,
+    /// Bytes received from last gossip message for each topic.
+    topic_msg_last_recv_bytes: Family<TopicHash, Gauge>,
 
     /* Metrics related to scoring */
     /// Histogram of the scores for each mesh topic.
@@ -273,6 +277,11 @@ impl Metrics {
             "Bytes from gossip messages sent to each topic"
         );
 
+        let topic_msg_last_sent_bytes = register_family!(
+            "topic_msg_last_sent_bytes",
+            "Bytes sent from last gossip message for each topic"
+        );
+
         let topic_msg_recv_counts_unfiltered = register_family!(
             "topic_msg_recv_counts_unfiltered",
             "Number of gossip messages received on each topic (without duplicates being filtered)"
@@ -285,6 +294,11 @@ impl Metrics {
         let topic_msg_recv_bytes = register_family!(
             "topic_msg_recv_bytes",
             "Bytes received from gossip messages for each topic"
+        );
+
+        let topic_msg_last_recv_bytes = register_family!(
+            "topic_msg_last_recv_bytes",
+            "Bytes received from last gossip message for each topic"
         );
 
         let hist_builder = HistBuilder {
@@ -413,10 +427,12 @@ impl Metrics {
             mesh_peer_churn_events,
             topic_msg_sent_counts,
             topic_msg_sent_bytes,
+            topic_msg_last_sent_bytes,
             topic_msg_published,
             topic_msg_recv_counts_unfiltered,
             topic_msg_recv_counts,
             topic_msg_recv_bytes,
+            topic_msg_last_recv_bytes,
             score_per_mesh,
             scoring_penalties,
             peers_per_protocol,
@@ -556,6 +572,9 @@ impl Metrics {
             self.topic_msg_sent_bytes
                 .get_or_create(topic)
                 .inc_by(bytes as u64);
+            self.topic_msg_last_sent_bytes
+                .get_or_create(topic)
+                .set(bytes as u64);
         }
     }
 
@@ -575,6 +594,9 @@ impl Metrics {
             self.topic_msg_recv_bytes
                 .get_or_create(topic)
                 .inc_by(bytes as u64);
+            self.topic_msg_last_recv_bytes
+                .get_or_create(topic)
+                .set(bytes as u64);
         }
     }
 
