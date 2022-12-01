@@ -25,10 +25,12 @@
 - [`libp2p-noise` CHANGELOG](transports/noise/CHANGELOG.md)
 - [`libp2p-plaintext` CHANGELOG](transports/plaintext/CHANGELOG.md)
 - [`libp2p-pnet` CHANGELOG](transports/pnet/CHANGELOG.md)
+- [`libp2p-quic` CHANGELOG](transports/quic/CHANGELOG.md)
 - [`libp2p-tcp` CHANGELOG](transports/tcp/CHANGELOG.md)
 - [`libp2p-uds` CHANGELOG](transports/uds/CHANGELOG.md)
 - [`libp2p-wasm-ext` CHANGELOG](transports/wasm-ext/CHANGELOG.md)
 - [`libp2p-websocket` CHANGELOG](transports/websocket/CHANGELOG.md)
+- [`libp2p-tls` CHANGELOG](transports/tls/CHANGELOG.md)
 
 ## Multiplexers
 
@@ -43,33 +45,100 @@
 
 # `libp2p` facade crate
 
-# 0.49.0 - [unreleased]
+# 0.50.0
 
-- Update to [`libp2p-core` `v0.36.1`](core/CHANGELOG.md#0361).
+This is a large release. After > 4 years, rust-libp2p ships with an [(alpha) QUIC
+implementation](transports/quic/CHANGELOG.md#070-alpha). The [necessary TLS logic is extracted into
+its own crate](transports/tls/CHANGELOG.md#010-alpha), and can thus be used detached from QUIC, e.g.
+on top of TCP as an alternative to Noise. In addition to these two transports, this release adds
+a third, namely [WebRTC (browser-to-server)](transports/webrtc/CHANGELOG.md#040-alpha). But that is
+definitely not it. See below for the many other changes packed into this release.
 
-- Update to [`libp2p-tcp` `v0.37.0`](transports/tcp/CHANGELOG.md#0370).
+- Introduce [`libp2p-tls` `v0.1.0-alpha`](transports/tls/CHANGELOG.md#010-alpha). See [PR 2945].
+- Introduce [`libp2p-quic` `v0.7.0-alpha`](transports/quic/CHANGELOG.md#070-alpha). See [PR 2289].
+- Introduce [`libp2p-webrtc` `v0.4.0-alpha`](transports/webrtc/CHANGELOG.md#040-alpha). See [PR 2289].
+- Remove deprecated features: `tcp-tokio`, `mdns-tokio`, `dns-tokio`, `tcp-async-io`, `mdns-async-io`, `dns-async-std`.
+  See [PR 3001].
+- Remove `NetworkBehaviour` macro export from root crate in favor of re-exported macro from `libp2p::swarm`.
+  Change your import from `libp2p::NetworkBehaviour` to `libp2p::swarm::NetworkBehaviour`. See [PR 3055].
+- Feature-gate `NetworkBehaviour` macro behind `macros` feature flag. See [PR 3055].
 - Update individual crates.
-    - Update to [`libp2p-ping` `v0.39.1`](protocols/ping/CHANGELOG.md#0391).
-    - Update to [`libp2p-floodsub` `v0.39.1`](protocols/floodsub/CHANGELOG.md#0391).
-    - Update to [`libp2p-gossipsub` `v0.41.1`](protocols/gossipsub/CHANGELOG.md#0411).
-    - Update to [`libp2p-request-response` `v0.21.1`](protocols/request-response/CHANGELOG.md#0211).
-    - Update to [`libp2p-pnet` `v0.22.1`](transports/pnet/CHANGELOG.md#0221).
-    - Update to [`libp2p-mplex` `v0.36.1`](muxers/mplex/CHANGELOG.md#0361).
-    - Update to [`libp2p-swarm` `v0.39.1`](swarm/CHANGELOG.md#0391).
-- 
-- Update to [`libp2p-noise` `v0.39.1`](transports/noise/CHANGELOG.md#0391).
+  - Update to [`libp2p-autonat` `v0.89.0`](protocols/autonat/CHANGELOG.md#090).
+  - Update to [`libp2p-core` `v0.38.0`](core/CHANGELOG.md#0380).
+  - Update to [`libp2p-dcutr` `v0.8.0`](protocols/dcutr/CHANGELOG.md#080).
+  - Update to [`libp2p-deflate` `v0.38.0`](transports/deflate/CHANGELOG.md#0380).
+  - Update to [`libp2p-dns` `v0.38.0`](transports/dns/CHANGELOG.md#0380).
+  - Update to [`libp2p-floodsub` `v0.41.0`](protocols/floodsub/CHANGELOG.md#0410).
+  - Update to [`libp2p-gossipsub` `v0.43.0`](protocols/gossipsub/CHANGELOG.md#0430).
+  - Update to [`libp2p-identify` `v0.41.0`](protocols/identify/CHANGELOG.md#0410).
+  - Update to [`libp2p-kad` `v0.42.0`](protocols/kad/CHANGELOG.md#0420).
+  - Update to [`libp2p-mdns` `v0.42.0`](protocols/mdns/CHANGELOG.md#0420).
+  - Update to [`libp2p-metrics` `v0.11.0`](misc/metrics/CHANGELOG.md#0110).
+  - Update to [`libp2p-mplex` `v0.38.0`](muxers/mplex/CHANGELOG.md#0380).
+  - Update to [`libp2p-noise` `v0.41.0`](transports/noise/CHANGELOG.md#0410).
+  - Update to [`libp2p-ping` `v0.41.0`](protocols/ping/CHANGELOG.md#0410).
+  - Update to [`libp2p-plaintext` `v0.38.0`](transports/plaintext/CHANGELOG.md#0380).
+  - Update to [`libp2p-pnet` `v0.22.2`](transports/pnet/CHANGELOG.md#0222).
+  - Update to [`libp2p-relay` `v0.14.0`](protocols/relay/CHANGELOG.md#0140).
+  - Update to [`libp2p-rendezvous` `v0.11.0`](protocols/rendezovus/CHANGELOG.md#0110).
+  - Update to [`libp2p-request-response` `v0.23.0`](protocols/request-response/CHANGELOG.md#0230).
+  - Update to [`libp2p-swarm` `v0.41.0`](swarm/CHANGELOG.md#0410).
+  - Update to [`libp2p-tcp` `v0.38.0`](transports/tcp/CHANGELOG.md#0380).
+  - Update to [`libp2p-uds` `v0.37.0`](transports/uds/CHANGELOG.md#0370).
+  - Update to [`libp2p-wasm-ext` `v0.38.0`](transports/wasm-ext/CHANGELOG.md#0380).
+  - Update to [`libp2p-websocket` `v0.40.0`](transports/websocket/CHANGELOG.md#0400).
+  - Update to [`libp2p-yamux` `v0.42.0`](muxers/yamux/CHANGELOG.md#0420).
 
-- Update to [`libp2p-swarm-derive` `v0.30.1`](swarm-derive/CHANGELOG.md#0301).
+[PR 2945]: https://github.com/libp2p/rust-libp2p/pull/2945
+[PR 3001]: https://github.com/libp2p/rust-libp2p/pull/3001
+[PR 2945]: https://github.com/libp2p/rust-libp2p/pull/2945
+[PR 2289]: https://github.com/libp2p/rust-libp2p/pull/2289
+[PR 3055]: https://github.com/libp2p/rust-libp2p/pull/3055
 
-- Update to [`libp2p-metrics` `v0.10.0`](misc/metrics/CHANGELOG.md#0100).
+# 0.49.0
 
-- Update to [`libp2p-kad` `v0.41.0`](protocols/kad/CHANGELOG.md#0410).
-- 
-- Update to [`libp2p-identify` `v0.39.1`](protocols/identify/CHANGELOG.md#0400).
+- Remove default features. You need to enable required features explicitly now. As a quick workaround, you may want to use the
+  new `full` feature which activates all features. See [PR 2918].
 
-- Update to [`libp2p-noise` `v0.39.1`](transports/noise/CHANGELOG.md#0391).
+- Introduce `tokio` and `async-std` features and deprecate the following ones:
+  - `tcp-tokio` in favor of `tcp` + `tokio`
+  - `mdns-tokio` in favor of `mdns` + `tokio`
+  - `dns-tokio` in favor of `dns` + `tokio`
+  - `tcp-async-io` in favor of `tcp` + `async-std`
+  - `mdns-async-io` in favor of `mdns` + `async-std`
+  - `dns-async-std` in favor of `dns` + `async-std`
 
-- Update to [`libp2p-swarm` `v0.39.1`](swarm/CHANGELOG.md#0391).
+  See [PR 2962].
+
+- Update individual crates.
+    - Update to [`libp2p-autonat` `v0.8.0`](protocols/autonat/CHANGELOG.md#0080).
+    - Update to [`libp2p-core` `v0.37.0`](core/CHANGELOG.md#0370).
+    - Update to [`libp2p-dcutr` `v0.7.0`](protocols/dcutr/CHANGELOG.md#0070).
+    - Update to [`libp2p-deflate` `v0.37.0`](transports/deflate/CHANGELOG.md#0370).
+    - Update to [`libp2p-dns` `v0.37.0`](transports/dns/CHANGELOG.md#0370).
+    - Update to [`libp2p-floodsub` `v0.40.0`](protocols/floodsub/CHANGELOG.md#0400).
+    - Update to [`libp2p-gossipsub` `v0.42.0`](protocols/gossipsub/CHANGELOG.md#0420).
+    - Update to [`libp2p-identify` `v0.40.0`](protocols/identify/CHANGELOG.md#0400).
+    - Update to [`libp2p-kad` `v0.41.0`](protocols/kad/CHANGELOG.md#0410).
+    - Update to [`libp2p-mdns` `v0.41.0`](protocols/mdns/CHANGELOG.md#0410).
+    - Update to [`libp2p-metrics` `v0.10.0`](misc/metrics/CHANGELOG.md#0100).
+    - Update to [`libp2p-mplex` `v0.37.0`](muxers/mplex/CHANGELOG.md#0370).
+    - Update to [`libp2p-noise` `v0.40.0`](transports/noise/CHANGELOG.md#0400).
+    - Update to [`libp2p-ping` `v0.40.0`](protocols/ping/CHANGELOG.md#0400).
+    - Update to [`libp2p-plaintext` `v0.37.0`](transports/plaintext/CHANGELOG.md#0370).
+    - Update to [`libp2p-relay` `v0.13.0`](protocols/relay/CHANGELOG.md#0130).
+    - Update to [`libp2p-rendezvous` `v0.10.0`](protocols/rendezovus/CHANGELOG.md#0100).
+    - Update to [`libp2p-request-response` `v0.22.0`](protocols/request-response/CHANGELOG.md#0220).
+    - Update to [`libp2p-swarm-derive` `v0.30.1`](swarm-derive/CHANGELOG.md#0301).
+    - Update to [`libp2p-swarm` `v0.40.0`](swarm/CHANGELOG.md#0400).
+    - Update to [`libp2p-tcp` `v0.37.0`](transports/tcp/CHANGELOG.md#0370).
+    - Update to [`libp2p-uds` `v0.36.0`](transports/uds/CHANGELOG.md#0360).
+    - Update to [`libp2p-wasm-ext` `v0.37.0`](transports/wasm-ext/CHANGELOG.md#0370).
+    - Update to [`libp2p-websocket` `v0.39.0`](transports/websocket/CHANGELOG.md#0390).
+    - Update to [`libp2p-yamux` `v0.41.0`](muxers/mplex/CHANGELOG.md#0410).
+
+[PR 2918]: https://github.com/libp2p/rust-libp2p/pull/2918
+[PR 2962]: https://github.com/libp2p/rust-libp2p/pull/2962
 
 # 0.48.0
 

@@ -20,18 +20,50 @@
 
 use super::{Incoming, Provider};
 
-use async_io_crate::Async;
+use async_io::Async;
 use futures::future::{BoxFuture, FutureExt};
 use std::io;
 use std::net;
 use std::task::{Context, Poll};
 
+/// A TCP [`Transport`](libp2p_core::Transport) that works with the `async-std` ecosystem.
+///
+/// # Example
+///
+/// ```rust
+/// # use libp2p_tcp as tcp;
+/// # use libp2p_core::Transport;
+/// # use futures::future;
+/// # use std::pin::Pin;
+/// #
+/// # #[async_std::main]
+/// # async fn main() {
+/// let mut transport = tcp::async_io::Transport::new(tcp::Config::default());
+/// let id = transport.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap()).unwrap();
+///
+/// let addr = future::poll_fn(|cx| Pin::new(&mut transport).poll(cx)).await.into_new_address().unwrap();
+///
+/// println!("Listening on {addr}");
+/// # }
+/// ```
+pub type Transport = crate::Transport<Tcp>;
+
 #[derive(Copy, Clone)]
+#[doc(hidden)]
 pub enum Tcp {}
 
 impl Provider for Tcp {
     type Stream = Async<net::TcpStream>;
     type Listener = Async<net::TcpListener>;
+    type IfWatcher = if_watch::smol::IfWatcher;
+
+    fn new_if_watcher() -> io::Result<Self::IfWatcher> {
+        Self::IfWatcher::new()
+    }
+
+    fn addrs(if_watcher: &Self::IfWatcher) -> Vec<if_watch::IpNet> {
+        if_watcher.iter().copied().collect()
+    }
 
     fn new_listener(l: net::TcpListener) -> io::Result<Self::Listener> {
         Async::new(l)

@@ -37,7 +37,7 @@ mod tests {
     use crate::error::ValidationError;
     use crate::types::FastMessageId;
     use crate::{GossipsubBuilder, MessageAuthenticity};
-    use libp2p_core::Endpoint;
+    use libp2p_core::{ConnectedPoint, Endpoint};
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     use subscription_filter::WhitelistSubscriptionFilter;
@@ -192,26 +192,28 @@ mod tests {
         F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
     {
         let peer = PeerId::random();
-        gs.inject_connection_established(
-            &peer,
-            &ConnectionId::new(0),
-            &if outbound {
-                ConnectedPoint::Dialer {
-                    address,
-                    role_override: Endpoint::Dialer,
-                }
-            } else {
-                ConnectedPoint::Listener {
-                    local_addr: Multiaddr::empty(),
-                    send_back_addr: address,
-                }
-            },
-            None,
-            0, // first connection
-        );
+        let endpoint = if outbound {
+            ConnectedPoint::Dialer {
+                address,
+                role_override: Endpoint::Dialer,
+            }
+        } else {
+            ConnectedPoint::Listener {
+                local_addr: Multiaddr::empty(),
+                send_back_addr: address,
+            }
+        };
+
+        gs.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
+            peer_id: peer,
+            connection_id: ConnectionId::new(0),
+            endpoint: &endpoint,
+            failed_addresses: &[],
+            other_established: 0, // first connection
+        }));
         if let Some(kind) = kind {
-            gs.inject_event(
-                peer.clone(),
+            gs.on_connection_handler_event(
+                peer,
                 ConnectionId::new(1),
                 HandlerEvent::PeerKind(kind),
             );
@@ -248,16 +250,16 @@ mod tests {
             }; // this is not relevant
                // peer_connections.connections should never be empty.
             let mut active_connections = peer_connections.connections.len();
-            for conn_id in peer_connections.connections.clone() {
+            for connection_id in peer_connections.connections.clone() {
                 let handler = gs.new_handler();
                 active_connections = active_connections.checked_sub(1).unwrap();
-                gs.inject_connection_closed(
-                    peer_id,
-                    &conn_id,
-                    &fake_endpoint,
+                gs.on_swarm_event(FromSwarm::ConnectionClosed(ConnectionClosed {
+                    peer_id: *peer_id,
+                    connection_id,
+                    endpoint: &fake_endpoint,
                     handler,
-                    active_connections,
-                );
+                    remaining_established: active_connections,
+                }));
             }
         }
     }
@@ -566,16 +568,16 @@ mod tests {
         for _ in 0..3 {
             let random_peer = PeerId::random();
             // inform the behaviour of a new peer
-            gs.inject_connection_established(
-                &random_peer,
-                &ConnectionId::new(1),
-                &ConnectedPoint::Dialer {
+            gs.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
+                peer_id: random_peer,
+                connection_id: ConnectionId::new(1),
+                endpoint: &ConnectedPoint::Dialer {
                     address: "/ip4/127.0.0.1".parse::<Multiaddr>().unwrap(),
                     role_override: Endpoint::Dialer,
                 },
-                None,
-                0,
-            );
+                failed_addresses: &[],
+                other_established: 0,
+            }));
 
             // add the new peer to the fanout
             let fanout_peers = gs.fanout.get_mut(&topic_hashes[1]).unwrap();
@@ -3084,12 +3086,11 @@ mod tests {
             message_ids: vec![config.message_id(&message2)],
         };
 
-        //clear events
+        // Clear events
         gs.events.clear();
 
-        //receive from p1
-        gs.inject_event(
-            p1.clone(),
+        gs.on_connection_handler_event(
+            p1,
             ConnectionId::new(0),
             HandlerEvent::Message {
                 rpc: GossipsubRpc {
@@ -3101,36 +3102,32 @@ mod tests {
             },
         );
 
-        //only the subscription event gets processed, the rest is dropped
+        // only the subscription event gets processed, the rest is dropped
         assert_eq!(gs.events.len(), 1);
-        assert!(match &gs.events[0] {
-            NetworkBehaviourAction::GenerateEvent(event) => match event {
-                GossipsubEvent::Subscribed { .. } => true,
-                _ => false,
-            },
-            _ => false,
-        });
+        assert!(matches!(
+            gs.events[0],
+            NetworkBehaviourAction::GenerateEvent(GossipsubEvent::Subscribed { .. })
+        ));
 
         let control_action = GossipsubControlAction::IHave {
             topic_hash: topics[0].clone(),
-            message_ids: vec![config.message_id(&message4)],
+            message_ids: vec![config.message_id(message4)],
         };
 
-        //receive from p2
-        gs.inject_event(
-            p2.clone(),
+        // receive from p2
+        gs.on_connection_handler_event(
+            p2,
             ConnectionId::new(0),
             HandlerEvent::Message {
                 rpc: GossipsubRpc {
                     messages: vec![raw_message3],
-                    subscriptions: vec![subscription.clone()],
+                    subscriptions: vec![subscription],
                     control_msgs: vec![control_action],
                 },
                 invalid_messages: Vec::new(),
             },
         );
-
-        //events got processed
+        // events got processed
         assert!(gs.events.len() > 1);
     }
 
@@ -3716,7 +3713,7 @@ mod tests {
         peer_score_params.app_specific_weight = 1.0;
         let peer_score_thresholds = PeerScoreThresholds::default();
 
-        //build mesh with one peer
+        // build mesh with one peer
         let (mut gs, peers, topics) = inject_nodes1()
             .peer_no(1)
             .topics(vec!["test".into()])
@@ -3729,11 +3726,11 @@ mod tests {
 
         let mut seq = 0;
 
-        //peer 0 delivers message with invalid signature
+        // peer 0 delivers message with invalid signature
         let m = random_message(&mut seq, &topics);
 
-        gs.inject_event(
-            peers[0].clone(),
+        gs.on_connection_handler_event(
+            peers[0],
             ConnectionId::new(0),
             HandlerEvent::Message {
                 rpc: GossipsubRpc {
@@ -3744,7 +3741,6 @@ mod tests {
                 invalid_messages: vec![(m, ValidationError::InvalidSignature)],
             },
         );
-
         assert_eq!(
             gs.peer_score.as_ref().unwrap().0.score(&peers[0]),
             -2.0 * 0.7
@@ -4151,7 +4147,7 @@ mod tests {
         let mut peer_score_params = PeerScoreParams::default();
         peer_score_params.app_specific_weight = 2.0;
 
-        //build mesh with one peer
+        // build mesh with one peer
         let (mut gs, peers, _) = inject_nodes1()
             .peer_no(1)
             .topics(vec!["test".into()])
@@ -4186,7 +4182,7 @@ mod tests {
             .scoring(Some((peer_score_params, PeerScoreThresholds::default())))
             .create_network();
 
-        //create 5 peers with the same ip
+        // create 5 peers with the same ip
         let addr = Multiaddr::from(Ipv4Addr::new(10, 1, 2, 3));
         let peers = vec![
             add_peer_with_addr(&mut gs, &vec![], false, false, addr.clone()),
@@ -4196,7 +4192,7 @@ mod tests {
             add_peer_with_addr(&mut gs, &vec![], true, true, addr.clone()),
         ];
 
-        //create 4 other peers with other ip
+        // create 4 other peers with other ip
         let addr2 = Multiaddr::from(Ipv4Addr::new(10, 1, 2, 4));
         let others = vec![
             add_peer_with_addr(&mut gs, &vec![], false, false, addr2.clone()),
@@ -4205,46 +4201,45 @@ mod tests {
             add_peer_with_addr(&mut gs, &vec![], true, false, addr2.clone()),
         ];
 
-        //no penalties yet
+        // no penalties yet
         for peer in peers.iter().chain(others.iter()) {
             assert_eq!(gs.peer_score.as_ref().unwrap().0.score(peer), 0.0);
         }
 
-        //add additional connection for 3 others with addr
-        for i in 0..3 {
-            gs.inject_connection_established(
-                &others[i],
-                &ConnectionId::new(0),
-                &ConnectedPoint::Dialer {
+        // add additional connection for 3 others with addr
+        for id in others.iter().take(3) {
+            gs.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
+                peer_id: *id,
+                connection_id: ConnectionId::new(0),
+                endpoint: &ConnectedPoint::Dialer {
                     address: addr.clone(),
                     role_override: Endpoint::Dialer,
                 },
-                None,
-                0,
-            );
+                failed_addresses: &[],
+                other_established: 0,
+            }));
         }
 
-        //penalties apply squared
+        // penalties apply squared
         for peer in peers.iter().chain(others.iter().take(3)) {
             assert_eq!(gs.peer_score.as_ref().unwrap().0.score(peer), 9.0 * -2.0);
         }
-        //fourth other peer still no penalty
+        // fourth other peer still no penalty
         assert_eq!(gs.peer_score.as_ref().unwrap().0.score(&others[3]), 0.0);
 
-        //add additional connection for 3 of the peers to addr2
-        for i in 0..3 {
-            gs.inject_connection_established(
-                &peers[i],
-                &ConnectionId::new(0),
-                &ConnectedPoint::Dialer {
+        // add additional connection for 3 of the peers to addr2
+        for peer in peers.iter().take(3) {
+            gs.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
+                peer_id: *peer,
+                connection_id: ConnectionId::new(0),
+                endpoint: &ConnectedPoint::Dialer {
                     address: addr2.clone(),
                     role_override: Endpoint::Dialer,
                 },
-                None,
-                1,
-            );
+                failed_addresses: &[],
+                other_established: 1,
+            }));
         }
-
         //double penalties for the first three of each
         for peer in peers.iter().take(3).chain(others.iter().take(3)) {
             assert_eq!(
@@ -4263,16 +4258,16 @@ mod tests {
         );
 
         //two times same ip doesn't count twice
-        gs.inject_connection_established(
-            &peers[0],
-            &ConnectionId::new(0),
-            &ConnectedPoint::Dialer {
-                address: addr.clone(),
+        gs.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
+            peer_id: peers[0],
+            connection_id: ConnectionId::new(0),
+            endpoint: &ConnectedPoint::Dialer {
+                address: addr,
                 role_override: Endpoint::Dialer,
             },
-            None,
-            2,
-        );
+            failed_addresses: &[],
+            other_established: 2,
+        }));
 
         //nothing changed
         //double penalties for the first three of each
@@ -5358,8 +5353,8 @@ mod tests {
                 _ => None,
             });
             for message in messages_to_p1 {
-                gs1.inject_event(
-                    p2.clone(),
+                gs1.on_connection_handler_event(
+                    p2,
                     connection_id,
                     HandlerEvent::Message {
                         rpc: proto_to_message(&message),

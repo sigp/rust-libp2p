@@ -25,14 +25,15 @@ use futures::{channel::mpsc, prelude::*, AsyncWriteExt};
 use libp2p::core::{
     identity,
     muxing::StreamMuxerBox,
-    transport::{self, Transport},
+    transport,
     upgrade::{self, read_length_prefixed, write_length_prefixed},
     Multiaddr, PeerId,
 };
 use libp2p::noise::NoiseAuthenticated;
 use libp2p::request_response::*;
 use libp2p::swarm::{Swarm, SwarmEvent};
-use libp2p::tcp::{GenTcpConfig, TcpTransport};
+use libp2p::tcp;
+use libp2p_core::Transport;
 use rand::{self, Rng};
 use std::{io, iter};
 
@@ -47,7 +48,7 @@ fn is_response_outbound() {
 
     let (peer1_id, trans) = mk_transport();
     let ping_proto1 = RequestResponse::new(PingCodec(), protocols, cfg);
-    let mut swarm1 = Swarm::new(trans, ping_proto1, peer1_id);
+    let mut swarm1 = Swarm::without_executor(trans, ping_proto1, peer1_id);
 
     let request_id1 = swarm1
         .behaviour_mut()
@@ -86,11 +87,11 @@ fn ping_protocol() {
 
     let (peer1_id, trans) = mk_transport();
     let ping_proto1 = RequestResponse::new(PingCodec(), protocols.clone(), cfg.clone());
-    let mut swarm1 = Swarm::new(trans, ping_proto1, peer1_id);
+    let mut swarm1 = Swarm::without_executor(trans, ping_proto1, peer1_id);
 
     let (peer2_id, trans) = mk_transport();
     let ping_proto2 = RequestResponse::new(PingCodec(), protocols, cfg);
-    let mut swarm2 = Swarm::new(trans, ping_proto2, peer2_id);
+    let mut swarm2 = Swarm::without_executor(trans, ping_proto2, peer2_id);
 
     let (mut tx, mut rx) = mpsc::channel::<Multiaddr>(1);
 
@@ -175,11 +176,11 @@ fn emits_inbound_connection_closed_failure() {
 
     let (peer1_id, trans) = mk_transport();
     let ping_proto1 = RequestResponse::new(PingCodec(), protocols.clone(), cfg.clone());
-    let mut swarm1 = Swarm::new(trans, ping_proto1, peer1_id);
+    let mut swarm1 = Swarm::without_executor(trans, ping_proto1, peer1_id);
 
     let (peer2_id, trans) = mk_transport();
     let ping_proto2 = RequestResponse::new(PingCodec(), protocols, cfg);
-    let mut swarm2 = Swarm::new(trans, ping_proto2, peer2_id);
+    let mut swarm2 = Swarm::without_executor(trans, ping_proto2, peer2_id);
 
     let addr = "/ip4/127.0.0.1/tcp/0".parse().unwrap();
     swarm1.listen_on(addr).unwrap();
@@ -244,11 +245,11 @@ fn emits_inbound_connection_closed_if_channel_is_dropped() {
 
     let (peer1_id, trans) = mk_transport();
     let ping_proto1 = RequestResponse::new(PingCodec(), protocols.clone(), cfg.clone());
-    let mut swarm1 = Swarm::new(trans, ping_proto1, peer1_id);
+    let mut swarm1 = Swarm::without_executor(trans, ping_proto1, peer1_id);
 
     let (peer2_id, trans) = mk_transport();
     let ping_proto2 = RequestResponse::new(PingCodec(), protocols, cfg);
-    let mut swarm2 = Swarm::new(trans, ping_proto2, peer2_id);
+    let mut swarm2 = Swarm::without_executor(trans, ping_proto2, peer2_id);
 
     let addr = "/ip4/127.0.0.1/tcp/0".parse().unwrap();
     swarm1.listen_on(addr).unwrap();
@@ -298,7 +299,7 @@ fn mk_transport() -> (PeerId, transport::Boxed<(PeerId, StreamMuxerBox)>) {
 
     (
         peer_id,
-        TcpTransport::new(GenTcpConfig::default().nodelay(true))
+        tcp::async_io::Transport::new(tcp::Config::default().nodelay(true))
             .upgrade(upgrade::Version::V1)
             .authenticate(NoiseAuthenticated::xx(&id_keys).unwrap())
             .multiplex(libp2p::yamux::YamuxConfig::default())

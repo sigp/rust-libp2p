@@ -21,14 +21,11 @@
 use futures::StreamExt;
 use libp2p::core::identity;
 use libp2p::core::PeerId;
-use libp2p::identify::Identify;
-use libp2p::identify::IdentifyConfig;
-use libp2p::identify::IdentifyEvent;
+use libp2p::identify;
 use libp2p::ping;
-use libp2p::ping::{Ping, PingEvent};
-use libp2p::swarm::{Swarm, SwarmEvent};
-use libp2p::NetworkBehaviour;
-use libp2p::{development_transport, rendezvous};
+use libp2p::swarm::{keep_alive, NetworkBehaviour, Swarm, SwarmEvent};
+use libp2p::{rendezvous, tokio_development_transport};
+use void::Void;
 
 /// Examples for the rendezvous protocol:
 ///
@@ -46,15 +43,16 @@ async fn main() {
     let key = identity::ed25519::SecretKey::from_bytes(bytes).expect("we always pass 32 bytes");
     let identity = identity::Keypair::Ed25519(key.into());
 
-    let mut swarm = Swarm::new(
-        development_transport(identity.clone()).await.unwrap(),
+    let mut swarm = Swarm::with_tokio_executor(
+        tokio_development_transport(identity.clone()).unwrap(),
         MyBehaviour {
-            identify: Identify::new(IdentifyConfig::new(
+            identify: identify::Behaviour::new(identify::Config::new(
                 "rendezvous-example/1.0.0".to_string(),
                 identity.public(),
             )),
             rendezvous: rendezvous::server::Behaviour::new(rendezvous::server::Config::default()),
-            ping: Ping::new(ping::Config::new().with_keep_alive(true)),
+            ping: ping::Behaviour::new(ping::Config::new()),
+            keep_alive: keep_alive::Behaviour,
         },
         PeerId::from(identity.public()),
     );
@@ -104,8 +102,8 @@ async fn main() {
 #[derive(Debug)]
 enum MyEvent {
     Rendezvous(rendezvous::server::Event),
-    Ping(PingEvent),
-    Identify(IdentifyEvent),
+    Ping(ping::Event),
+    Identify(identify::Event),
 }
 
 impl From<rendezvous::server::Event> for MyEvent {
@@ -114,15 +112,21 @@ impl From<rendezvous::server::Event> for MyEvent {
     }
 }
 
-impl From<PingEvent> for MyEvent {
-    fn from(event: PingEvent) -> Self {
+impl From<ping::Event> for MyEvent {
+    fn from(event: ping::Event) -> Self {
         MyEvent::Ping(event)
     }
 }
 
-impl From<IdentifyEvent> for MyEvent {
-    fn from(event: IdentifyEvent) -> Self {
+impl From<identify::Event> for MyEvent {
+    fn from(event: identify::Event) -> Self {
         MyEvent::Identify(event)
+    }
+}
+
+impl From<Void> for MyEvent {
+    fn from(event: Void) -> Self {
+        void::unreachable(event)
     }
 }
 
@@ -130,7 +134,8 @@ impl From<IdentifyEvent> for MyEvent {
 #[behaviour(event_process = false)]
 #[behaviour(out_event = "MyEvent")]
 struct MyBehaviour {
-    identify: Identify,
+    identify: identify::Behaviour,
     rendezvous: rendezvous::server::Behaviour,
-    ping: Ping,
+    ping: ping::Behaviour,
+    keep_alive: keep_alive::Behaviour,
 }

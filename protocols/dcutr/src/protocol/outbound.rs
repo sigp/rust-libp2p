@@ -22,11 +22,11 @@ use crate::message_proto::{hole_punch, HolePunch};
 use asynchronous_codec::Framed;
 use futures::{future::BoxFuture, prelude::*};
 use futures_timer::Delay;
+use instant::Instant;
 use libp2p_core::{multiaddr::Protocol, upgrade, Multiaddr};
 use libp2p_swarm::NegotiatedSubstream;
 use std::convert::TryFrom;
 use std::iter;
-use std::time::Instant;
 use thiserror::Error;
 
 pub struct Upgrade {
@@ -116,12 +116,8 @@ pub struct Connect {
 
 #[derive(Debug, Error)]
 pub enum UpgradeError {
-    #[error("Failed to encode or decode: {0}")]
-    Codec(
-        #[from]
-        #[source]
-        prost_codec::Error,
-    ),
+    #[error(transparent)]
+    Codec(#[from] prost_codec::Error),
     #[error("Stream closed")]
     StreamClosed,
     #[error("Expected 'status' field to be set.")]

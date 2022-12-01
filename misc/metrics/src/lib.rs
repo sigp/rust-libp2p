@@ -25,6 +25,8 @@
 //!
 //! See `examples` directory for more.
 
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+
 #[cfg(feature = "dcutr")]
 mod dcutr;
 #[cfg(feature = "gossipsub")]
@@ -36,6 +38,7 @@ mod identify;
 mod kad;
 #[cfg(feature = "ping")]
 mod ping;
+mod protocol_stack;
 #[cfg(feature = "relay")]
 mod relay;
 mod swarm;
@@ -112,8 +115,8 @@ impl Recorder<libp2p_gossipsub::GossipsubEvent> for Metrics {
 }
 
 #[cfg(feature = "identify")]
-impl Recorder<libp2p_identify::IdentifyEvent> for Metrics {
-    fn record(&self, event: &libp2p_identify::IdentifyEvent) {
+impl Recorder<libp2p_identify::Event> for Metrics {
+    fn record(&self, event: &libp2p_identify::Event) {
         self.identify.record(event)
     }
 }
@@ -126,8 +129,8 @@ impl Recorder<libp2p_kad::KademliaEvent> for Metrics {
 }
 
 #[cfg(feature = "ping")]
-impl Recorder<libp2p_ping::PingEvent> for Metrics {
-    fn record(&self, event: &libp2p_ping::PingEvent) {
+impl Recorder<libp2p_ping::Event> for Metrics {
+    fn record(&self, event: &libp2p_ping::Event) {
         self.ping.record(event)
     }
 }

@@ -1,9 +1,34 @@
-# 0.37.0 - [unreleased]
+# 0.38.0
+
+- Update to `if-watch`  `v3.0.0` and pass through `tokio` and `async-io` features. See [PR 3101].
+
+- Deprecate types with `Tcp` prefix (`GenTcpConfig`, `TcpTransport` and `TokioTcpTransport`) in favor of referencing them by module / crate. See [PR 2961].
+
+- Remove `TcpListenStream` and `TcpListenerEvent` from public API. See [PR 2961].
+
+- Update to `libp2p-core` `v0.38.0`.
+
+- Update `rust-version` to reflect the actual MSRV: 1.60.0. See [PR 3090].
+
+[PR 3101]: https://github.com/libp2p/rust-libp2p/pull/3101
+[PR 2961]: https://github.com/libp2p/rust-libp2p/pull/2961
+[PR 3090]: https://github.com/libp2p/rust-libp2p/pull/3090
+
+# 0.37.0
 
 - Update to `if-watch` `v2.0.0`. Simplify `IfWatcher` integration.
   Use `if_watch::IfWatcher` for all runtimes. See [PR 2813].
 
+- Update to `libp2p-core` `v0.37.0`.
+
+- Remove default features. If you previously depended on `async-std` you need to enable this explicitly now. See [PR 2918].
+
+- Return `None` in `GenTcpTransport::address_translation` if listen- or observed address are not tcp addresses.
+  See [PR 2970].
+
 [PR 2813]: https://github.com/libp2p/rust-libp2p/pull/2813
+[PR 2918]: https://github.com/libp2p/rust-libp2p/pull/2918
+[PR 2970]: https://github.com/libp2p/rust-libp2p/pull/2970
 
 # 0.36.0
 

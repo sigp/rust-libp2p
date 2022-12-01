@@ -48,19 +48,19 @@
 //! You should see a long list of metrics printed to the terminal. Check the
 //! `libp2p_ping` metrics, they should be `>0`.
 
+use env_logger::Env;
 use futures::executor::block_on;
 use futures::stream::StreamExt;
 use libp2p::core::Multiaddr;
 use libp2p::metrics::{Metrics, Recorder};
-use libp2p::ping::{Ping, PingConfig};
-use libp2p::swarm::SwarmEvent;
-use libp2p::{identity, PeerId, Swarm};
+use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
+use libp2p::{identify, identity, ping, PeerId, Swarm};
+use libp2p_swarm::keep_alive;
+use log::info;
 use prometheus_client::registry::Registry;
 use std::error::Error;
 use std::thread;
 
-use env_logger::Env;
-use log::info;
 mod http_service;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -68,11 +68,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let local_key = identity::Keypair::generate_ed25519();
     let local_peer_id = PeerId::from(local_key.public());
+    let local_pub_key = local_key.public();
     info!("Local peer id: {:?}", local_peer_id);
 
-    let mut swarm = Swarm::new(
+    let mut swarm = Swarm::without_executor(
         block_on(libp2p::development_transport(local_key))?,
-        Ping::new(PingConfig::new().with_keep_alive(true)),
+        Behaviour::new(local_pub_key),
         local_peer_id,
     );
 
@@ -91,9 +92,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     block_on(async {
         loop {
             match swarm.select_next_some().await {
-                SwarmEvent::Behaviour(ping_event) => {
+                SwarmEvent::Behaviour(BehaviourEvent::Ping(ping_event)) => {
                     info!("{:?}", ping_event);
                     metrics.record(&ping_event);
+                }
+                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify_event)) => {
+                    info!("{:?}", identify_event);
+                    metrics.record(&identify_event);
                 }
                 swarm_event => {
                     info!("{:?}", swarm_event);
@@ -103,4 +108,28 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
     Ok(())
+}
+
+/// Our network behaviour.
+///
+/// For illustrative purposes, this includes the [`keep_alive::Behaviour`]) behaviour so the ping actually happen
+/// and can be observed via the metrics.
+#[derive(NetworkBehaviour)]
+struct Behaviour {
+    identify: identify::Behaviour,
+    keep_alive: keep_alive::Behaviour,
+    ping: ping::Behaviour,
+}
+
+impl Behaviour {
+    fn new(local_pub_key: libp2p::identity::PublicKey) -> Self {
+        Self {
+            ping: ping::Behaviour::default(),
+            identify: identify::Behaviour::new(identify::Config::new(
+                "/ipfs/0.1.0".into(),
+                local_pub_key,
+            )),
+            keep_alive: keep_alive::Behaviour::default(),
+        }
+    }
 }

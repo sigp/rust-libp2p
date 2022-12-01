@@ -48,7 +48,7 @@ impl Keypair {
     /// [RFC5208]: https://tools.ietf.org/html/rfc5208#section-5
     pub fn from_pkcs8(der: &mut [u8]) -> Result<Keypair, DecodingError> {
         let kp = RsaKeyPair::from_pkcs8(der)
-            .map_err(|e| DecodingError::new("RSA PKCS#8 PrivateKeyInfo").source(e))?;
+            .map_err(|e| DecodingError::failed_to_parse("RSA PKCS#8 PrivateKeyInfo", e))?;
         der.zeroize();
         Ok(Keypair(Arc::new(kp)))
     }
@@ -111,7 +111,7 @@ impl PublicKey {
     /// structure. See also `encode_x509`.
     pub fn decode_x509(pk: &[u8]) -> Result<PublicKey, DecodingError> {
         Asn1SubjectPublicKeyInfo::decode(pk)
-            .map_err(|e| DecodingError::new("RSA X.509").source(e))
+            .map_err(|e| DecodingError::failed_to_parse("RSA X.509", e))
             .map(|spki| spki.subjectPublicKey.0)
     }
 }
@@ -307,9 +307,9 @@ mod tests {
     use super::*;
     use quickcheck::*;
 
-    const KEY1: &'static [u8] = include_bytes!("test/rsa-2048.pk8");
-    const KEY2: &'static [u8] = include_bytes!("test/rsa-3072.pk8");
-    const KEY3: &'static [u8] = include_bytes!("test/rsa-4096.pk8");
+    const KEY1: &[u8] = include_bytes!("test/rsa-2048.pk8");
+    const KEY2: &[u8] = include_bytes!("test/rsa-3072.pk8");
+    const KEY3: &[u8] = include_bytes!("test/rsa-4096.pk8");
 
     #[derive(Clone, Debug)]
     struct SomeKeypair(Keypair);

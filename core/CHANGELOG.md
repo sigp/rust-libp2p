@@ -1,8 +1,35 @@
-# 0.36.1 - [unreleased]
+# 0.38.0
+
+- Remove deprecated functions `StreamMuxerExt::next_{inbound,outbound}`. See [PR 3031].
+
+- Hide `prost::Error` from public API in `FromEnvelopeError::InvalidPeerRecord` and `signed_envelope::DecodingError`. See [PR 3058].
+
+- Move `Executor` to `libp2p-swarm`. See [PR 3097].
+
+- Update `rust-version` to reflect the actual MSRV: 1.60.0. See [PR 3090].
+
+- Update `multistream-select` to `v0.12.1`. See [PR 3090].
+
+- Improve error messages in case keys cannot be decoded because of missing feature flags. See [PR 2972].
+
+[PR 3031]: https://github.com/libp2p/rust-libp2p/pull/3031
+[PR 3058]: https://github.com/libp2p/rust-libp2p/pull/3058
+[PR 3097]: https://github.com/libp2p/rust-libp2p/pull/3097
+[PR 3090]: https://github.com/libp2p/rust-libp2p/pull/3090
+[PR 2972]: https://github.com/libp2p/rust-libp2p/pull/2972
+
+# 0.37.0
 
 - Implement `Hash` and `Ord` for `PublicKey`. See [PR 2915].
 
+- Remove default features. If you previously depended on `secp256k1` or `ecdsa` you need to enable these explicitly
+  now. See [PR 2918].
+
+- Deprecate `StreamMuxerExt::next_{inbound,outbound}`. See [PR 3002].
+
 [PR 2915]: https://github.com/libp2p/rust-libp2p/pull/2915
+[PR 2918]: https://github.com/libp2p/rust-libp2p/pull/2918
+[PR 3002]: https://github.com/libp2p/rust-libp2p/pull/3002
 
 # 0.36.0
 

@@ -57,7 +57,7 @@
 //! 1. Run command below in one terminal.
 //!
 //!    ```
-//!    cargo run --example file-sharing -- \
+//!    cargo run --example file-sharing --features=full -- \
 //!              --listen-address /ip4/127.0.0.1/tcp/40837 \
 //!              --secret-key-seed 1 \
 //!              provide \
@@ -68,7 +68,7 @@
 //! 2. Run command below in another terminal.
 //!
 //!    ```
-//!    cargo run --example file-sharing -- \
+//!    cargo run --example file-sharing --features=full -- \
 //!              --peer /ip4/127.0.0.1/tcp/40837/p2p/12D3KooWPjceQrSwdWXPyLLeABRXmuqt69Rg3sBYbU1Nft9HyQ6X \
 //!              get \
 //!              --name <name-for-others-to-find-your-file>
@@ -149,7 +149,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             // Locate all nodes providing the file.
             let providers = network_client.get_providers(name.clone()).await;
             if providers.is_empty() {
-                return Err(format!("Could not find provider for file {}.", name).into());
+                return Err(format!("Could not find provider for file {name}.").into());
             }
 
             // Request the content of the file from each node.
@@ -219,8 +219,7 @@ mod network {
         ProtocolSupport, RequestId, RequestResponse, RequestResponseCodec, RequestResponseEvent,
         RequestResponseMessage, ResponseChannel,
     };
-    use libp2p::swarm::{ConnectionHandlerUpgrErr, SwarmBuilder, SwarmEvent};
-    use libp2p::{NetworkBehaviour, Swarm};
+    use libp2p::swarm::{ConnectionHandlerUpgrErr, NetworkBehaviour, Swarm, SwarmEvent};
     use std::collections::{hash_map, HashMap, HashSet};
     use std::iter;
 
@@ -251,7 +250,7 @@ mod network {
 
         // Build the Swarm, connecting the lower layer transport logic with the
         // higher layer network behaviour logic.
-        let swarm = SwarmBuilder::new(
+        let swarm = Swarm::with_threadpool_executor(
             libp2p::development_transport(id_keys).await?,
             ComposedBehaviour {
                 kademlia: Kademlia::new(peer_id, MemoryStore::new(peer_id)),
@@ -262,8 +261,7 @@ mod network {
                 ),
             },
             peer_id,
-        )
-        .build();
+        );
 
         let (command_sender, command_receiver) = mpsc::channel(0);
         let (event_sender, event_receiver) = mpsc::channel(0);
@@ -415,7 +413,7 @@ mod network {
         ) {
             match event {
                 SwarmEvent::Behaviour(ComposedEvent::Kademlia(
-                    KademliaEvent::OutboundQueryCompleted {
+                    KademliaEvent::OutboundQueryProgressed {
                         id,
                         result: QueryResult::StartProviding(_),
                         ..
@@ -428,18 +426,37 @@ mod network {
                     let _ = sender.send(());
                 }
                 SwarmEvent::Behaviour(ComposedEvent::Kademlia(
-                    KademliaEvent::OutboundQueryCompleted {
+                    KademliaEvent::OutboundQueryProgressed {
                         id,
-                        result: QueryResult::GetProviders(Ok(GetProvidersOk { providers, .. })),
+                        result:
+                            QueryResult::GetProviders(Ok(GetProvidersOk::FoundProviders {
+                                providers,
+                                ..
+                            })),
                         ..
                     },
                 )) => {
-                    let _ = self
-                        .pending_get_providers
-                        .remove(&id)
-                        .expect("Completed query to be previously pending.")
-                        .send(providers);
+                    if let Some(sender) = self.pending_get_providers.remove(&id) {
+                        sender.send(providers).expect("Receiver not to be dropped");
+
+                        // Finish the query. We are only interested in the first result.
+                        self.swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .query_mut(&id)
+                            .unwrap()
+                            .finish();
+                    }
                 }
+                SwarmEvent::Behaviour(ComposedEvent::Kademlia(
+                    KademliaEvent::OutboundQueryProgressed {
+                        result:
+                            QueryResult::GetProviders(Ok(
+                                GetProvidersOk::FinishedWithNoAdditionalRecord { .. },
+                            )),
+                        ..
+                    },
+                )) => {}
                 SwarmEvent::Behaviour(ComposedEvent::Kademlia(_)) => {}
                 SwarmEvent::Behaviour(ComposedEvent::RequestResponse(
                     RequestResponseEvent::Message { message, .. },
@@ -506,8 +523,8 @@ mod network {
                     }
                 }
                 SwarmEvent::IncomingConnectionError { .. } => {}
-                SwarmEvent::Dialing(peer_id) => eprintln!("Dialing {}", peer_id),
-                e => panic!("{:?}", e),
+                SwarmEvent::Dialing(peer_id) => eprintln!("Dialing {peer_id}"),
+                e => panic!("{e:?}"),
             }
         }
 

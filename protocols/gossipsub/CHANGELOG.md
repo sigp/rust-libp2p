@@ -1,6 +1,33 @@
-# 0.41.1 [unreleased]
+# 0.43.0
+
+- Update to `libp2p-core` `v0.38.0`.
+
+- Update to `libp2p-swarm` `v0.41.0`.
+
+- Update to `prost-codec` `v0.3.0`.
+
+- Refactoring GossipsubCodec to use common protobuf Codec. See [PR 3070].
+
+- Replace `Gossipsub`'s `NetworkBehaviour` implementation `inject_*` methods with the new `on_*` methods.
+  See [PR 3011].
+
+- Replace `GossipsubHandler`'s `ConnectionHandler` implementation `inject_*` methods with the new `on_*` methods.
+  See [PR 3085].
+
+- Update `rust-version` to reflect the actual MSRV: 1.62.0. See [PR 3090].
+
+[PR 3085]: https://github.com/libp2p/rust-libp2p/pull/3085
+[PR 3070]: https://github.com/libp2p/rust-libp2p/pull/3070
+[PR 3011]: https://github.com/libp2p/rust-libp2p/pull/3011
+[PR 3090]: https://github.com/libp2p/rust-libp2p/pull/3090
+
+# 0.42.0
 
 - Bump rand to 0.8 and quickcheck to 1. See [PR 2857].
+
+- Update to `libp2p-core` `v0.37.0`.
+
+- Update to `libp2p-swarm` `v0.40.0`.
 
 [PR 2857]: https://github.com/libp2p/rust-libp2p/pull/2857
 

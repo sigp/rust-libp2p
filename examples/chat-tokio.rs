@@ -25,37 +25,16 @@
 //! The example is run per node as follows:
 //!
 //! ```sh
-//! cargo run --example chat-tokio --features="tcp-tokio mdns-tokio"
-//! ```
-//!
-//! Alternatively, to run with the minimal set of features and crates:
-//!
-//! ```sh
-//!cargo run --example chat-tokio \\
-//!    --no-default-features \\
-//!    --features="floodsub mplex noise tcp-tokio mdns-tokio"
+//! cargo run --example chat-tokio --features=full
 //! ```
 
 use futures::StreamExt;
-use libp2p::tcp::GenTcpConfig;
 use libp2p::{
     core::upgrade,
     floodsub::{self, Floodsub, FloodsubEvent},
-    identity,
-    mdns::{
-        MdnsEvent,
-        // `TokioMdns` is available through the `mdns-tokio` feature.
-        TokioMdns,
-    },
-    mplex,
-    noise,
-    swarm::{SwarmBuilder, SwarmEvent},
-    // `TokioTcpTransport` is available through the `tcp-tokio` feature.
-    tcp::TokioTcpTransport,
-    Multiaddr,
-    NetworkBehaviour,
-    PeerId,
-    Transport,
+    identity, mdns, mplex, noise,
+    swarm::{NetworkBehaviour, SwarmEvent},
+    tcp, Multiaddr, PeerId, Transport,
 };
 use std::error::Error;
 use tokio::io::{self, AsyncBufReadExt};
@@ -68,11 +47,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Create a random PeerId
     let id_keys = identity::Keypair::generate_ed25519();
     let peer_id = PeerId::from(id_keys.public());
-    println!("Local peer id: {:?}", peer_id);
+    println!("Local peer id: {peer_id:?}");
 
     // Create a tokio-based TCP transport use noise for authenticated
     // encryption and Mplex for multiplexing of substreams on a TCP stream.
-    let transport = TokioTcpTransport::new(GenTcpConfig::default().nodelay(true))
+    let transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
         .upgrade(upgrade::Version::V1)
         .authenticate(
             noise::NoiseAuthenticated::xx(&id_keys)
@@ -90,13 +69,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     #[behaviour(out_event = "MyBehaviourEvent")]
     struct MyBehaviour {
         floodsub: Floodsub,
-        mdns: TokioMdns,
+        mdns: mdns::tokio::Behaviour,
     }
 
     #[allow(clippy::large_enum_variant)]
     enum MyBehaviourEvent {
         Floodsub(FloodsubEvent),
-        Mdns(MdnsEvent),
+        Mdns(mdns::Event),
     }
 
     impl From<FloodsubEvent> for MyBehaviourEvent {
@@ -105,36 +84,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    impl From<MdnsEvent> for MyBehaviourEvent {
-        fn from(event: MdnsEvent) -> Self {
+    impl From<mdns::Event> for MyBehaviourEvent {
+        fn from(event: mdns::Event) -> Self {
             MyBehaviourEvent::Mdns(event)
         }
     }
 
     // Create a Swarm to manage peers and events.
-    let mut swarm = {
-        let mdns = TokioMdns::new(Default::default()).await?;
-        let mut behaviour = MyBehaviour {
-            floodsub: Floodsub::new(peer_id),
-            mdns,
-        };
-
-        behaviour.floodsub.subscribe(floodsub_topic.clone());
-
-        SwarmBuilder::new(transport, behaviour, peer_id)
-            // We want the connection background tasks to be spawned
-            // onto the tokio runtime.
-            .executor(Box::new(|fut| {
-                tokio::spawn(fut);
-            }))
-            .build()
+    let mdns_behaviour = mdns::Behaviour::new(Default::default())?;
+    let behaviour = MyBehaviour {
+        floodsub: Floodsub::new(peer_id),
+        mdns: mdns_behaviour,
     };
+    let mut swarm = libp2p_swarm::Swarm::with_tokio_executor(transport, behaviour, peer_id);
 
     // Reach out to another node if specified
     if let Some(to_dial) = std::env::args().nth(1) {
         let addr: Multiaddr = to_dial.parse()?;
         swarm.dial(addr)?;
-        println!("Dialed {:?}", to_dial);
+        println!("Dialed {to_dial:?}");
     }
 
     // Read full lines from stdin
@@ -153,7 +121,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::NewListenAddr { address, .. } => {
-                        println!("Listening on {:?}", address);
+                        println!("Listening on {address:?}");
                     }
                     SwarmEvent::Behaviour(MyBehaviourEvent::Floodsub(FloodsubEvent::Message(message))) => {
                         println!(
@@ -164,12 +132,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                     SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(event)) => {
                         match event {
-                            MdnsEvent::Discovered(list) => {
+                            mdns::Event::Discovered(list) => {
                                 for (peer, _) in list {
                                     swarm.behaviour_mut().floodsub.add_node_to_partial_view(peer);
                                 }
                             }
-                            MdnsEvent::Expired(list) => {
+                            mdns::Event::Expired(list) => {
                                 for (peer, _) in list {
                                     if !swarm.behaviour().mdns.has_node(&peer) {
                                         swarm.behaviour_mut().floodsub.remove_node_from_partial_view(&peer);

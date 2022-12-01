@@ -22,11 +22,12 @@ use futures::StreamExt;
 use libp2p::core::identity;
 use libp2p::core::PeerId;
 use libp2p::multiaddr::Protocol;
-use libp2p::ping::{Ping, PingConfig, PingEvent, PingSuccess};
-use libp2p::swarm::SwarmEvent;
+use libp2p::ping;
+use libp2p::swarm::{keep_alive, SwarmEvent};
 use libp2p::Swarm;
-use libp2p::{development_transport, rendezvous, Multiaddr};
+use libp2p::{rendezvous, tokio_development_transport, Multiaddr};
 use std::time::Duration;
+use void::Void;
 
 const NAMESPACE: &str = "rendezvous";
 
@@ -40,22 +41,19 @@ async fn main() {
         .parse()
         .unwrap();
 
-    let mut swarm = Swarm::new(
-        development_transport(identity.clone()).await.unwrap(),
+    let mut swarm = Swarm::with_tokio_executor(
+        tokio_development_transport(identity.clone()).unwrap(),
         MyBehaviour {
             rendezvous: rendezvous::client::Behaviour::new(identity.clone()),
-            ping: Ping::new(
-                PingConfig::new()
-                    .with_interval(Duration::from_secs(1))
-                    .with_keep_alive(true),
-            ),
+            ping: ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(1))),
+            keep_alive: keep_alive::Behaviour,
         },
         PeerId::from(identity.public()),
     );
 
     log::info!("Local peer id: {}", swarm.local_peer_id());
 
-    let _ = swarm.dial(rendezvous_point_address.clone()).unwrap();
+    swarm.dial(rendezvous_point_address.clone()).unwrap();
 
     let mut discover_tick = tokio::time::interval(Duration::from_secs(30));
     let mut cookie = None;
@@ -100,9 +98,9 @@ async fn main() {
                             }
                         }
                     }
-                    SwarmEvent::Behaviour(MyEvent::Ping(PingEvent {
+                    SwarmEvent::Behaviour(MyEvent::Ping(ping::Event {
                         peer,
-                        result: Ok(PingSuccess::Ping { rtt }),
+                        result: Ok(ping::Success::Ping { rtt }),
                     })) if peer != rendezvous_point => {
                         log::info!("Ping to {} is {}ms", peer, rtt.as_millis())
                     }
@@ -124,7 +122,7 @@ async fn main() {
 #[derive(Debug)]
 enum MyEvent {
     Rendezvous(rendezvous::client::Event),
-    Ping(PingEvent),
+    Ping(ping::Event),
 }
 
 impl From<rendezvous::client::Event> for MyEvent {
@@ -133,16 +131,23 @@ impl From<rendezvous::client::Event> for MyEvent {
     }
 }
 
-impl From<PingEvent> for MyEvent {
-    fn from(event: PingEvent) -> Self {
+impl From<ping::Event> for MyEvent {
+    fn from(event: ping::Event) -> Self {
         MyEvent::Ping(event)
     }
 }
 
-#[derive(libp2p::NetworkBehaviour)]
+impl From<Void> for MyEvent {
+    fn from(event: Void) -> Self {
+        void::unreachable(event)
+    }
+}
+
+#[derive(libp2p::swarm::NetworkBehaviour)]
 #[behaviour(event_process = false)]
 #[behaviour(out_event = "MyEvent")]
 struct MyBehaviour {
     rendezvous: rendezvous::client::Behaviour,
-    ping: Ping,
+    ping: ping::Behaviour,
+    keep_alive: keep_alive::Behaviour,
 }

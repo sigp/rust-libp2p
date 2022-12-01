@@ -18,13 +18,15 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
+//! Implementation of the [Gossipsub](https://github.com/libp2p/specs/blob/master/pubsub/gossipsub/README.md) protocol.
+//!
 //! Gossipsub is a P2P pubsub (publish/subscription) routing layer designed to extend upon
 //! floodsub and meshsub routing protocols.
 //!
 //! # Overview
 //!
 //! *Note: The gossipsub protocol specifications
-//! (https://github.com/libp2p/specs/tree/master/pubsub/gossipsub) provide an outline for the
+//! (<https://github.com/libp2p/specs/tree/master/pubsub/gossipsub>) provide an outline for the
 //! routing protocol. They should be consulted for further detail.*
 //!
 //! Gossipsub  is a blend of meshsub for data and randomsub for mesh metadata. It provides bounded
@@ -135,6 +137,8 @@
 //! let addr = swarm.listen_on(memory).unwrap();
 //! println!("Listening on {:?}", addr);
 //! ```
+
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 
 pub mod error;
 pub mod protocol;

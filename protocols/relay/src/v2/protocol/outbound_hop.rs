@@ -24,11 +24,11 @@ use asynchronous_codec::{Framed, FramedParts};
 use bytes::Bytes;
 use futures::{future::BoxFuture, prelude::*};
 use futures_timer::Delay;
+use instant::{Duration, SystemTime};
 use libp2p_core::{upgrade, Multiaddr, PeerId};
 use libp2p_swarm::NegotiatedSubstream;
 use std::convert::TryFrom;
 use std::iter;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 pub enum Upgrade {
@@ -134,7 +134,7 @@ impl upgrade::OutboundUpgrade<NegotiatedSubstream> for Upgrade {
                         .expire
                         .checked_sub(
                             SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
+                                .duration_since(SystemTime::UNIX_EPOCH)
                                 .unwrap()
                                 .as_secs(),
                         )
@@ -233,12 +233,8 @@ pub enum ReservationFailedReason {
 
 #[derive(Debug, Error)]
 pub enum FatalUpgradeError {
-    #[error("Failed to encode or decode")]
-    Codec(
-        #[from]
-        #[source]
-        prost_codec::Error,
-    ),
+    #[error(transparent)]
+    Codec(#[from] prost_codec::Error),
     #[error("Stream closed")]
     StreamClosed,
     #[error("Expected 'status' field to be set.")]

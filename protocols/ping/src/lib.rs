@@ -26,19 +26,21 @@
 //!
 //! # Usage
 //!
-//! The [`Ping`] struct implements the [`NetworkBehaviour`] trait. When used with a [`Swarm`],
+//! The [`Behaviour`] struct implements the [`NetworkBehaviour`] trait. When used with a [`Swarm`],
 //! it will respond to inbound ping requests and as necessary periodically send outbound
 //! ping requests on every established connection. If a configurable number of consecutive
 //! pings fail, the connection will be closed.
 //!
-//! The `Ping` network behaviour produces [`PingEvent`]s, which may be consumed from the `Swarm`
+//! The [`Behaviour`] network behaviour produces [`Event`]s, which may be consumed from the [`Swarm`]
 //! by an application, e.g. to collect statistics.
 //!
 //! > **Note**: The ping protocol does not keep otherwise idle connections alive
-//! > by default, see [`PingConfig::with_keep_alive`] for changing this behaviour.
+//! > by default, see [`Config::with_keep_alive`] for changing this behaviour.
 //!
 //! [`Swarm`]: libp2p_swarm::Swarm
 //! [`Transport`]: libp2p_core::Transport
+
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 
 mod handler;
 mod protocol;
@@ -46,22 +48,33 @@ mod protocol;
 use handler::Handler;
 pub use handler::{Config, Failure, Success};
 use libp2p_core::{connection::ConnectionId, PeerId};
-use libp2p_swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters};
+use libp2p_swarm::{
+    behaviour::FromSwarm, NetworkBehaviour, NetworkBehaviourAction, PollParameters,
+};
 use std::{
     collections::VecDeque,
     task::{Context, Poll},
 };
 
-#[deprecated(
-    since = "0.30.0",
-    note = "Use re-exports that omit `Ping` prefix, i.e. `libp2p::ping::Config` etc"
-)]
-pub use self::{
-    protocol::PROTOCOL_NAME, Config as PingConfig, Event as PingEvent, Failure as PingFailure,
-    Result as PingResult, Success as PingSuccess,
-};
-#[deprecated(since = "0.30.0", note = "Use libp2p::ping::Behaviour instead.")]
-pub use Behaviour as Ping;
+#[deprecated(since = "0.39.1", note = "Use libp2p::ping::Config instead.")]
+pub type PingConfig = Config;
+
+#[deprecated(since = "0.39.1", note = "Use libp2p::ping::Event instead.")]
+pub type PingEvent = Event;
+
+#[deprecated(since = "0.39.1", note = "Use libp2p::ping::Success instead.")]
+pub type PingSuccess = Success;
+
+#[deprecated(since = "0.39.1", note = "Use libp2p::ping::Failure instead.")]
+pub type PingFailure = Failure;
+
+#[deprecated(since = "0.39.1", note = "Use libp2p::ping::Result instead.")]
+pub type PingResult = Result;
+
+#[deprecated(since = "0.39.1", note = "Use libp2p::ping::Behaviour instead.")]
+pub type Ping = Behaviour;
+
+pub use self::protocol::PROTOCOL_NAME;
 
 /// The result of an inbound or outbound ping.
 pub type Result = std::result::Result<Success, Failure>;
@@ -110,7 +123,7 @@ impl NetworkBehaviour for Behaviour {
         Handler::new(self.config.clone())
     }
 
-    fn inject_event(&mut self, peer: PeerId, _: ConnectionId, result: Result) {
+    fn on_connection_handler_event(&mut self, peer: PeerId, _: ConnectionId, result: Result) {
         self.events.push_front(Event { peer, result })
     }
 
@@ -131,6 +144,26 @@ impl NetworkBehaviour for Behaviour {
             Poll::Ready(NetworkBehaviourAction::GenerateEvent(e))
         } else {
             Poll::Pending
+        }
+    }
+
+    fn on_swarm_event(
+        &mut self,
+        event: libp2p_swarm::behaviour::FromSwarm<Self::ConnectionHandler>,
+    ) {
+        match event {
+            FromSwarm::ConnectionEstablished(_)
+            | FromSwarm::ConnectionClosed(_)
+            | FromSwarm::AddressChange(_)
+            | FromSwarm::DialFailure(_)
+            | FromSwarm::ListenFailure(_)
+            | FromSwarm::NewListener(_)
+            | FromSwarm::NewListenAddr(_)
+            | FromSwarm::ExpiredListenAddr(_)
+            | FromSwarm::ListenerError(_)
+            | FromSwarm::ListenerClosed(_)
+            | FromSwarm::NewExternalAddr(_)
+            | FromSwarm::ExpiredExternalAddr(_) => {}
         }
     }
 }

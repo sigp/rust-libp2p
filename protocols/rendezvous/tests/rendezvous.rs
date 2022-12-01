@@ -37,7 +37,7 @@ async fn given_successful_registration_then_successful_discovery() {
     let ([mut alice, mut bob], mut robert) =
         new_server_with_connected_clients(rendezvous::server::Config::default()).await;
 
-    let _ = alice
+    alice
         .behaviour_mut()
         .register(namespace.clone(), *robert.local_peer_id(), None);
 
@@ -86,7 +86,7 @@ async fn given_successful_registration_then_refresh_ttl() {
     let roberts_peer_id = *robert.local_peer_id();
     let refresh_ttl = 10_000;
 
-    let _ = alice
+    alice
         .behaviour_mut()
         .register(namespace.clone(), roberts_peer_id, None);
 
@@ -366,7 +366,7 @@ async fn new_impersonating_client() -> Swarm<rendezvous::client::Behaviour> {
     eve
 }
 
-#[derive(libp2p::NetworkBehaviour)]
+#[derive(libp2p::swarm::NetworkBehaviour)]
 #[behaviour(event_process = false, out_event = "CombinedEvent")]
 struct CombinedBehaviour {
     client: rendezvous::client::Behaviour,
@@ -374,6 +374,7 @@ struct CombinedBehaviour {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum CombinedEvent {
     Client(rendezvous::client::Event),
     Server(rendezvous::server::Event),

@@ -34,7 +34,6 @@ use libp2p::plaintext::PlainText2Config;
 use libp2p::relay::v2::client;
 use libp2p::relay::v2::relay;
 use libp2p::swarm::{AddressScore, NetworkBehaviour, Swarm, SwarmEvent};
-use libp2p::NetworkBehaviour;
 use std::time::Duration;
 
 #[test]
@@ -53,7 +52,6 @@ fn connect() {
     let mut dst = build_client();
     let dst_peer_id = *dst.local_peer_id();
     let dst_relayed_addr = relay_addr
-        .clone()
         .with(Protocol::P2p(relay_peer_id.into()))
         .with(Protocol::P2pCircuit)
         .with(Protocol::P2p(dst_peer_id.into()));
@@ -96,11 +94,11 @@ fn connect() {
 fn build_relay() -> Swarm<relay::Relay> {
     let local_key = identity::Keypair::generate_ed25519();
     let local_public_key = local_key.public();
-    let local_peer_id = local_public_key.clone().to_peer_id();
+    let local_peer_id = local_public_key.to_peer_id();
 
     let transport = build_transport(MemoryTransport::default().boxed(), local_public_key);
 
-    Swarm::new(
+    Swarm::with_threadpool_executor(
         transport,
         relay::Relay::new(
             local_peer_id,
@@ -116,7 +114,7 @@ fn build_relay() -> Swarm<relay::Relay> {
 fn build_client() -> Swarm<Client> {
     let local_key = identity::Keypair::generate_ed25519();
     let local_public_key = local_key.public();
-    let local_peer_id = local_public_key.clone().to_peer_id();
+    let local_peer_id = local_public_key.to_peer_id();
 
     let (relay_transport, behaviour) = client::Client::new_transport_and_behaviour(local_peer_id);
     let transport = build_transport(
@@ -124,7 +122,7 @@ fn build_client() -> Swarm<Client> {
         local_public_key,
     );
 
-    Swarm::new(
+    Swarm::with_threadpool_executor(
         transport,
         Client {
             relay: behaviour,
@@ -141,13 +139,11 @@ fn build_transport<StreamSink>(
 where
     StreamSink: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let transport = transport
+    transport
         .upgrade(Version::V1)
         .authenticate(PlainText2Config { local_public_key })
         .multiplex(libp2p::yamux::YamuxConfig::default())
-        .boxed();
-
-    transport
+        .boxed()
 }
 
 #[derive(NetworkBehaviour)]

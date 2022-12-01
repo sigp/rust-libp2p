@@ -175,7 +175,7 @@ fn build_node() -> (Multiaddr, Swarm<Gossipsub>) {
         .config(config)
         .build()
         .unwrap();
-    let mut swarm = Swarm::new(transport, behaviour, peer_id);
+    let mut swarm = Swarm::without_executor(transport, behaviour, peer_id);
 
     let port = 1 + random::<u64>();
     let mut addr: Multiaddr = Protocol::Memory(port).into();
@@ -191,7 +191,7 @@ fn multi_hop_propagation() {
     let _ = env_logger::try_init();
 
     fn prop(num_nodes: u8, seed: u64) -> TestResult {
-        if num_nodes < 2 || num_nodes > 50 {
+        if !(2..=50).contains(&num_nodes) {
             return TestResult::discard();
         }
 

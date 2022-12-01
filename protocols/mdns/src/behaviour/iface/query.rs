@@ -19,13 +19,18 @@
 // DEALINGS IN THE SOFTWARE.
 
 use super::dns;
-use crate::{META_QUERY_SERVICE, SERVICE_NAME};
-use dns_parser::{Packet, RData};
+use crate::{META_QUERY_SERVICE_FQDN, SERVICE_NAME_FQDN};
 use libp2p_core::{
+    address_translation,
     multiaddr::{Multiaddr, Protocol},
     PeerId,
 };
+use std::time::Instant;
 use std::{convert::TryFrom, fmt, net::SocketAddr, str, time::Duration};
+use trust_dns_proto::{
+    op::Message,
+    rr::{Name, RData},
+};
 
 /// A valid mDNS packet received by the service.
 #[derive(Debug)]
@@ -39,44 +44,40 @@ pub enum MdnsPacket {
 }
 
 impl MdnsPacket {
-    pub fn new_from_bytes(buf: &[u8], from: SocketAddr) -> Option<MdnsPacket> {
-        match Packet::parse(buf) {
-            Ok(packet) => {
-                if packet.header.query {
-                    if packet
-                        .questions
-                        .iter()
-                        .any(|q| q.qname.to_string().as_bytes() == SERVICE_NAME)
-                    {
-                        let query = MdnsPacket::Query(MdnsQuery {
-                            from,
-                            query_id: packet.header.id,
-                        });
-                        Some(query)
-                    } else if packet
-                        .questions
-                        .iter()
-                        .any(|q| q.qname.to_string().as_bytes() == META_QUERY_SERVICE)
-                    {
-                        // TODO: what if multiple questions, one with SERVICE_NAME and one with META_QUERY_SERVICE?
-                        let discovery = MdnsPacket::ServiceDiscovery(MdnsServiceDiscovery {
-                            from,
-                            query_id: packet.header.id,
-                        });
-                        Some(discovery)
-                    } else {
-                        None
-                    }
-                } else {
-                    let resp = MdnsPacket::Response(MdnsResponse::new(packet, from));
-                    Some(resp)
-                }
-            }
-            Err(err) => {
-                log::debug!("Parsing mdns packet failed: {:?}", err);
-                None
-            }
+    pub fn new_from_bytes(
+        buf: &[u8],
+        from: SocketAddr,
+    ) -> Result<Option<MdnsPacket>, trust_dns_proto::error::ProtoError> {
+        let packet = Message::from_vec(buf)?;
+
+        if packet.query().is_none() {
+            return Ok(Some(MdnsPacket::Response(MdnsResponse::new(&packet, from))));
         }
+
+        if packet
+            .queries()
+            .iter()
+            .any(|q| q.name().to_utf8() == SERVICE_NAME_FQDN)
+        {
+            return Ok(Some(MdnsPacket::Query(MdnsQuery {
+                from,
+                query_id: packet.header().id(),
+            })));
+        }
+
+        if packet
+            .queries()
+            .iter()
+            .any(|q| q.name().to_utf8() == META_QUERY_SERVICE_FQDN)
+        {
+            // TODO: what if multiple questions, one with SERVICE_NAME and one with META_QUERY_SERVICE?
+            return Ok(Some(MdnsPacket::ServiceDiscovery(MdnsServiceDiscovery {
+                from,
+                query_id: packet.header().id(),
+            })));
+        }
+
+        Ok(None)
     }
 }
 
@@ -146,38 +147,65 @@ pub struct MdnsResponse {
 
 impl MdnsResponse {
     /// Creates a new `MdnsResponse` based on the provided `Packet`.
-    pub fn new(packet: Packet<'_>, from: SocketAddr) -> MdnsResponse {
+    pub fn new(packet: &Message, from: SocketAddr) -> MdnsResponse {
         let peers = packet
-            .answers
+            .answers()
             .iter()
             .filter_map(|record| {
-                if record.name.to_string().as_bytes() != SERVICE_NAME {
+                if record.name().to_string() != SERVICE_NAME_FQDN {
                     return None;
                 }
 
-                let record_value = match record.data {
-                    RData::PTR(record) => record.0.to_string(),
+                let record_value = match record.data() {
+                    Some(RData::PTR(record)) => record,
                     _ => return None,
                 };
 
-                MdnsPeer::new(&packet, record_value, record.ttl)
+                MdnsPeer::new(packet, record_value, record.ttl())
             })
             .collect();
 
         MdnsResponse { peers, from }
     }
 
-    /// Returns the list of peers that have been reported in this packet.
-    ///
-    /// > **Note**: Keep in mind that this will also contain the responses we sent ourselves.
-    pub fn discovered_peers(&self) -> impl Iterator<Item = &MdnsPeer> {
-        self.peers.iter()
+    pub fn extract_discovered(
+        &self,
+        now: Instant,
+        local_peer_id: PeerId,
+    ) -> impl Iterator<Item = (PeerId, Multiaddr, Instant)> + '_ {
+        self.discovered_peers()
+            .filter(move |peer| peer.id() != &local_peer_id)
+            .flat_map(move |peer| {
+                let observed = self.observed_address();
+                let new_expiration = now + peer.ttl();
+
+                peer.addresses().iter().filter_map(move |address| {
+                    let new_addr = address_translation(address, &observed)?;
+
+                    Some((*peer.id(), new_addr, new_expiration))
+                })
+            })
     }
 
     /// Source address of the packet.
-    #[inline]
     pub fn remote_addr(&self) -> &SocketAddr {
         &self.from
+    }
+
+    fn observed_address(&self) -> Multiaddr {
+        // We replace the IP address with the address we observe the
+        // remote as and the address they listen on.
+        let obs_ip = Protocol::from(self.remote_addr().ip());
+        let obs_port = Protocol::Udp(self.remote_addr().port());
+
+        Multiaddr::empty().with(obs_ip).with(obs_port)
+    }
+
+    /// Returns the list of peers that have been reported in this packet.
+    ///
+    /// > **Note**: Keep in mind that this will also contain the responses we sent ourselves.
+    fn discovered_peers(&self) -> impl Iterator<Item = &MdnsPeer> {
+        self.peers.iter()
     }
 }
 
@@ -200,17 +228,17 @@ pub struct MdnsPeer {
 
 impl MdnsPeer {
     /// Creates a new `MdnsPeer` based on the provided `Packet`.
-    pub fn new(packet: &Packet<'_>, record_value: String, ttl: u32) -> Option<MdnsPeer> {
+    pub fn new(packet: &Message, record_value: &Name, ttl: u32) -> Option<MdnsPeer> {
         let mut my_peer_id: Option<PeerId> = None;
         let addrs = packet
-            .additional
+            .additionals()
             .iter()
             .filter_map(|add_record| {
-                if add_record.name.to_string() != record_value {
+                if add_record.name() != record_value {
                     return None;
                 }
 
-                if let RData::TXT(ref txt) = add_record.data {
+                if let Some(RData::TXT(ref txt)) = add_record.data() {
                     Some(txt)
                 } else {
                     None
@@ -301,8 +329,8 @@ mod tests {
 
         let mut addr1: Multiaddr = "/ip4/1.2.3.4/tcp/5000".parse().expect("bad multiaddress");
         let mut addr2: Multiaddr = "/ip6/::1/udp/10000".parse().expect("bad multiaddress");
-        addr1.push(Protocol::P2p(peer_id.clone().into()));
-        addr2.push(Protocol::P2p(peer_id.clone().into()));
+        addr1.push(Protocol::P2p(peer_id.into()));
+        addr2.push(Protocol::P2p(peer_id.into()));
 
         let packets = build_query_response(
             0xf8f8,
@@ -312,19 +340,19 @@ mod tests {
         );
 
         for bytes in packets {
-            let packet = Packet::parse(&bytes).expect("unable to parse packet");
+            let packet = Message::from_vec(&bytes).expect("unable to parse packet");
             let record_value = packet
-                .answers
+                .answers()
                 .iter()
                 .filter_map(|record| {
-                    if record.name.to_string().as_bytes() != SERVICE_NAME {
+                    if record.name().to_utf8() != SERVICE_NAME_FQDN {
                         return None;
                     }
-                    let record_value = match record.data {
-                        RData::PTR(record) => record.0.to_string(),
+                    let record_value = match record.data() {
+                        Some(RData::PTR(record)) => record,
                         _ => return None,
                     };
-                    return Some(record_value);
+                    Some(record_value)
                 })
                 .next()
                 .expect("empty record value");

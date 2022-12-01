@@ -30,7 +30,6 @@ use crate::types::{
 };
 use asynchronous_codec::{Decoder, Encoder, Framed};
 use byteorder::{BigEndian, ByteOrder};
-use bytes::Bytes;
 use bytes::BytesMut;
 use futures::future;
 use futures::prelude::*;
@@ -193,17 +192,18 @@ where
 /* Gossip codec for the framing */
 
 pub struct GossipsubCodec {
-    /// Codec to encode/decode the Unsigned varint length prefix of the frames.
-    length_codec: codec::UviBytes,
     /// Determines the level of validation performed on incoming messages.
     validation_mode: ValidationMode,
+    /// The codec to handle common encoding/decoding of protobuf messages
+    codec: prost_codec::Codec<rpc_proto::Rpc>,
 }
 
 impl GossipsubCodec {
-    pub fn new(length_codec: codec::UviBytes, validation_mode: ValidationMode) -> Self {
+    pub fn new(length_codec: codec::UviBytes, validation_mode: ValidationMode) -> GossipsubCodec {
+        let codec = prost_codec::Codec::new(length_codec.max_len());
         GossipsubCodec {
-            length_codec,
             validation_mode,
+            codec,
         }
     }
 
@@ -276,16 +276,12 @@ impl Encoder for GossipsubCodec {
     type Item = rpc_proto::Rpc;
     type Error = GossipsubHandlerError;
 
-    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        let mut buf = Vec::with_capacity(item.encoded_len());
-
-        item.encode(&mut buf)
-            .expect("Buffer has sufficient capacity");
-
-        // length prefix the protobuf message, ensuring the max limit is not hit
-        self.length_codec
-            .encode(Bytes::from(buf), dst)
-            .map_err(|_| GossipsubHandlerError::MaxTransmissionSize)
+    fn encode(
+        &mut self,
+        item: Self::Item,
+        dst: &mut BytesMut,
+    ) -> Result<(), GossipsubHandlerError> {
+        Ok(self.codec.encode(item, dst)?)
     }
 }
 
@@ -293,19 +289,11 @@ impl Decoder for GossipsubCodec {
     type Item = HandlerEvent;
     type Error = GossipsubHandlerError;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let packet = match self.length_codec.decode(src).map_err(|e| {
-            if let std::io::ErrorKind::PermissionDenied = e.kind() {
-                GossipsubHandlerError::MaxTransmissionSize
-            } else {
-                GossipsubHandlerError::Io(e)
-            }
-        })? {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, GossipsubHandlerError> {
+        let rpc = match self.codec.decode(src)? {
             Some(p) => p,
             None => return Ok(None),
         };
-
-        let rpc = rpc_proto::Rpc::decode(&packet[..]).map_err(std::io::Error::from)?;
 
         // Store valid messages.
         let mut messages = Vec::with_capacity(rpc.publish.len());
@@ -630,8 +618,7 @@ mod tests {
         fn arbitrary(g: &mut Gen) -> Self {
             let topic_string: String = (0..g.gen_range(20..1024u32))
                 .map(|_| char::arbitrary(g))
-                .collect::<String>()
-                .into();
+                .collect::<String>();
             TopicId(Topic::new(topic_string).into())
         }
     }
@@ -682,7 +669,7 @@ mod tests {
 
             let mut codec = GossipsubCodec::new(codec::UviBytes::default(), ValidationMode::Strict);
             let mut buf = BytesMut::new();
-            codec.encode(rpc.clone().into_protobuf(), &mut buf).unwrap();
+            codec.encode(rpc.into_protobuf(), &mut buf).unwrap();
             let decoded_rpc = codec.decode(&mut buf).unwrap().unwrap();
             // mark as validated as its a published message
             match decoded_rpc {
