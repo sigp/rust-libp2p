@@ -1675,9 +1675,14 @@ where
         let received_time = Instant::now();
 
         // Record the received metric
-        if let Some(metrics) = self.metrics.as_mut() {
-            metrics.msg_recvd_unfiltered(&raw_message.topic, raw_message.raw_protobuf_len());
-        }
+        let message_len = if let Some(metrics) = self.metrics.as_mut() {
+            // We return this for later use to prevent double calculation of the size.
+            let len = raw_message.raw_protobuf_len();
+            metrics.msg_recvd_unfiltered(&raw_message.topic, len);
+            Some(len)
+        } else {
+            None
+        };
 
         // If we are not subscribed to the topic, drop it. Don't bother with the message ID. Also,
         // penalize the peer for sending it to us.
@@ -1801,7 +1806,9 @@ where
 
         // Record the received message with the metrics
         if let Some(metrics) = self.metrics.as_mut() {
-            metrics.msg_recvd(&message.topic);
+            let message_len = message_len.unwrap_or(0); // Should always exist if metrics are
+                                                        // enabled.
+            metrics.msg_recvd(&message.topic, message_len);
         }
 
         // Tells score that message arrived (but is maybe not fully validated yet).

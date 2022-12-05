@@ -155,6 +155,8 @@ pub struct Metrics {
     topic_msg_recv_bytes: Family<TopicHash, Counter>,
     /// Bytes received from last gossip message for each topic.
     topic_msg_last_recv_bytes: Family<TopicHash, Gauge>,
+    /// Bytes received from last gossip message for each topic unfiltered by the duplicate cache.
+    topic_msg_last_recv_bytes_unfiltered: Family<TopicHash, Gauge>,
 
     /* Metrics related to scoring */
     /// Histogram of the scores for each mesh topic.
@@ -301,6 +303,11 @@ impl Metrics {
             "Bytes received from last gossip message for each topic"
         );
 
+        let topic_msg_last_recv_bytes_unfiltered = register_family!(
+            "topic_msg_last_recv_bytes_unfiltered",
+            "Bytes received from last gossip message for each topic unfiltered by the duplicate cache"
+        );
+
         let hist_builder = HistBuilder {
             buckets: score_buckets,
         };
@@ -433,6 +440,7 @@ impl Metrics {
             topic_msg_recv_counts,
             topic_msg_recv_bytes,
             topic_msg_last_recv_bytes,
+            topic_msg_last_recv_bytes_unfiltered,
             score_per_mesh,
             scoring_penalties,
             peers_per_protocol,
@@ -579,9 +587,12 @@ impl Metrics {
     }
 
     /// Register that a message was received (and was not a duplicate).
-    pub fn msg_recvd(&mut self, topic: &TopicHash) {
+    pub fn msg_recvd(&mut self, topic: &TopicHash, bytes: usize) {
         if self.register_topic(topic).is_ok() {
             self.topic_msg_recv_counts.get_or_create(topic).inc();
+            self.topic_msg_last_recv_bytes
+                .get_or_create(topic)
+                .set(bytes as u64);
         }
     }
 
@@ -594,7 +605,7 @@ impl Metrics {
             self.topic_msg_recv_bytes
                 .get_or_create(topic)
                 .inc_by(bytes as u64);
-            self.topic_msg_last_recv_bytes
+            self.topic_msg_last_recv_bytes_unfiltered
                 .get_or_create(topic)
                 .set(bytes as u64);
         }
