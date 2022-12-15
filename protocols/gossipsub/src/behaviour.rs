@@ -848,7 +848,7 @@ where
             m.set_mesh_peers(topic_hash, mesh_peers)
         }
 
-        debug!("Completed JOIN for topic: {:?}", topic_hash);
+        trace!("Completed JOIN for topic: {:?}", topic_hash);
     }
 
     /// Creates a PRUNE gossipsub action.
@@ -953,7 +953,7 @@ where
                 );
             }
         }
-        debug!("Completed LEAVE for topic: {:?}", topic_hash);
+        trace!("Completed LEAVE for topic: {:?}", topic_hash);
     }
 
     /// Checks if the given peer is still connected and if not dials the peer again.
@@ -1186,7 +1186,7 @@ where
                 }
             }
         }
-        debug!("Completed IWANT handling for peer: {}", peer_id);
+        trace!("Completed IWANT handling for peer: {}", peer_id);
     }
 
     /// Handles GRAFT control messages. If subscribed to the topic, adds the peer to mesh, if not,
@@ -1351,7 +1351,7 @@ where
                 error!("Failed to send PRUNE: {:?}", e);
             }
         }
-        debug!("Completed GRAFT handling for peer: {}", peer_id);
+        trace!("Completed GRAFT handling for peer: {}", peer_id);
     }
 
     // We have received a CHOKE message from a peer for these topics. This function handles this
@@ -1548,7 +1548,7 @@ where
                 }
             }
         }
-        debug!("Completed PRUNE handling for peer: {}", peer_id);
+        trace!("Completed PRUNE handling for peer: {}", peer_id);
     }
 
     fn px_connect(&mut self, mut px: Vec<PeerInfo>) {
@@ -1799,7 +1799,7 @@ where
             self.mcache.observe_duplicate(&msg_id, propagation_source);
             return;
         }
-        debug!(
+        trace!(
             "Put message {:?} in duplicate_cache and resolve promises",
             msg_id
         );
@@ -1822,7 +1822,7 @@ where
         self.mcache.put(&msg_id, raw_message.clone());
 
         // Dispatch the message to the user if we are subscribed to any of the topics
-        debug!("Sending received message to user");
+        trace!("Sending received message to user");
         self.events.push_back(NetworkBehaviourAction::GenerateEvent(
             GossipsubEvent::Message {
                 propagation_source: *propagation_source,
@@ -1844,7 +1844,7 @@ where
             {
                 error!("Failed to forward message. Too large");
             }
-            debug!("Completed message handling for message: {:?}", msg_id);
+            trace!("Completed message handling for message: {:?}", msg_id);
         }
     }
 
@@ -2073,7 +2073,7 @@ where
 
     /// Heartbeat function which shifts the memcache and updates the mesh.
     fn heartbeat(&mut self) {
-        debug!("Starting heartbeat");
+        trace!("Starting heartbeat");
         let start = Instant::now();
 
         self.heartbeat_ticks += 1;
@@ -2177,7 +2177,9 @@ where
                     current_topic.push(topic_hash.clone());
                 }
                 // update the mesh
-                debug!("Updating mesh, new mesh: {:?}", peer_list);
+                if !peer_list.is_empty() {
+                    debug!("Updating mesh, new mesh: {:?}", peer_list);
+                }
                 if let Some(m) = self.metrics.as_mut() {
                     m.peers_included(topic_hash, Inclusion::Random, peer_list.len())
                 }
@@ -2284,7 +2286,9 @@ where
                         current_topic.push(topic_hash.clone());
                     }
                     // update the mesh
-                    debug!("Updating mesh, new mesh: {:?}", peer_list);
+                    if !peer_list.is_empty() {
+                        debug!("Updating mesh, new mesh: {:?}", peer_list);
+                    }
                     if let Some(m) = self.metrics.as_mut() {
                         m.peers_included(topic_hash, Inclusion::Outbound, peer_list.len())
                     }
@@ -2494,7 +2498,7 @@ where
         // shift the memcache
         self.mcache.shift();
 
-        debug!("Completed Heartbeat");
+        debug!("Heartbeat Completed");
         if let Some(metrics) = self.metrics.as_mut() {
             let duration = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
             metrics.observe_heartbeat_duration(duration);
@@ -2840,7 +2844,7 @@ where
                     m.msg_sent(&message.topic, msg_bytes);
                 }
             }
-            debug!("Completed forwarding message");
+            trace!("Completed forwarding message");
             Ok(true)
         } else {
             Ok(false)
@@ -4165,7 +4169,7 @@ fn get_random_peers_dynamic(
     // if we have less than needed, return them
     let n = n_map(gossip_peers.len());
     if gossip_peers.len() <= n {
-        debug!("RANDOM PEERS: Got {:?} peers", gossip_peers.len());
+        trace!("RANDOM PEERS: Got {:?} peers", gossip_peers.len());
         return gossip_peers.into_iter().collect();
     }
 
@@ -4173,7 +4177,7 @@ fn get_random_peers_dynamic(
     let mut rng = thread_rng();
     gossip_peers.partial_shuffle(&mut rng, n);
 
-    debug!("RANDOM PEERS: Got {:?} peers", n);
+    trace!("RANDOM PEERS: Got {:?} peers", n);
 
     gossip_peers.into_iter().take(n).collect()
 }
