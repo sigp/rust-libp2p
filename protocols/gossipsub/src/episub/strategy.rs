@@ -60,24 +60,27 @@ pub trait ChokingStrategy {
 /// choking/unchoking strategies.
 #[derive(Clone)]
 pub struct DefaultStrat {
-    /// The minimum number of peers in the mesh that cannot be choked.     
+    /// The minimum number of peers in the mesh that cannot be choked. Default value is 2.
     mesh_non_choke: usize,
     /// The maximum number of peers to return for each invocation of `choke_peers` per topic.
     /// Default value is 2.
     choke_churn: usize,
     /// Require a percentage of duplicates for each peer before making them eligible to be
-    /// choked.
+    /// choked. Default is Some(30).
     choke_duplicates_threshold: Option<u8>,
-    /// The specific choking strategy to use. See [`ChokeStrat`] for more details.
+    /// The specific choking strategy to use. See [`ChokeStrat`] for more details. Default is
+    /// PercentileLatency ( percentile: 70, message_threshold: 10)
     choke_strategy: ChokeStrategy,
     /// The maximum number of peers to return that are in the mesh and currently choked per topic. The default value is 2.
     unchoke_churn: usize,
     /// The specific UNCHOKE'ing strategy to use. See [`UnchokeStrat`] for more details.
+    /// Default value is IHaveMessagePercent(30).
     unchoke_strategy: UnchokeStrategy,
     /// The maximum number of peers to consider to add into the mesh from the mesh_addition if they
-    /// pass the mesh_addition_addition_strategy per topic.
+    /// pass the mesh_addition_addition_strategy per topic. Default value is 1.
     mesh_addition_churn: usize,
-    /// The strategy to use to consider mesh_addition peers for addition into the mesh.
+    /// The strategy to use to consider mesh_addition peers for addition into the mesh. Default
+    /// value is IHaveMessagePercent(30).
     mesh_addition_strategy: UnchokeStrategy,
 }
 
