@@ -2286,7 +2286,9 @@ where
                         current_topic.push(topic_hash.clone());
                     }
                     // update the mesh
-                    debug!("Updating mesh, new mesh: {:?}", peer_list);
+                    if !peer_list.is_empty() {
+                        debug!("Updating mesh, new mesh: {:?}", peer_list);
+                    }
                     if let Some(m) = self.metrics.as_mut() {
                         m.peers_included(topic_hash, Inclusion::Outbound, peer_list.len())
                     }
