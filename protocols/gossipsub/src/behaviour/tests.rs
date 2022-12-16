@@ -5655,7 +5655,7 @@ mod tests {
             }
         }
 
-        for (_topic, map) in gs.episub_metrics.duplicates_percentage().iter() {
+        for (_topic, map) in gs.episub_metrics.duplicates_percentage(0).iter() {
             for (peer_id, duplicate_percentage) in map.iter() {
                 println!(
                     "PeerId {}, duplicate_percentage: {}",

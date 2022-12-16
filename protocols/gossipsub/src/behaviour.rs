@@ -1138,7 +1138,11 @@ where
             return;
         }
 
-        debug!("Handling IWANT for peer: {:?}", peer_id);
+        debug!(
+            "Handling IWANT for peer: {:?}, messages requested: {}",
+            peer_id,
+            iwant_msgs.len()
+        );
         // build a hashmap of available messages
         let mut cached_messages = HashMap::new();
 
@@ -1192,7 +1196,7 @@ where
     /// Handles GRAFT control messages. If subscribed to the topic, adds the peer to mesh, if not,
     /// responds with PRUNE messages.
     fn handle_graft(&mut self, peer_id: &PeerId, topics: Vec<TopicHash>) {
-        debug!("Handling GRAFT message for peer: {}", peer_id);
+        trace!("Handling GRAFT message for peer: {}", peer_id);
 
         let mut to_prune_topics = HashSet::new();
 
@@ -1358,7 +1362,7 @@ where
     // message.
     fn handle_choke(&mut self, peer_id: &PeerId, topics: Vec<TopicHash>) {
         debug!(
-            "Received CHOKE message from peer: {} for topics: {:?}",
+            "EPISUB: Received CHOKE message from peer: {} for topics: {:?}",
             peer_id, topics
         );
 
@@ -1370,20 +1374,23 @@ where
             match self.mesh.get_mut(&topic) {
                 None => {
                     warn!(
-                        "CHOKE for non-mesh topic, peer: {}, topic: {}",
+                        "EPISUB: CHOKE for non-mesh topic, peer: {}, topic: {}",
                         peer_id, topic
                     );
                 }
                 Some(peers) => {
                     match peers.get_mut(peer_id) {
                         None => {
-                            error!("Received CHOKE message from non-mesh peer: {}", peer_id);
+                            error!(
+                                "EPISUB: Received CHOKE message from non-mesh peer: {}",
+                                peer_id
+                            );
                         }
                         Some(choke_state) => {
                             // Set the choke state of the peer for the topic
                             if choke_state.choked_by_peer {
                                 warn!(
-                                    "Received duplicate CHOKE message from peer: {} on topic: {}",
+                                    "EPISUB: Received duplicate CHOKE message from peer: {} on topic: {}",
                                     peer_id, topic
                                 );
                             } else {
@@ -1404,7 +1411,7 @@ where
 
     fn handle_unchoke(&mut self, peer_id: &PeerId, topics: Vec<TopicHash>) {
         debug!(
-            "Received UNCHOKE message from peer: {} for topics: {:?}",
+            "EPISUB: Received UNCHOKE message from peer: {} for topics: {:?}",
             peer_id, topics
         );
 
@@ -1416,20 +1423,23 @@ where
             match self.mesh.get_mut(&topic) {
                 None => {
                     warn!(
-                        "UNCHOKE for non-mesh topic, peer: {} topic: {}",
+                        "EPISUB: UNCHOKE for non-mesh topic, peer: {} topic: {}",
                         peer_id, topic
                     );
                 }
                 Some(peers) => {
                     match peers.get_mut(peer_id) {
                         None => {
-                            error!("Received UNCHOKE message from non-mesh peer: {}", peer_id);
+                            error!(
+                                "EPISUB: Received UNCHOKE message from non-mesh peer: {}",
+                                peer_id
+                            );
                         }
                         Some(choke_state) => {
                             // Set the choke state of the peer for the topic
                             if !choke_state.choked_by_peer {
                                 warn!(
-                                    "Received UNCHOKE message from unchoked peer: {} on topic: {}",
+                                    "EPISUB: Received UNCHOKE message from unchoked peer: {} on topic: {}",
                                     peer_id, topic
                                 );
                             } else {
@@ -1965,7 +1975,7 @@ where
                                 }
                                 // send graft to the peer
                                 debug!(
-                                    "Sending GRAFT to peer {} for topic {:?}",
+                                    "GRAFT: Sending GRAFT to peer {} for topic {:?}",
                                     propagation_source, topic_hash
                                 );
                                 if let Some((peer_score, ..)) = &mut self.peer_score {
