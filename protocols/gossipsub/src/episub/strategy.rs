@@ -27,6 +27,10 @@ use crate::TopicHash;
 use libp2p_core::PeerId;
 use std::collections::{HashMap, HashSet};
 
+/// The minimum number of messages (in an episub heartbeat) that need to be received from an individual peer before we
+/// calculate its duplicate percentage and decide if it's eligible for choking.
+const MIN_MESSAGES_TO_CALCULATE_DUPLICATE_PERCENTAGE: usize = 5;
+
 pub trait ChokingStrategy {
     /// This should return a list of peers that are eligible to choke. The router will decide if
     /// the peers are ultimately choked.
@@ -233,9 +237,12 @@ impl ChokingStrategy for DefaultStrat {
     fn choke_peers(&self, metrics: &mut EpisubMetrics) -> HashMap<TopicHash, HashSet<PeerId>> {
         // If we have a duplicates threshold, calculate the duplicates and see which peers
         // are actually eligible to be choked.
-        let duplicate_metrics = self
-            .choke_duplicates_threshold
-            .map(|threshold| (threshold, metrics.duplicates_percentage()));
+        let duplicate_metrics = self.choke_duplicates_threshold.map(|threshold| {
+            (
+                threshold,
+                metrics.duplicates_percentage(MIN_MESSAGES_TO_CALCULATE_DUPLICATE_PERCENTAGE),
+            )
+        });
 
         // Chokes a peer if it passes the duplicates threshold
         let passes_duplicate_threshold = |topic: &TopicHash, peer_id: &PeerId| {

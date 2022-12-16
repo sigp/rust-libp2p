@@ -223,7 +223,13 @@ impl EpisubMetrics {
     /// removes expired elements.
     /// For efficiency, this calculates the duplicate percentages for all known topics. Therefore
     /// this only need be called once.
-    pub fn duplicates_percentage(&mut self) -> HashMap<TopicHash, HashMap<PeerId, u8>> {
+    /// The `min_required_duplicates` is a number such that if a peer has sent less than this
+    /// total number of messages, then the duplicate percentage is set to 0. This is used to avoid
+    /// calculating percentages (and basing choking logic) on very low number of messages.
+    pub fn duplicates_percentage(
+        &mut self,
+        min_required_duplicates: usize,
+    ) -> HashMap<TopicHash, HashMap<PeerId, u8>> {
         self.prune_expired_elements();
 
         let mut result = HashMap::with_capacity(self.current_duplicates_per_topic_peer.len());
@@ -238,7 +244,17 @@ impl EpisubMetrics {
 
             let topic_peer_hashmap: HashMap<PeerId, u8> = peer_map
                 .iter()
-                .map(|(peer_id, duplicates)| (*peer_id, (*duplicates * 100 / message_total) as u8))
+                .map(|(peer_id, duplicates)| {
+                    let percentage_duplicate = if *message_total < min_required_duplicates {
+                        // If we haven't received enough messages to accurately calculate an
+                        // effective percentage, return 0.
+                        0u8
+                    } else {
+                        // Calculate the percentage
+                        (*duplicates * 100 / message_total) as u8
+                    };
+                    (*peer_id, percentage_duplicate)
+                })
                 .collect();
 
             result
@@ -1064,7 +1080,7 @@ mod test {
         }
 
         // Check duplicates percentages
-        for (_topic, map) in metrics.duplicates_percentage().iter() {
+        for (_topic, map) in metrics.duplicates_percentage(0).iter() {
             for (peer_id, percentage) in map.iter() {
                 let peer_idx = peers
                     .iter()
