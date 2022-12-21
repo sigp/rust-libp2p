@@ -3744,12 +3744,18 @@ where
                     // check the mesh for the topic
                     if let Some(mesh_peers) = self.mesh.get_mut(topic) {
                         // check if the peer is in the mesh and remove it
-                        if mesh_peers.remove(&peer_id).is_some() {
+                        if let Some(choke_state) = mesh_peers.remove(&peer_id) {
                             if let Some(m) = self.metrics.as_mut() {
                                 m.peers_removed(topic, Churn::Dc, 1);
                                 m.set_mesh_peers(topic, mesh_peers.len());
+                                if choke_state.peer_is_choked {
+                                    m.decrement_current_choked_peers(topic)
+                                }
+                                if choke_state.choked_by_peer {
+                                    m.decrement_choked_us(topic);
+                                }
                             }
-                        };
+                        }
                     }
 
                     // remove from topic_peers

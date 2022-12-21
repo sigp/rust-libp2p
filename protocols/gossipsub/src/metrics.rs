@@ -682,7 +682,7 @@ impl Metrics {
             .dec();
     }
 
-    /// Register a peer has been choked in the specified mesh.
+    /// Register a peer has choked us in the specified mesh.
     pub fn increment_choked_us(&mut self, topic: &TopicHash) {
         self.episub_current_peers_choked_us
             .get_or_create(topic)
