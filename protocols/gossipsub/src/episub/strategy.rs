@@ -27,10 +27,6 @@ use crate::TopicHash;
 use libp2p_core::PeerId;
 use std::collections::{HashMap, HashSet};
 
-/// The minimum number of messages (in an episub heartbeat) that need to be received from an individual peer before we
-/// calculate its duplicate percentage and decide if it's eligible for choking.
-const MIN_MESSAGES_TO_CALCULATE_DUPLICATE_PERCENTAGE: usize = 5;
-
 pub trait ChokingStrategy {
     /// This should return a list of peers that are eligible to choke. The router will decide if
     /// the peers are ultimately choked.
@@ -69,6 +65,9 @@ pub struct DefaultStrat {
     /// The maximum number of peers to return for each invocation of `choke_peers` per topic.
     /// Default value is 2.
     choke_churn: usize,
+    /// The minimum number of messages (in an episub heartbeat) that need to be received from an individual peer before we
+    /// calculate its duplicate percentage and decide if it's eligible for choking. Default value is 3.
+    min_choke_message_count: usize,
     /// Require a percentage of duplicates for each peer before making them eligible to be
     /// choked. Default is Some(30).
     choke_duplicates_threshold: Option<u8>,
@@ -126,6 +125,7 @@ impl Default for DefaultStrat {
         DefaultStrat {
             mesh_non_choke: 2, // Leave at least 2 peers in each mesh unchoked.
             choke_churn: 2,
+            min_choke_message_count: 3,
             choke_duplicates_threshold: Some(30), // If 30% of messages from a peer are duplicates,
             // make them eligible for choking
             choke_strategy: ChokeStrategy::PercentileLatency {
@@ -161,6 +161,13 @@ impl DefaultStratBuilder {
     /// The minimum number of peers in the mesh that cannot be choked.     
     pub fn mesh_non_choke(mut self, non_choke: usize) -> Self {
         self.default_strat.mesh_non_choke = non_choke;
+        self
+    }
+
+    /// The minimum number of messages (in an episub heartbeat) that need to be received from an individual peer before we
+    /// calculate its duplicate percentage and decide if it's eligible for choking. Default value is 3.
+    pub fn min_choke_message_count(mut self, count: usize) -> Self {
+        self.default_strat.min_choke_message_count = count;
         self
     }
 
@@ -240,7 +247,7 @@ impl ChokingStrategy for DefaultStrat {
         let duplicate_metrics = self.choke_duplicates_threshold.map(|threshold| {
             (
                 threshold,
-                metrics.duplicates_percentage(MIN_MESSAGES_TO_CALCULATE_DUPLICATE_PERCENTAGE),
+                metrics.duplicates_percentage(self.min_choke_message_count),
             )
         });
 

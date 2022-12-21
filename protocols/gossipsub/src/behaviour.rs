@@ -1338,10 +1338,7 @@ where
                 .map(|t| self.make_prune(t, peer_id, do_px, on_unsubscribe))
                 .collect();
             // Send the prune messages to the peer
-            debug!(
-                "GRAFT: Not subscribed to topics -  Sending PRUNE to peer: {}",
-                peer_id
-            );
+            debug!("GRAFT: Not Grafting - Sending PRUNE to peer: {}", peer_id);
 
             if let Err(e) = self.send_message(
                 *peer_id,
