@@ -1338,10 +1338,7 @@ where
                 .map(|t| self.make_prune(t, peer_id, do_px, on_unsubscribe))
                 .collect();
             // Send the prune messages to the peer
-            debug!(
-                "GRAFT: Not subscribed to topics -  Sending PRUNE to peer: {}",
-                peer_id
-            );
+            debug!("GRAFT: Not Grafting - Sending PRUNE to peer: {}", peer_id);
 
             if let Err(e) = self.send_message(
                 *peer_id,
@@ -2372,10 +2369,12 @@ where
                             current_topic.push(topic_hash.clone());
                         }
                         // update the mesh
-                        debug!(
-                            "Opportunistically graft in topic {} with peers {:?}",
-                            topic_hash, peer_list
-                        );
+                        if !peer_list.is_empty() {
+                            debug!(
+                                "Opportunistically graft in topic {} with peers {:?}",
+                                topic_hash, peer_list
+                            );
+                        }
                         if let Some(m) = self.metrics.as_mut() {
                             m.peers_included(topic_hash, Inclusion::Random, peer_list.len())
                         }
