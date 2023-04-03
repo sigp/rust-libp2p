@@ -19,7 +19,7 @@ libc = "0.2.140"
 libp2p-core = { version = "0.39.0", path = "../../core" }
 libp2p-identity = { version = "0.1.0", path = "../../identity" }
 log = "0.4.11"
-socket2 = { version = "0.4.0", features = ["all"] }
+socket2 = { version = "0.5.1", features = ["all"] }
 tokio = { version = "1.19.0", default-features = false, features = ["net"], optional = true }
 
 [features]
