@@ -41,7 +41,7 @@ libp2p-ping = { path = "../../protocols/ping" }
 libp2p-swarm = { path = "../../swarm", features = ["macros"] }
 libp2p-tcp = { path = "../../transports/tcp", features = ["async-io"] }
 libp2p-yamux = { path = "../../muxers/yamux" }
-log = "0.4.0"
+log = "0.4.18"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 
 # Passing arguments to the docsrs builder in order to properly document cfg's.
