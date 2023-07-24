@@ -7,7 +7,7 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1"
-either = "1.8.0"
+either = "1.9.0"
 env_logger = "0.10.0"
 futures = "0.3.28"
 libp2p = { path = "../libp2p", features = ["websocket", "yamux", "tcp", "tokio", "ping", "noise", "tls", "dns", "rsa", "macros"] }
