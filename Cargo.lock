@@ -2483,7 +2483,7 @@ dependencies = [
  "libp2p-noise",
  "log",
  "multiaddr",
- "multihash",
+ "multihash 0.19.0",
  "multistream-select",
  "once_cell",
  "parking_lot 0.12.1",
@@ -2654,7 +2654,7 @@ dependencies = [
  "libsecp256k1",
  "log",
  "multiaddr",
- "multihash",
+ "multihash 0.19.0",
  "p256 0.13.2",
  "quick-protobuf",
  "quickcheck-ext",
@@ -3143,7 +3143,7 @@ dependencies = [
  "libp2p-ping",
  "libp2p-swarm",
  "log",
- "multihash",
+ "multihash 0.19.0",
  "quick-protobuf",
  "quick-protobuf-codec",
  "quickcheck",
@@ -3402,7 +3402,7 @@ dependencies = [
  "data-encoding",
  "log",
  "multibase",
- "multihash",
+ "multihash 0.17.0",
  "percent-encoding",
  "serde",
  "static_assertions",
@@ -3427,13 +3427,22 @@ version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "835d6ff01d610179fbce3de1694d007e500bf33a7f29689838941d6bf783ae40"
 dependencies = [
- "arbitrary",
  "core2",
  "multihash-derive",
+ "unsigned-varint",
+]
+
+[[package]]
+name = "multihash"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fd59dcc2bbe70baabeac52cd22ae52c55eefe6c38ff11a9439f16a350a939f2"
+dependencies = [
+ "arbitrary",
+ "core2",
  "quickcheck",
  "rand 0.8.5",
  "serde",
- "serde-big-array",
  "unsigned-varint",
 ]
 
@@ -4646,15 +4655,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2113ab51b87a539ae008b5c6c02dc020ffa39afd2d83cffcb3f4eb2722cebec2"
 dependencies = [
  "serde_derive",
-]
-
-[[package]]
-name = "serde-big-array"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd31f59f6fe2b0c055371bb2f16d7f0aa7d8881676c04a55b1596d1a17cd10a4"
-dependencies = [
- "serde",
 ]
 
 [[package]]
