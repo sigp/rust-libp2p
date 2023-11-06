@@ -2484,7 +2484,7 @@ dependencies = [
  "serde",
  "smallvec",
  "thiserror",
- "unsigned-varint",
+ "unsigned-varint 0.8.0",
  "void",
 ]
 
@@ -2592,7 +2592,7 @@ dependencies = [
  "serde",
  "sha2 0.10.8",
  "smallvec",
- "unsigned-varint",
+ "unsigned-varint 0.8.0",
  "void",
 ]
 
@@ -2680,7 +2680,7 @@ dependencies = [
  "smallvec",
  "thiserror",
  "uint",
- "unsigned-varint",
+ "unsigned-varint 0.8.0",
  "void",
 ]
 
@@ -2766,7 +2766,7 @@ dependencies = [
  "quickcheck-ext",
  "rand 0.8.5",
  "smallvec",
- "unsigned-varint",
+ "unsigned-varint 0.8.0",
 ]
 
 [[package]]
@@ -2872,7 +2872,7 @@ dependencies = [
  "quick-protobuf",
  "quickcheck-ext",
  "rand 0.8.5",
- "unsigned-varint",
+ "unsigned-varint 0.8.0",
 ]
 
 [[package]]
@@ -3207,7 +3207,7 @@ dependencies = [
  "sha2 0.10.8",
  "thiserror",
  "tinytemplate",
- "unsigned-varint",
+ "unsigned-varint 0.8.0",
 ]
 
 [[package]]
@@ -3556,7 +3556,7 @@ dependencies = [
  "percent-encoding",
  "serde",
  "static_assertions",
- "unsigned-varint",
+ "unsigned-varint 0.7.2",
  "url",
 ]
 
@@ -3582,7 +3582,7 @@ dependencies = [
  "quickcheck",
  "rand 0.8.5",
  "serde",
- "unsigned-varint",
+ "unsigned-varint 0.7.2",
 ]
 
 [[package]]
@@ -3600,7 +3600,7 @@ dependencies = [
  "rand 0.8.5",
  "rw-stream-sink",
  "smallvec",
- "unsigned-varint",
+ "unsigned-varint 0.8.0",
 ]
 
 [[package]]
@@ -4204,7 +4204,7 @@ dependencies = [
  "bytes",
  "quick-protobuf",
  "thiserror",
- "unsigned-varint",
+ "unsigned-varint 0.8.0",
 ]
 
 [[package]]
@@ -5867,8 +5867,14 @@ name = "unsigned-varint"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6889a77d49f1f013504cec6bf97a2c730394adedaeb1deb5ea08949a50541105"
+
+[[package]]
+name = "unsigned-varint"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb066959b24b5196ae73cb057f45598450d2c5f71460e98c49b738086eff9c06"
 dependencies = [
- "asynchronous-codec 0.6.2",
+ "asynchronous-codec 0.7.0",
  "bytes",
 ]
 
