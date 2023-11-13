@@ -486,7 +486,7 @@ name = "autonat-example"
 version = "0.1.0"
 dependencies = [
  "clap",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "libp2p",
  "tokio",
@@ -679,7 +679,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "js-sys",
  "libp2p",
@@ -817,7 +817,7 @@ name = "chat-example"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "libp2p",
  "tokio",
@@ -1220,7 +1220,7 @@ name = "dcutr-example"
 version = "0.1.0"
 dependencies = [
  "clap",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-timer",
  "libp2p",
@@ -1311,7 +1311,7 @@ version = "0.1.0"
 dependencies = [
  "async-std",
  "async-trait",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "libp2p",
 ]
@@ -1420,9 +1420,9 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85cdab6a89accf66733ad5a1693a4dcced6aeff64602b634530dd73c1f3ee9f0"
+checksum = "95b3f3e67048839cb0d0781f445682a35113da7121f7c949db0e2be96a4fbece"
 dependencies = [
  "humantime",
  "is-terminal",
@@ -1524,7 +1524,7 @@ dependencies = [
  "async-std",
  "clap",
  "either",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "libp2p",
  "serde",
@@ -1936,7 +1936,7 @@ name = "hole-punching-tests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "libp2p",
  "log",
@@ -2061,7 +2061,7 @@ version = "0.1.0"
 dependencies = [
  "async-std",
  "async-trait",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "libp2p",
 ]
@@ -2194,7 +2194,7 @@ dependencies = [
  "axum",
  "console_error_panic_hook",
  "either",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-timer",
  "instant",
@@ -2252,7 +2252,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "libp2p",
  "tokio",
@@ -2264,7 +2264,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "either",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "libp2p",
  "tokio",
@@ -2363,7 +2363,7 @@ dependencies = [
  "bytes",
  "clap",
  "either",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-timer",
  "getrandom 0.2.10",
@@ -2426,7 +2426,7 @@ version = "0.12.0"
 dependencies = [
  "async-std",
  "async-trait",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-timer",
  "instant",
@@ -2496,7 +2496,7 @@ dependencies = [
  "asynchronous-codec 0.6.2",
  "clap",
  "either",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-timer",
  "instant",
@@ -2528,7 +2528,7 @@ dependencies = [
  "async-std",
  "async-std-resolver",
  "async-trait",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "libp2p-core",
  "libp2p-identity",
@@ -2568,7 +2568,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "either",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "fnv",
  "futures",
  "futures-ticker",
@@ -2603,7 +2603,7 @@ dependencies = [
  "async-std",
  "asynchronous-codec 0.6.2",
  "either",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-bounded",
  "futures-timer",
@@ -2658,7 +2658,7 @@ dependencies = [
  "asynchronous-codec 0.6.2",
  "bytes",
  "either",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "fnv",
  "futures",
  "futures-timer",
@@ -2691,7 +2691,7 @@ dependencies = [
  "async-io",
  "async-std",
  "data-encoding",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "if-watch",
  "libp2p-core",
@@ -2753,7 +2753,7 @@ dependencies = [
  "asynchronous-codec 0.6.2",
  "bytes",
  "criterion",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "libp2p-core",
  "libp2p-identity",
@@ -2787,7 +2787,7 @@ dependencies = [
  "asynchronous-codec 0.7.0",
  "bytes",
  "curve25519-dalek",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures_ringbuf",
  "libp2p-core",
@@ -2813,7 +2813,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-bounded",
  "futures-timer",
@@ -2843,7 +2843,7 @@ version = "0.44.0"
 dependencies = [
  "async-std",
  "either",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-timer",
  "instant",
@@ -2863,7 +2863,7 @@ version = "0.41.0"
 dependencies = [
  "asynchronous-codec 0.6.2",
  "bytes",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures_ringbuf",
  "libp2p-core",
@@ -2902,7 +2902,7 @@ version = "0.10.0"
 dependencies = [
  "async-std",
  "bytes",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-timer",
  "if-watch",
@@ -2932,7 +2932,7 @@ dependencies = [
  "asynchronous-codec 0.6.2",
  "bytes",
  "either",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-bounded",
  "futures-timer",
@@ -2960,7 +2960,7 @@ dependencies = [
  "async-trait",
  "asynchronous-codec 0.6.2",
  "bimap",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-timer",
  "instant",
@@ -2991,7 +2991,7 @@ dependencies = [
  "async-std",
  "async-trait",
  "cbor4ii",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-bounded",
  "futures-timer",
@@ -3018,7 +3018,7 @@ version = "0.12.3"
 dependencies = [
  "base64 0.21.4",
  "clap",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-timer",
  "hyper",
@@ -3038,7 +3038,7 @@ version = "0.44.0"
 dependencies = [
  "async-std",
  "either",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "fnv",
  "futures",
  "futures-timer",
@@ -3098,7 +3098,7 @@ version = "0.41.0"
 dependencies = [
  "async-io",
  "async-std",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-timer",
  "if-watch",
@@ -3164,7 +3164,7 @@ version = "0.6.1-alpha"
 dependencies = [
  "async-trait",
  "bytes",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures-timer",
  "hex",
@@ -3490,7 +3490,7 @@ dependencies = [
 name = "metrics-example"
 version = "0.1.0"
 dependencies = [
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "hyper",
  "libp2p",
@@ -3591,7 +3591,7 @@ version = "0.13.0"
 dependencies = [
  "async-std",
  "bytes",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "futures_ringbuf",
  "log",
@@ -4003,7 +4003,7 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 name = "ping-example"
 version = "0.1.0"
 dependencies = [
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "libp2p",
  "tokio",
@@ -4490,7 +4490,7 @@ dependencies = [
  "async-std",
  "async-trait",
  "clap",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "libp2p",
 ]
@@ -4501,7 +4501,7 @@ version = "0.1.0"
 dependencies = [
  "async-std",
  "async-trait",
- "env_logger 0.10.0",
+ "env_logger 0.10.1",
  "futures",
  "libp2p",
  "log",

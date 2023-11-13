@@ -21,7 +21,7 @@ quick-protobuf = "0.8"
 unsigned-varint = { version = "0.7", features = ["asynchronous_codec"] }
 
 [dev-dependencies]
-env_logger = "0.10.0"
+env_logger = "0.10.1"
 libp2p-identity = { workspace = true, features = ["ed25519", "rand"] }
 quickcheck = { workspace = true }
 rand = "0.8"
