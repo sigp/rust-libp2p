@@ -244,9 +244,6 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     /// Events that need to be yielded to the outside when polling.
     events: VecDeque<ToSwarm<Event, HandlerIn>>,
 
-    /// Pools non-urgent control messages between heartbeats.
-    control_pool: HashMap<PeerId, Vec<ControlAction>>,
-
     /// Information used for publishing messages.
     publish_config: PublishConfig,
 
@@ -439,7 +436,6 @@ where
         Ok(Behaviour {
             metrics: metrics.map(|(registry, cfg)| Metrics::new(registry, cfg)),
             events: VecDeque::new(),
-            control_pool: HashMap::new(),
             publish_config: privacy.into(),
             duplicate_cache: DuplicateCache::new(config.duplicate_cache_time()),
             topic_peers: HashMap::new(),
@@ -994,12 +990,11 @@ where
             if let Some((peer_score, ..)) = &mut self.peer_score {
                 peer_score.graft(&peer_id, topic_hash.clone());
             }
-            Self::control_pool_add(
-                &mut self.control_pool,
+            self.send_message(
                 peer_id,
-                ControlAction::Graft {
+                RpcOut::Control(ControlAction::Graft {
                     topic_hash: topic_hash.clone(),
-                },
+                }),
             );
 
             // If the peer did not previously exist in any mesh, inform the handler
@@ -1098,7 +1093,7 @@ where
                 let on_unsubscribe = true;
                 let control =
                     self.make_prune(topic_hash, &peer, self.config.do_px(), on_unsubscribe);
-                Self::control_pool_add(&mut self.control_pool, peer, control);
+                self.send_message(peer, RpcOut::Control(control));
 
                 // If the peer did not previously exist in any mesh, inform the handler
                 peer_removed_from_mesh(
@@ -1269,12 +1264,11 @@ where
                 iwant_ids_vec
             );
 
-            Self::control_pool_add(
-                &mut self.control_pool,
+            self.send_message(
                 *peer_id,
-                ControlAction::IWant {
+                RpcOut::Control(ControlAction::IWant {
                     message_ids: iwant_ids_vec,
-                },
+                }),
             );
         }
         tracing::trace!(peer=%peer_id, "Completed IHAVE handling for peer");
@@ -2387,9 +2381,6 @@ where
             self.send_graft_prune(to_graft, to_prune, no_px);
         }
 
-        // piggyback pooled control messages
-        self.flush_control_pool();
-
         // shift the memcache
         self.mcache.shift();
 
@@ -2404,7 +2395,7 @@ where
     /// and fanout peers
     fn emit_gossip(&mut self) {
         let mut rng = thread_rng();
-        for (topic_hash, peers) in self.mesh.iter().chain(self.fanout.iter()) {
+        for (topic_hash, peers) in self.mesh.clone().iter().chain(self.fanout.clone().iter()) {
             let mut message_ids = self.mcache.get_gossip_message_ids(topic_hash);
             if message_ids.is_empty() {
                 continue;
@@ -2456,13 +2447,12 @@ where
                 }
 
                 // send an IHAVE message
-                Self::control_pool_add(
-                    &mut self.control_pool,
+                self.send_message(
                     peer,
-                    ControlAction::IHave {
+                    RpcOut::Control(ControlAction::IHave {
                         topic_hash: topic_hash.clone(),
                         message_ids: peer_message_ids,
-                    },
+                    }),
                 );
             }
         }
@@ -2705,27 +2695,6 @@ where
                 })
             }
         }
-    }
-
-    // adds a control action to control_pool
-    fn control_pool_add(
-        control_pool: &mut HashMap<PeerId, Vec<ControlAction>>,
-        peer: PeerId,
-        control: ControlAction,
-    ) {
-        control_pool.entry(peer).or_default().push(control);
-    }
-
-    /// Takes each control action mapping and turns it into a message
-    fn flush_control_pool(&mut self) {
-        for (peer, controls) in self.control_pool.drain().collect::<Vec<_>>() {
-            for msg in controls {
-                self.send_message(peer, RpcOut::Control(msg));
-            }
-        }
-
-        // This clears all pending IWANT messages
-        self.pending_iwant_msgs.clear();
     }
 
     /// Send a [`RpcOut`] message to a peer. This will wrap the message in an arc if it
@@ -3349,7 +3318,6 @@ impl<C: DataTransform, F: TopicSubscriptionFilter> fmt::Debug for Behaviour<C, F
         f.debug_struct("Behaviour")
             .field("config", &self.config)
             .field("events", &self.events.len())
-            .field("control_pool", &self.control_pool)
             .field("publish_config", &self.publish_config)
             .field("topic_peers", &self.topic_peers)
             .field("peer_topics", &self.peer_topics)

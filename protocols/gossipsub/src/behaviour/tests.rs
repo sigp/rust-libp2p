@@ -531,24 +531,21 @@ fn test_join() {
         "Should have added 6 nodes to the mesh"
     );
 
-    fn collect_grafts(
-        mut collected_grafts: Vec<ControlAction>,
-        (_, controls): (&PeerId, &Vec<ControlAction>),
-    ) -> Vec<ControlAction> {
-        for c in controls.iter() {
-            if let ControlAction::Graft { topic_hash: _ } = c {
-                collected_grafts.push(c.clone())
+    fn is_graft(message: &&ToSwarm<Event, HandlerIn>) -> bool {
+        matches!(
+            message,
+            ToSwarm::NotifyHandler {
+                event: HandlerIn::Message(RpcOut::Control(ControlAction::Graft { topic_hash: _ })),
+                ..
             }
-        }
-        collected_grafts
+        )
     }
 
     // there should be mesh_n GRAFT messages.
-    let graft_messages = gs.control_pool.iter().fold(vec![], collect_grafts);
+    let graft_messages = gs.events.iter().filter(is_graft).count();
 
     assert_eq!(
-        graft_messages.len(),
-        6,
+        graft_messages, 6,
         "There should be 6 grafts messages sent to peers"
     );
 
@@ -594,10 +591,10 @@ fn test_join() {
     }
 
     // there should now be 12 graft messages to be sent
-    let graft_messages = gs.control_pool.iter().fold(vec![], collect_grafts);
+    let graft_messages = gs.events.iter().filter(is_graft).count();
 
-    assert!(
-        graft_messages.len() == 12,
+    assert_eq!(
+        graft_messages, 12,
         "There should be 12 grafts messages sent to peers"
     );
 }
@@ -1139,15 +1136,18 @@ fn test_handle_ihave_subscribed_and_msg_not_cached() {
     );
 
     // check that we sent an IWANT request for `unknown id`
-    let iwant_exists = match gs.control_pool.get(&peers[7]) {
-        Some(controls) => controls.iter().any(|c| match c {
-            ControlAction::IWant { message_ids } => message_ids
+    let iwant_exists = gs.events.iter().any(|message| {
+        matches!(
+            message,
+            ToSwarm::NotifyHandler {
+                peer_id,
+                event: HandlerIn::Message(RpcOut::Control(ControlAction::IWant { message_ids })),
+                ..
+            } if peer_id == &peers[7] && message_ids
                 .iter()
-                .any(|m| *m == MessageId::new(b"unknown id")),
-            _ => false,
-        }),
-        _ => false,
-    };
+                .any(|m| *m == MessageId::new(b"unknown id"))
+        )
+    });
 
     assert!(
         iwant_exists,
@@ -1311,25 +1311,20 @@ fn count_control_msgs<D: DataTransform, F: TopicSubscriptionFilter>(
     gs: &Behaviour<D, F>,
     mut filter: impl FnMut(&PeerId, &ControlAction) -> bool,
 ) -> usize {
-    gs.control_pool
+    gs.events
         .iter()
-        .map(|(peer_id, actions)| actions.iter().filter(|m| filter(peer_id, m)).count())
-        .sum::<usize>()
-        + gs.events
-            .iter()
-            .filter(|e| match e {
-                ToSwarm::NotifyHandler {
-                    peer_id,
-                    event: HandlerIn::Message(RpcOut::Control(action)),
-                    ..
-                } => filter(peer_id, action),
-                _ => false,
-            })
-            .count()
+        .filter(|e| match e {
+            ToSwarm::NotifyHandler {
+                peer_id,
+                event: HandlerIn::Message(RpcOut::Control(action)),
+                ..
+            } => filter(peer_id, action),
+            _ => false,
+        })
+        .count()
 }
 
 fn flush_events<D: DataTransform, F: TopicSubscriptionFilter>(gs: &mut Behaviour<D, F>) {
-    gs.control_pool.clear();
     gs.events.clear();
 }
 
@@ -1673,16 +1668,22 @@ fn no_gossip_gets_sent_to_explicit_peers() {
     }
 
     //assert that no gossip gets sent to explicit peer
-    assert_eq!(
-        gs.control_pool
-            .get(&peers[0])
-            .unwrap_or(&Vec::new())
-            .iter()
-            .filter(|m| matches!(m, ControlAction::IHave { .. }))
-            .count(),
-        0,
-        "Gossip got emitted to explicit peer"
-    );
+    let gossip_count = gs
+        .events
+        .iter()
+        .filter(|message| {
+            matches!(
+                    message,
+                    ToSwarm::NotifyHandler {
+                        peer_id,
+                        event: HandlerIn::Message(RpcOut::Control(ControlAction::IHave { .. })),
+                        ..
+                    } if peer_id == &peers[0]
+            )
+        })
+        .count();
+
+    assert_eq!(gossip_count, 0, "Gossip got emitted to explicit peer");
 }
 
 // Tests the mesh maintenance addition
