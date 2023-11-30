@@ -24,6 +24,7 @@ use crate::Config;
 use crate::TopicHash;
 use async_channel::{Receiver, Sender};
 use futures::Stream;
+use instant::Instant;
 use libp2p_identity::PeerId;
 use libp2p_swarm::ConnectionId;
 use prometheus_client::encoding::EncodeLabelValue;
@@ -32,7 +33,7 @@ use std::fmt::Debug;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{fmt, pin::Pin};
 
 use crate::rpc_proto::proto;
