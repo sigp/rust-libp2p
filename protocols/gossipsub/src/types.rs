@@ -243,7 +243,7 @@ pub enum ControlAction {
 }
 
 /// A Gossipsub RPC message sent.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug)]
 pub enum RpcOut {
     /// Publish a Gossipsub message on network. The [`Instant`] tags the time we attempted to
     /// send it.
