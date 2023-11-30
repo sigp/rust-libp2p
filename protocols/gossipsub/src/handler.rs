@@ -55,9 +55,7 @@ pub enum HandlerEvent {
     /// which protocol. This message only occurs once per connection.
     PeerKind(PeerKind),
     /// A message to be published was dropped because it could not be sent in time.
-    PublishMessageDropped,
-    /// A forward message was dropped because it could not be sent in time.
-    ForwardMessageDropped,
+    MessageDropped(RpcOut),
 }
 
 /// A message sent from the behaviour to the handler.
@@ -245,7 +243,7 @@ impl EnabledHandler {
 
         // We may need to inform the behviour if we have a dropped a message. This gets set if that
         // is the case.
-        let mut inform_behaviour_of_dropped_message = None;
+        let mut dropped_message = None;
 
         // process outbound stream
         loop {
@@ -260,24 +258,14 @@ impl EnabledHandler {
                             RpcOut::Publish {
                                 message: _,
                                 ref mut timeout,
-                            } => {
-                                if Pin::new(timeout).poll(cx).is_ready() {
-                                    // Inform the behaviour and end the poll.
-                                    inform_behaviour_of_dropped_message =
-                                        Some(HandlerEvent::PublishMessageDropped);
-                                    self.outbound_substream =
-                                        Some(OutboundSubstreamState::WaitingOutput(substream));
-                                    break;
-                                }
                             }
-                            RpcOut::Forward {
+                            | RpcOut::Forward {
                                 message: _,
                                 ref mut timeout,
                             } => {
                                 if Pin::new(timeout).poll(cx).is_ready() {
                                     // Inform the behaviour and end the poll.
-                                    inform_behaviour_of_dropped_message =
-                                        Some(HandlerEvent::ForwardMessageDropped);
+                                    dropped_message = Some(HandlerEvent::MessageDropped(message));
                                     self.outbound_substream =
                                         Some(OutboundSubstreamState::WaitingOutput(substream));
                                     break;
@@ -356,7 +344,7 @@ impl EnabledHandler {
 
         // If there was a timeout in sending a message, inform the behaviour before restarting the
         // poll
-        if let Some(handler_event) = inform_behaviour_of_dropped_message {
+        if let Some(handler_event) = dropped_message {
             return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(handler_event));
         }
 

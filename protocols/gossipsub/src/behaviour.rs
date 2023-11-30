@@ -3127,7 +3127,7 @@ where
                     }
                 }
             }
-            HandlerEvent::PublishMessageDropped | HandlerEvent::ForwardMessageDropped => {
+            HandlerEvent::MessageDropped(_rpc) => {
                 // TODO:
                 // * Build scoring logic to handle peers that are dropping messages
                 // * Add some metrics to help visualize kinds of messages being dropped
