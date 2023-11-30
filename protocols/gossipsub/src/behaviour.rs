@@ -3054,7 +3054,7 @@ where
         let sender = self
             .handler_send_queues
             .entry(peer_id)
-            .or_insert_with(|| RpcSender::new(peer_id, self.config.connection_handler_queue_len()));
+            .or_insert_with(|| RpcSender::new(peer_id, (&self.config).into()));
         Ok(Handler::new(
             self.config.protocol_config(),
             sender.new_receiver(),
@@ -3071,7 +3071,7 @@ where
         let sender = self
             .handler_send_queues
             .entry(peer_id)
-            .or_insert_with(|| RpcSender::new(peer_id, self.config.connection_handler_queue_len()));
+            .or_insert_with(|| RpcSender::new(peer_id, (&self.config).into()));
         Ok(Handler::new(
             self.config.protocol_config(),
             sender.new_receiver(),
@@ -3114,6 +3114,11 @@ where
                         conn.kind = kind;
                     }
                 }
+            }
+            HandlerEvent::PublishMessageDropped | HandlerEvent::ForwardMessageDropped => {
+                // TODO:
+                // * Build scoring logic to handle peers that are dropping messages
+                // * Add some metrics to help visualize kinds of messages being dropped
             }
             HandlerEvent::Message {
                 rpc,
@@ -3470,8 +3475,8 @@ mod local_test {
             match u8::arbitrary(g) % 5 {
                 0 => RpcOut::Subscribe(IdentTopic::new("TestTopic").hash()),
                 1 => RpcOut::Unsubscribe(IdentTopic::new("TestTopic").hash()),
-                2 => RpcOut::Publish(test_message()),
-                3 => RpcOut::Forward(test_message()),
+                2 => RpcOut::Publish(test_message(), Instant::now()),
+                3 => RpcOut::Forward(test_message(), Instant::now()),
                 4 => RpcOut::Control(test_control()),
                 _ => panic!("outside range"),
             }
