@@ -732,7 +732,11 @@ where
                 .expect("Peerid should exist");
 
             if sender
-                .publish(raw_message.clone(), self.metrics.as_mut())
+                .publish(
+                    raw_message.clone(),
+                    self.config.publish_queue_duration(),
+                    self.metrics.as_mut(),
+                )
                 .is_err()
             {
                 errors += 1;
@@ -1342,7 +1346,11 @@ where
                         .get_mut(peer_id)
                         .expect("Peerid should exist");
 
-                    sender.forward(msg, self.metrics.as_mut());
+                    sender.forward(
+                        msg,
+                        self.config.forward_queue_duration(),
+                        self.metrics.as_mut(),
+                    );
                 }
             }
         }
@@ -2660,7 +2668,11 @@ where
                     .handler_send_queues
                     .get_mut(peer)
                     .expect("Peerid should exist");
-                sender.forward(message.clone(), self.metrics.as_mut());
+                sender.forward(
+                    message.clone(),
+                    self.config.forward_queue_duration(),
+                    self.metrics.as_mut(),
+                );
             }
             tracing::debug!("Completed forwarding message");
             Ok(true)
@@ -3054,7 +3066,7 @@ where
         let sender = self
             .handler_send_queues
             .entry(peer_id)
-            .or_insert_with(|| RpcSender::new(peer_id, (&self.config).into()));
+            .or_insert_with(|| RpcSender::new(peer_id, self.config.connection_handler_queue_len()));
         Ok(Handler::new(
             self.config.protocol_config(),
             sender.new_receiver(),
@@ -3071,7 +3083,7 @@ where
         let sender = self
             .handler_send_queues
             .entry(peer_id)
-            .or_insert_with(|| RpcSender::new(peer_id, (&self.config).into()));
+            .or_insert_with(|| RpcSender::new(peer_id, self.config.connection_handler_queue_len()));
         Ok(Handler::new(
             self.config.protocol_config(),
             sender.new_receiver(),

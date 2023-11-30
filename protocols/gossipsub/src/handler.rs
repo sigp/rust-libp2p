@@ -255,13 +255,13 @@ impl EnabledHandler {
             ) {
                 // outbound idle state
                 Some(OutboundSubstreamState::WaitingOutput(substream)) => {
-                    if let Poll::Ready(Some(message)) = self.send_queue.poll_next_unpin(cx) {
+                    if let Poll::Ready(Some(mut message)) = self.send_queue.poll_next_unpin(cx) {
                         match message {
-                            RpcOut::Publish(_, time_created) => {
-                                if Instant::now()
-                                    > time_created
-                                        + self.send_queue.queue_config.publish_message_max_duration
-                                {
+                            RpcOut::Publish {
+                                message: _,
+                                ref mut timeout,
+                            } => {
+                                if Pin::new(timeout).poll(cx).is_ready() {
                                     // Inform the behaviour and end the poll.
                                     inform_behaviour_of_dropped_message =
                                         Some(HandlerEvent::PublishMessageDropped);
@@ -270,11 +270,11 @@ impl EnabledHandler {
                                     break;
                                 }
                             }
-                            RpcOut::Forward(_, time_created) => {
-                                if Instant::now()
-                                    > time_created
-                                        + self.send_queue.queue_config.forward_message_max_duration
-                                {
+                            RpcOut::Forward {
+                                message: _,
+                                ref mut timeout,
+                            } => {
+                                if Pin::new(timeout).poll(cx).is_ready() {
                                     // Inform the behaviour and end the poll.
                                     inform_behaviour_of_dropped_message =
                                         Some(HandlerEvent::ForwardMessageDropped);
