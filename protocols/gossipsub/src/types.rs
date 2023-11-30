@@ -592,7 +592,7 @@ impl RpcSender {
         }
         self.priority
             .try_send(RpcOut::Publish(message.clone()))
-            .expect("Channel is unbounded and Should always be open");
+            .expect("Channel is unbounded and should always be open");
         self.len.fetch_add(1, Ordering::Relaxed);
 
         if let Some(m) = metrics {
