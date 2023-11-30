@@ -45,7 +45,6 @@ use libp2p_swarm::{
     THandlerOutEvent, ToSwarm,
 };
 
-use crate::config::{Config, ValidationMode};
 use crate::gossip_promises::GossipPromises;
 use crate::handler::{Handler, HandlerEvent, HandlerIn};
 use crate::mcache::MessageCache;
@@ -62,6 +61,11 @@ use crate::types::{
 };
 use crate::types::{PeerConnections, PeerKind};
 use crate::{backoff::BackoffStorage, types::RpcSender};
+use crate::{
+    config::{Config, ValidationMode},
+    rpc_proto,
+    types::RpcOut,
+};
 use crate::{rpc_proto::proto, TopicScoreParams};
 use crate::{PublishError, SubscriptionError, ValidationError};
 use instant::SystemTime;
@@ -3127,10 +3131,20 @@ where
                     }
                 }
             }
-            HandlerEvent::MessageDropped(_rpc) => {
+            HandlerEvent::MessageDropped(rpc) => {
                 // TODO:
                 // * Build scoring logic to handle peers that are dropping messages
-                // * Add some metrics to help visualize kinds of messages being dropped
+                if let Some(metrics) = self.metrics.as_mut() {
+                    match rpc {
+                        RpcOut::Publish { message, .. } => {
+                            metrics.publish_msg_dropped(&message.topic);
+                        }
+                        RpcOut::Forward { message, .. } => {
+                            metrics.forward_msg_dropped(&message.topic);
+                        }
+                        _ => {}
+                    }
+                }
             }
             HandlerEvent::Message {
                 rpc,
