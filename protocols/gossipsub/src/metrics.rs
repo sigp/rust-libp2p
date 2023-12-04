@@ -31,7 +31,7 @@ use prometheus_client::metrics::histogram::{linear_buckets, Histogram};
 use prometheus_client::registry::Registry;
 
 use crate::topic::TopicHash;
-use crate::types::{MessageAcceptance, PeerKind, RpcOut};
+use crate::types::{MessageAcceptance, PeerKind};
 
 // Default value that limits for how many topics do we store metrics.
 const DEFAULT_MAX_TOPICS: usize = 300;

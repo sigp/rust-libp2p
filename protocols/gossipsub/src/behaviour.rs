@@ -63,7 +63,6 @@ use crate::types::{PeerConnections, PeerKind};
 use crate::{backoff::BackoffStorage, types::RpcSender};
 use crate::{
     config::{Config, ValidationMode},
-    rpc_proto,
     types::RpcOut,
 };
 use crate::{rpc_proto::proto, TopicScoreParams};
