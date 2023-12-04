@@ -244,10 +244,10 @@ pub enum ControlAction {
 /// A Gossipsub RPC message sent.
 #[derive(Debug)]
 pub enum RpcOut {
-    /// Publish a Gossipsub message on network. The [`Instant`] tags the time we attempted to
+    /// Publish a Gossipsub message on network. The [`Delay`] tags the time we attempted to
     /// send it.
     Publish { message: RawMessage, timeout: Delay },
-    /// Forward a Gossipsub message to the network. The [`Instant`] tags the time we attempted to
+    /// Forward a Gossipsub message to the network. The [`Delay`] tags the time we attempted to
     /// send it.
     Forward { message: RawMessage, timeout: Delay },
     /// Subscribe a topic.
