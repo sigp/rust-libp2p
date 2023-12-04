@@ -315,33 +315,39 @@ fn proto_to_message(rpc: &proto::RPC) -> Rpc {
         let ihave_msgs: Vec<ControlAction> = rpc_control
             .ihave
             .into_iter()
-            .map(|ihave| ControlAction::IHave {
-                topic_hash: TopicHash::from_raw(ihave.topic_id.unwrap_or_default()),
-                message_ids: ihave
-                    .message_ids
-                    .into_iter()
-                    .map(MessageId::from)
-                    .collect::<Vec<_>>(),
+            .map(|ihave| {
+                ControlAction::IHave(IHave {
+                    topic_hash: TopicHash::from_raw(ihave.topic_id.unwrap_or_default()),
+                    message_ids: ihave
+                        .message_ids
+                        .into_iter()
+                        .map(MessageId::from)
+                        .collect::<Vec<_>>(),
+                })
             })
             .collect();
 
         let iwant_msgs: Vec<ControlAction> = rpc_control
             .iwant
             .into_iter()
-            .map(|iwant| ControlAction::IWant {
-                message_ids: iwant
-                    .message_ids
-                    .into_iter()
-                    .map(MessageId::from)
-                    .collect::<Vec<_>>(),
+            .map(|iwant| {
+                ControlAction::IWant(IWant {
+                    message_ids: iwant
+                        .message_ids
+                        .into_iter()
+                        .map(MessageId::from)
+                        .collect::<Vec<_>>(),
+                })
             })
             .collect();
 
         let graft_msgs: Vec<ControlAction> = rpc_control
             .graft
             .into_iter()
-            .map(|graft| ControlAction::Graft {
-                topic_hash: TopicHash::from_raw(graft.topic_id.unwrap_or_default()),
+            .map(|graft| {
+                ControlAction::Graft(Graft {
+                    topic_hash: TopicHash::from_raw(graft.topic_id.unwrap_or_default()),
+                })
             })
             .collect();
 
@@ -364,11 +370,11 @@ fn proto_to_message(rpc: &proto::RPC) -> Rpc {
                 .collect::<Vec<PeerInfo>>();
 
             let topic_hash = TopicHash::from_raw(prune.topic_id.unwrap_or_default());
-            prune_msgs.push(ControlAction::Prune {
+            prune_msgs.push(ControlAction::Prune(Prune {
                 topic_hash,
                 peers,
                 backoff: prune.backoff,
-            });
+            }));
         }
 
         control_msgs.extend(ihave_msgs);
@@ -548,7 +554,7 @@ fn test_join() {
         (_, controls): (&PeerId, &Vec<ControlAction>),
     ) -> Vec<ControlAction> {
         for c in controls.iter() {
-            if let ControlAction::Graft { topic_hash: _ } = c {
+            if let ControlAction::Graft(Graft { topic_hash: _ }) = c {
                 collected_grafts.push(c.clone())
             }
         }
@@ -1153,7 +1159,7 @@ fn test_handle_ihave_subscribed_and_msg_not_cached() {
     // check that we sent an IWANT request for `unknown id`
     let iwant_exists = match gs.control_pool.get(&peers[7]) {
         Some(controls) => controls.iter().any(|c| match c {
-            ControlAction::IWant { message_ids } => message_ids
+            ControlAction::IWant(IWant { message_ids }) => message_ids
                 .iter()
                 .any(|m| *m == MessageId::new(b"unknown id")),
             _ => false,
@@ -1467,7 +1473,7 @@ fn test_handle_graft_explicit_peer() {
     assert!(
         count_control_msgs(&gs, &queues, |peer_id, m| peer_id == peer
             && match m {
-                ControlAction::Prune { topic_hash, .. } =>
+                ControlAction::Prune(Prune { topic_hash, .. }) =>
                     topic_hash == &topic_hashes[0] || topic_hash == &topic_hashes[1],
                 _ => false,
             })
@@ -1848,11 +1854,11 @@ fn test_send_px_and_backoff_in_prune() {
     assert_eq!(
         count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[0]
             && match m {
-                ControlAction::Prune {
+                ControlAction::Prune(Prune {
                     topic_hash,
                     peers,
                     backoff,
-                } =>
+                }) =>
                     topic_hash == &topics[0] &&
                     peers.len() == config.prune_peers() &&
                     //all peers are different
@@ -1896,11 +1902,11 @@ fn test_prune_backoffed_peer_on_graft() {
     assert_eq!(
         count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[0]
             && match m {
-                ControlAction::Prune {
+                ControlAction::Prune(Prune {
                     topic_hash,
                     peers,
                     backoff,
-                } =>
+                }) =>
                     topic_hash == &topics[0] &&
                     //no px in this case
                     peers.is_empty() &&
@@ -2046,7 +2052,7 @@ fn test_unsubscribe_backoff() {
 
     assert_eq!(
         count_control_msgs(&gs, &queues, |_, m| match m {
-            ControlAction::Prune { backoff, .. } => backoff == &Some(1),
+            ControlAction::Prune(Prune { backoff, .. }) => backoff == &Some(1),
             _ => false,
         }),
         1,
@@ -2181,10 +2187,10 @@ fn test_gossip_to_at_least_gossip_lazy_peers() {
     //check that exactly config.gossip_lazy() many gossip messages were sent.
     assert_eq!(
         count_control_msgs(&gs, &queues, |_, action| match action {
-            ControlAction::IHave {
+            ControlAction::IHave(IHave {
                 topic_hash,
                 message_ids,
-            } => topic_hash == &topic_hashes[0] && message_ids.iter().any(|id| id == &msg_id),
+            }) => topic_hash == &topic_hashes[0] && message_ids.iter().any(|id| id == &msg_id),
             _ => false,
         }),
         config.gossip_lazy()
@@ -2225,10 +2231,10 @@ fn test_gossip_to_at_most_gossip_factor_peers() {
     //check that exactly config.gossip_lazy() many gossip messages were sent.
     assert_eq!(
         count_control_msgs(&gs, &queues, |_, action| match action {
-            ControlAction::IHave {
+            ControlAction::IHave(IHave {
                 topic_hash,
                 message_ids,
-            } => topic_hash == &topic_hashes[0] && message_ids.iter().any(|id| id == &msg_id),
+            }) => topic_hash == &topic_hashes[0] && message_ids.iter().any(|id| id == &msg_id),
             _ => false,
         }),
         ((m - config.mesh_n_low()) as f64 * config.gossip_factor()) as usize
@@ -2385,11 +2391,11 @@ fn test_prune_negative_scored_peers() {
     assert_eq!(
         count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[0]
             && match m {
-                ControlAction::Prune {
+                ControlAction::Prune(Prune {
                     topic_hash,
                     peers,
                     backoff,
-                } =>
+                }) =>
                     topic_hash == &topics[0] &&
                     //no px in this case
                     peers.is_empty() &&
@@ -2519,11 +2525,11 @@ fn test_only_send_nonnegative_scoring_peers_in_px() {
     assert_eq!(
         count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[1]
             && match m {
-                ControlAction::Prune {
+                ControlAction::Prune(Prune {
                     topic_hash,
                     peers: px,
                     ..
-                } =>
+                }) =>
                     topic_hash == &topics[0]
                         && px.len() == 1
                         && px[0].peer_id.as_ref().unwrap() == &peers[2],
@@ -2591,10 +2597,10 @@ fn test_do_not_gossip_to_peers_below_gossip_threshold() {
     // Check that exactly one gossip messages got sent and it got sent to p2
     assert_eq!(
         count_control_msgs(&gs, &queues, |peer, action| match action {
-            ControlAction::IHave {
+            ControlAction::IHave(IHave {
                 topic_hash,
                 message_ids,
-            } => {
+            }) => {
                 if topic_hash == &topics[0] && message_ids.iter().any(|id| id == &msg_id) {
                     assert_eq!(peer, &p2);
                     true
@@ -2755,7 +2761,7 @@ fn test_ihave_msg_from_peer_below_gossip_threshold_gets_ignored() {
     // check that we sent exactly one IWANT request to p2
     assert_eq!(
         count_control_msgs(&gs, &queues, |peer, c| match c {
-            ControlAction::IWant { message_ids } =>
+            ControlAction::IWant(IWant { message_ids }) =>
                 if message_ids.iter().any(|m| m == &msg_id) {
                     assert_eq!(peer, &p2);
                     true
@@ -2964,10 +2970,10 @@ fn test_ignore_rpc_from_peers_below_graylist_threshold() {
         topic_hash: topics[0].clone(),
     };
 
-    let control_action = ControlAction::IHave {
+    let control_action = ControlAction::IHave(IHave {
         topic_hash: topics[0].clone(),
         message_ids: vec![config.message_id(message2)],
-    };
+    });
 
     //clear events
     gs.events.clear();
@@ -2993,10 +2999,10 @@ fn test_ignore_rpc_from_peers_below_graylist_threshold() {
         ToSwarm::GenerateEvent(Event::Subscribed { .. })
     ));
 
-    let control_action = ControlAction::IHave {
+    let control_action = ControlAction::IHave(IHave {
         topic_hash: topics[0].clone(),
         message_ids: vec![config.message_id(message4)],
-    };
+    });
 
     //receive from p2
     gs.on_connection_handler_event(
@@ -4451,7 +4457,7 @@ fn test_ignore_too_many_ihaves() {
     //we send iwant only for the first 10 messages
     assert_eq!(
         count_control_msgs(&gs, &queues, |p, action| p == &peer
-            && matches!(action, ControlAction::IWant { message_ids } if message_ids.len() == 1 && first_ten.contains(&message_ids[0]))),
+            && matches!(action, ControlAction::IWant(IWant { message_ids }) if message_ids.len() == 1 && first_ten.contains(&message_ids[0]))),
         10,
         "exactly the first ten ihaves should be processed and one iwant for each created"
     );
@@ -4474,7 +4480,7 @@ fn test_ignore_too_many_ihaves() {
     //we sent iwant for all 20 messages
     assert_eq!(
         count_control_msgs(&gs, &queues, |p, action| p == &peer
-            && matches!(action, ControlAction::IWant { message_ids } if message_ids.len() == 1)),
+            && matches!(action, ControlAction::IWant(IWant { message_ids }) if message_ids.len() == 1)),
         20,
         "all 20 should get sent"
     );
@@ -4524,7 +4530,7 @@ fn test_ignore_too_many_messages_in_ihave() {
     let mut sum = 0;
     assert_eq!(
         count_control_msgs(&gs, &queues, |p, action| match action {
-            ControlAction::IWant { message_ids } =>
+            ControlAction::IWant(IWant { message_ids }) =>
                 p == &peer && {
                     assert!(first_twelve.is_superset(&message_ids.iter().collect()));
                     sum += message_ids.len();
@@ -4549,7 +4555,7 @@ fn test_ignore_too_many_messages_in_ihave() {
     let mut sum = 0;
     assert_eq!(
         count_control_msgs(&gs, &queues, |p, action| match action {
-            ControlAction::IWant { message_ids } =>
+            ControlAction::IWant(IWant { message_ids }) =>
                 p == &peer && {
                     sum += message_ids.len();
                     true
@@ -4603,7 +4609,7 @@ fn test_limit_number_of_message_ids_inside_ihave() {
 
     assert_eq!(
         count_control_msgs(&gs, &queues, |p, action| match action {
-            ControlAction::IHave { message_ids, .. } => {
+            ControlAction::IHave(IHave { message_ids, .. }) => {
                 if p == &p1 {
                     ihaves1 = message_ids.iter().cloned().collect();
                     true
@@ -4938,7 +4944,7 @@ fn test_dont_send_px_to_old_gossipsub_peers() {
     //check that prune does not contain px
     assert_eq!(
         count_control_msgs(&gs, &queues, |_, m| match m {
-            ControlAction::Prune { peers: px, .. } => !px.is_empty(),
+            ControlAction::Prune(Prune { peers: px, .. }) => !px.is_empty(),
             _ => false,
         }),
         0,
@@ -4976,7 +4982,7 @@ fn test_dont_send_floodsub_peers_in_px() {
     //check that px in prune message is empty
     assert_eq!(
         count_control_msgs(&gs, &queues, |_, m| match m {
-            ControlAction::Prune { peers: px, .. } => !px.is_empty(),
+            ControlAction::Prune(Prune { peers: px, .. }) => !px.is_empty(),
             _ => false,
         }),
         0,

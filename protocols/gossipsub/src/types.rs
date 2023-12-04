@@ -203,8 +203,8 @@ pub enum SubscriptionAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PeerInfo {
-    pub peer_id: Option<PeerId>,
+pub(crate) struct PeerInfo {
+    pub(crate) peer_id: Option<PeerId>,
     //TODO add this when RFC: Signed Address Records got added to the spec (see pull request
     // https://github.com/libp2p/specs/pull/217)
     //pub signed_peer_record: ?,
@@ -214,31 +214,47 @@ pub struct PeerInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ControlAction {
     /// Node broadcasts known messages per topic - IHave control message.
-    IHave {
-        /// The topic of the messages.
-        topic_hash: TopicHash,
-        /// A list of known message ids (peer_id + sequence _number) as a string.
-        message_ids: Vec<MessageId>,
-    },
+    IHave(IHave),
     /// The node requests specific message ids (peer_id + sequence _number) - IWant control message.
-    IWant {
-        /// A list of known message ids (peer_id + sequence _number) as a string.
-        message_ids: Vec<MessageId>,
-    },
+    IWant(IWant),
     /// The node has been added to the mesh - Graft control message.
-    Graft {
-        /// The mesh topic the peer should be added to.
-        topic_hash: TopicHash,
-    },
+    Graft(Graft),
     /// The node has been removed from the mesh - Prune control message.
-    Prune {
-        /// The mesh topic the peer should be removed from.
-        topic_hash: TopicHash,
-        /// A list of peers to be proposed to the removed peer as peer exchange
-        peers: Vec<PeerInfo>,
-        /// The backoff time in seconds before we allow to reconnect
-        backoff: Option<u64>,
-    },
+    Prune(Prune),
+}
+
+/// Node broadcasts known messages per topic - IHave control message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IHave {
+    /// The topic of the messages.
+    pub(crate) topic_hash: TopicHash,
+    /// A list of known message ids (peer_id + sequence _number) as a string.
+    pub(crate) message_ids: Vec<MessageId>,
+}
+
+/// The node requests specific message ids (peer_id + sequence _number) - IWant control message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IWant {
+    /// A list of known message ids (peer_id + sequence _number) as a string.
+    pub(crate) message_ids: Vec<MessageId>,
+}
+
+/// The node has been added to the mesh - Graft control message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Graft {
+    /// The mesh topic the peer should be added to.
+    pub(crate) topic_hash: TopicHash,
+}
+
+/// The node has been removed from the mesh - Prune control message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Prune {
+    /// The mesh topic the peer should be removed from.
+    pub(crate) topic_hash: TopicHash,
+    /// A list of peers to be proposed to the removed peer as peer exchange
+    pub(crate) peers: Vec<PeerInfo>,
+    /// The backoff time in seconds before we allow to reconnect
+    pub(crate) backoff: Option<u64>,
 }
 
 /// A Gossipsub RPC message sent.
@@ -302,10 +318,10 @@ impl From<RpcOut> for proto::RPC {
                 }],
                 control: None,
             },
-            RpcOut::Control(ControlAction::IHave {
+            RpcOut::Control(ControlAction::IHave(IHave {
                 topic_hash,
                 message_ids,
-            }) => proto::RPC {
+            })) => proto::RPC {
                 publish: Vec::new(),
                 subscriptions: Vec::new(),
                 control: Some(proto::ControlMessage {
@@ -318,7 +334,7 @@ impl From<RpcOut> for proto::RPC {
                     prune: vec![],
                 }),
             },
-            RpcOut::Control(ControlAction::IWant { message_ids }) => proto::RPC {
+            RpcOut::Control(ControlAction::IWant(IWant { message_ids })) => proto::RPC {
                 publish: Vec::new(),
                 subscriptions: Vec::new(),
                 control: Some(proto::ControlMessage {
@@ -330,7 +346,7 @@ impl From<RpcOut> for proto::RPC {
                     prune: vec![],
                 }),
             },
-            RpcOut::Control(ControlAction::Graft { topic_hash }) => proto::RPC {
+            RpcOut::Control(ControlAction::Graft(Graft { topic_hash })) => proto::RPC {
                 publish: Vec::new(),
                 subscriptions: vec![],
                 control: Some(proto::ControlMessage {
@@ -342,11 +358,11 @@ impl From<RpcOut> for proto::RPC {
                     prune: vec![],
                 }),
             },
-            RpcOut::Control(ControlAction::Prune {
+            RpcOut::Control(ControlAction::Prune(Prune {
                 topic_hash,
                 peers,
                 backoff,
-            }) => {
+            })) => {
                 proto::RPC {
                     publish: Vec::new(),
                     subscriptions: vec![],
@@ -434,33 +450,33 @@ impl From<Rpc> for proto::RPC {
         for action in rpc.control_msgs {
             match action {
                 // collect all ihave messages
-                ControlAction::IHave {
+                ControlAction::IHave(IHave {
                     topic_hash,
                     message_ids,
-                } => {
+                }) => {
                     let rpc_ihave = proto::ControlIHave {
                         topic_id: Some(topic_hash.into_string()),
                         message_ids: message_ids.into_iter().map(|msg_id| msg_id.0).collect(),
                     };
                     control.ihave.push(rpc_ihave);
                 }
-                ControlAction::IWant { message_ids } => {
+                ControlAction::IWant(IWant { message_ids }) => {
                     let rpc_iwant = proto::ControlIWant {
                         message_ids: message_ids.into_iter().map(|msg_id| msg_id.0).collect(),
                     };
                     control.iwant.push(rpc_iwant);
                 }
-                ControlAction::Graft { topic_hash } => {
+                ControlAction::Graft(Graft { topic_hash }) => {
                     let rpc_graft = proto::ControlGraft {
                         topic_id: Some(topic_hash.into_string()),
                     };
                     control.graft.push(rpc_graft);
                 }
-                ControlAction::Prune {
+                ControlAction::Prune(Prune {
                     topic_hash,
                     peers,
                     backoff,
-                } => {
+                }) => {
                     let rpc_prune = proto::ControlPrune {
                         topic_id: Some(topic_hash.into_string()),
                         peers: peers
