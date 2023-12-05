@@ -477,7 +477,6 @@ where
             peer_score: None,
             count_received_ihave: HashMap::new(),
             count_sent_iwant: HashMap::new(),
-            pending_iwant_msgs: HashSet::new(),
             connected_peers: HashMap::new(),
             published_message_ids: DuplicateCache::new(config.published_message_ids_cache_time()),
             config,
@@ -1241,10 +1240,6 @@ where
                 return false;
             }
 
-            if self.pending_iwant_msgs.contains(id) {
-                return false;
-            }
-
             self.peer_score
                 .as_ref()
                 .map(|(_, _, _, promises)| !promises.contains(id))
@@ -1295,10 +1290,6 @@ where
             iwant_ids_vec.truncate(iask);
             *iasked += iask;
 
-            for message_id in &iwant_ids_vec {
-                // Add all messages to the pending list
-                self.pending_iwant_msgs.insert(message_id.clone());
-            }
 
             if let Some((_, _, _, gossip_promises)) = &mut self.peer_score {
                 gossip_promises.add_promise(
@@ -1313,13 +1304,14 @@ where
                 iwant_ids_vec
             );
 
-            Self::control_pool_add(
-                &mut self.control_pool,
-                *peer_id,
-                RpcOut::IWant(IWant {
-                    message_ids: iwant_ids_vec,
-                }),
-            );
+            let sender = self
+                .handler_send_queues
+                .get_mut(peer_id)
+                .expect("Peerid should exist");
+
+            sender.iwant(IWant {
+                message_ids: iwant_ids_vec,
+            });
         }
         tracing::trace!(peer=%peer_id, "Completed IHAVE handling for peer");
     }
@@ -2815,8 +2807,6 @@ where
             }
         }
 
-        // This clears all pending IWANT messages
-        self.pending_iwant_msgs.clear();
     }
 
     fn on_connection_established(
