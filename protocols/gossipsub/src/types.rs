@@ -270,8 +270,14 @@ pub enum RpcOut {
     Subscribe(TopicHash),
     /// Unsubscribe a topic.
     Unsubscribe(TopicHash),
-    /// List of Gossipsub control messages.
-    Control(ControlAction),
+    /// Send a GRAFT control message.
+    Graft(Graft),
+    /// Send a PRUNE control message.
+    Prune(Prune),
+    /// Send a IHave control message.
+    IHave(IHave),
+    /// Send a IWant control message.
+    IWant(IWant),
 }
 
 impl RpcOut {
@@ -318,10 +324,10 @@ impl From<RpcOut> for proto::RPC {
                 }],
                 control: None,
             },
-            RpcOut::Control(ControlAction::IHave(IHave {
+            RpcOut::IHave(IHave {
                 topic_hash,
                 message_ids,
-            })) => proto::RPC {
+            }) => proto::RPC {
                 publish: Vec::new(),
                 subscriptions: Vec::new(),
                 control: Some(proto::ControlMessage {
@@ -334,7 +340,7 @@ impl From<RpcOut> for proto::RPC {
                     prune: vec![],
                 }),
             },
-            RpcOut::Control(ControlAction::IWant(IWant { message_ids })) => proto::RPC {
+            RpcOut::IWant(IWant { message_ids }) => proto::RPC {
                 publish: Vec::new(),
                 subscriptions: Vec::new(),
                 control: Some(proto::ControlMessage {
@@ -346,7 +352,7 @@ impl From<RpcOut> for proto::RPC {
                     prune: vec![],
                 }),
             },
-            RpcOut::Control(ControlAction::Graft(Graft { topic_hash })) => proto::RPC {
+            RpcOut::Graft(Graft { topic_hash }) => proto::RPC {
                 publish: Vec::new(),
                 subscriptions: vec![],
                 control: Some(proto::ControlMessage {
@@ -358,11 +364,11 @@ impl From<RpcOut> for proto::RPC {
                     prune: vec![],
                 }),
             },
-            RpcOut::Control(ControlAction::Prune(Prune {
+            RpcOut::Prune(Prune {
                 topic_hash,
                 peers,
                 backoff,
-            })) => {
+            }) => {
                 proto::RPC {
                     publish: Vec::new(),
                     subscriptions: vec![],
@@ -582,12 +588,46 @@ impl RpcSender {
         self.receiver.clone()
     }
 
-    /// Send a `RpcOut::Control` message to the `RpcReceiver`
+    /// Send a `RpcOut::Graft` message to the `RpcReceiver`
     /// this is high priority.
-    pub(crate) fn control(&mut self, control: ControlAction) {
+    pub(crate) fn graft(&mut self, graft: Graft) {
         self.priority
-            .try_send(RpcOut::Control(control))
+            .try_send(RpcOut::Graft(graft))
             .expect("Channel is unbounded and should always be open");
+    }
+
+    /// Send a `RpcOut::Prune` message to the `RpcReceiver`
+    /// this is high priority.
+    pub(crate) fn prune(&mut self, prune: Prune) {
+        self.priority
+            .try_send(RpcOut::Prune(prune))
+            .expect("Channel is unbounded and should always be open");
+    }
+
+    /// Send a `RpcOut::IHave` message to the `RpcReceiver`
+    /// this is low priority and if queue is full the message is dropped.
+    pub(crate) fn ihave(&mut self, ihave: IHave) {
+        if let Err(err) = self.non_priority.try_send(RpcOut::IHave(ihave)) {
+            let rpc = err.into_inner();
+            tracing::trace!(
+                "IHAVE message {:?} to peer {} dropped, queue is full",
+                rpc,
+                self.peer_id
+            );
+        }
+    }
+
+    /// Send a `RpcOut::IHave` message to the `RpcReceiver`
+    /// this is low priority and if queue is full the message is dropped.
+    pub(crate) fn iwant(&mut self, iwant: IWant) {
+        if let Err(err) = self.non_priority.try_send(RpcOut::IWant(iwant)) {
+            let rpc = err.into_inner();
+            tracing::trace!(
+                "IWANT message {:?} to peer {} dropped, queue is full",
+                rpc,
+                self.peer_id
+            );
+        }
     }
 
     /// Send a `RpcOut::Subscribe` message to the `RpcReceiver`
