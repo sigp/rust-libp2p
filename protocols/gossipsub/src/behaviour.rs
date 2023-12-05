@@ -1137,7 +1137,12 @@ where
                 tracing::debug!(%peer, "LEAVE: Sending PRUNE to peer");
                 let on_unsubscribe = true;
                 let prune = self.make_prune(topic_hash, &peer, self.config.do_px(), on_unsubscribe);
-                Self::control_pool_add(&mut self.control_pool, peer, RpcOut::Prune(prune));
+                let sender = self
+                    .handler_send_queues
+                    .get_mut(&peer)
+                    .expect("Peerid should exist");
+
+                sender.prune(prune);
 
                 // If the peer did not previously exist in any mesh, inform the handler
                 peer_removed_from_mesh(
