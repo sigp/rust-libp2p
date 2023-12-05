@@ -253,9 +253,6 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     /// Events that need to be yielded to the outside when polling.
     events: VecDeque<ToSwarm<Event, HandlerIn>>,
 
-    /// Pools non-urgent control messages between heartbeats.
-    control_pool: HashMap<PeerId, Vec<RpcOut>>,
-
     /// Information used for publishing messages.
     publish_config: PublishConfig,
 
@@ -322,10 +319,6 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
 
     /// Counts the number of `IWANT` that we sent the each peer since the last heartbeat.
     count_sent_iwant: HashMap<PeerId, usize>,
-
-    /// Keeps track of IWANT messages that we are awaiting to send.
-    /// This is used to prevent sending duplicate IWANT messages for the same message.
-    pending_iwant_msgs: HashSet<MessageId>,
 
     /// Short term cache for published message ids. This is used for penalizing peers sending
     /// our own messages back if the messages are anonymous or use a random author.
@@ -451,7 +444,6 @@ where
         Ok(Behaviour {
             metrics: metrics.map(|(registry, cfg)| Metrics::new(registry, cfg)),
             events: VecDeque::new(),
-            control_pool: HashMap::new(),
             publish_config: privacy.into(),
             duplicate_cache: DuplicateCache::new(config.duplicate_cache_time()),
             topic_peers: HashMap::new(),
@@ -1289,7 +1281,6 @@ where
 
             iwant_ids_vec.truncate(iask);
             *iasked += iask;
-
 
             if let Some((_, _, _, gossip_promises)) = &mut self.peer_score {
                 gossip_promises.add_promise(
@@ -2438,9 +2429,6 @@ where
             self.send_graft_prune(to_graft, to_prune, no_px);
         }
 
-        // piggyback pooled control messages
-        self.flush_control_pool();
-
         // shift the memcache
         self.mcache.shift();
 
@@ -2777,33 +2765,6 @@ where
                 })
             }
         }
-    }
-
-    // adds a control action to control_pool
-    fn control_pool_add(
-        control_pool: &mut HashMap<PeerId, Vec<RpcOut>>,
-        peer: PeerId,
-        control: RpcOut,
-    ) {
-        control_pool.entry(peer).or_default().push(control);
-    }
-
-    /// Takes each control action mapping and turns it into a message
-    fn flush_control_pool(&mut self) {
-        for (peer, controls) in self.control_pool.drain().collect::<Vec<_>>() {
-            for msg in controls {
-                let sender = self
-                    .handler_send_queues
-                    .get_mut(&peer)
-                    .expect("Peerid should exist");
-
-                match msg {
-                    RpcOut::IHave(ihave) => sender.ihave(ihave),
-                    _ => unreachable!(),
-                }
-            }
-        }
-
     }
 
     fn on_connection_established(
@@ -3446,7 +3407,6 @@ impl<C: DataTransform, F: TopicSubscriptionFilter> fmt::Debug for Behaviour<C, F
         f.debug_struct("Behaviour")
             .field("config", &self.config)
             .field("events", &self.events.len())
-            .field("control_pool", &self.control_pool)
             .field("publish_config", &self.publish_config)
             .field("topic_peers", &self.topic_peers)
             .field("peer_topics", &self.peer_topics)
