@@ -55,7 +55,6 @@ use crate::subscription_filter::{AllowAllSubscriptionFilter, TopicSubscriptionFi
 use crate::time_cache::DuplicateCache;
 use crate::topic::{Hasher, Topic, TopicHash};
 use crate::transform::{DataTransform, IdentityTransform};
-use crate::types::ExpiredMessages;
 use crate::types::{
     ControlAction, Message, MessageAcceptance, MessageId, PeerInfo, RawMessage, Subscription,
     SubscriptionAction,
@@ -66,7 +65,7 @@ use crate::{
     config::{Config, ValidationMode},
     types::RpcOut,
 };
-use crate::{rpc_proto::proto, TopicScoreParams};
+use crate::{rpc_proto::proto, FailedMessages, TopicScoreParams};
 use crate::{PublishError, SubscriptionError, ValidationError};
 use instant::SystemTime;
 use quick_protobuf::{MessageWrite, Writer};
@@ -150,8 +149,10 @@ pub enum Event {
     GossipsubNotSupported { peer_id: PeerId },
     /// A peer is not able to download messages in time.
     SlowPeer {
+        /// The peer_id
         peer_id: PeerId,
-        expired_messages: ExpiredMessages,
+        /// The types and amounts of failed messages that are occurring for this peer.
+        failed_messages: FailedMessages,
     },
 }
 
@@ -346,7 +347,7 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     handler_send_queues: HashMap<PeerId, RpcSender>,
 
     /// Tracks the numbers of failed messages per peer-id.
-    expired_messages: HashMap<PeerId, ExpiredMessages>,
+    failed_messages: HashMap<PeerId, FailedMessages>,
 }
 
 impl<D, F> Behaviour<D, F>
@@ -487,7 +488,7 @@ where
             subscription_filter,
             data_transform,
             handler_send_queues: Default::default(),
-            expired_messages: Default::default(),
+            failed_messages: Default::default(),
         })
     }
 }
@@ -752,6 +753,14 @@ where
                 )
                 .is_err()
             {
+                self.failed_messages.entry(*peer_id).or_default().priority += 1;
+
+                tracing::warn!(peer=%peer_id, "Publish queue full. Could not publish to peer");
+                // Downscore the peer due to failed message.
+                if let Some((peer_score, ..)) = &mut self.peer_score {
+                    peer_score.failed_message_slow_peer(peer_id);
+                }
+
                 errors += 1;
             }
         }
@@ -1359,11 +1368,21 @@ where
                         .get_mut(peer_id)
                         .expect("Peerid should exist");
 
-                    sender.forward(
+                    if let Err(_) = sender.forward(
                         msg,
                         self.config.forward_queue_duration(),
                         self.metrics.as_mut(),
-                    );
+                    ) {
+                        // Downscore the peer
+                        if let Some((peer_score, ..)) = &mut self.peer_score {
+                            peer_score.failed_message_slow_peer(peer_id);
+                        }
+                        // Increment the failed message count
+                        self.failed_messages
+                            .entry(*peer_id)
+                            .or_default()
+                            .non_priority += 1;
+                    }
                 }
             }
         }
@@ -2455,15 +2474,15 @@ where
         self.mcache.shift();
 
         // Report expired messages
-        for (peer_id, expired_messages) in self.expired_messages.drain() {
-            tracing::debug!("Peer couldn't consume messages: {:?}", expired_messages);
+        for (peer_id, failed_messages) in self.failed_messages.drain() {
+            tracing::debug!("Peer couldn't consume messages: {:?}", failed_messages);
             self.events
                 .push_back(ToSwarm::GenerateEvent(Event::SlowPeer {
                     peer_id,
-                    expired_messages,
+                    failed_messages,
                 }));
         }
-        self.expired_messages.shrink_to_fit();
+        self.failed_messages.shrink_to_fit();
 
         tracing::debug!("Completed Heartbeat");
         if let Some(metrics) = self.metrics.as_mut() {
@@ -2686,17 +2705,30 @@ where
 
         // forward the message to peers
         if !recipient_peers.is_empty() {
-            for peer in recipient_peers.iter() {
-                tracing::debug!(%peer, message=%msg_id, "Sending message to peer");
+            for peer_id in recipient_peers.iter() {
+                tracing::debug!(%peer_id, message=%msg_id, "Sending message to peer");
                 let sender = self
                     .handler_send_queues
-                    .get_mut(peer)
+                    .get_mut(peer_id)
                     .expect("Peerid should exist");
-                sender.forward(
-                    message.clone(),
-                    self.config.forward_queue_duration(),
-                    self.metrics.as_mut(),
-                );
+                if sender
+                    .forward(
+                        message.clone(),
+                        self.config.forward_queue_duration(),
+                        self.metrics.as_mut(),
+                    )
+                    .is_err()
+                {
+                    // Downscore the peer
+                    if let Some((peer_score, ..)) = &mut self.peer_score {
+                        peer_score.failed_message_slow_peer(peer_id);
+                    }
+                    // Increment the failed message count
+                    self.failed_messages
+                        .entry(*peer_id)
+                        .or_default()
+                        .non_priority += 1;
+                }
             }
             tracing::debug!("Completed forwarding message");
             Ok(true)
@@ -3090,7 +3122,7 @@ where
         let sender = self
             .handler_send_queues
             .entry(peer_id)
-            .or_insert_with(|| RpcSender::new(peer_id, self.config.connection_handler_queue_len()));
+            .or_insert_with(|| RpcSender::new(self.config.connection_handler_queue_len()));
         Ok(Handler::new(
             self.config.protocol_config(),
             sender.new_receiver(),
@@ -3107,7 +3139,7 @@ where
         let sender = self
             .handler_send_queues
             .entry(peer_id)
-            .or_insert_with(|| RpcSender::new(peer_id, self.config.connection_handler_queue_len()));
+            .or_insert_with(|| RpcSender::new(self.config.connection_handler_queue_len()));
         Ok(Handler::new(
             self.config.protocol_config(),
             sender.new_receiver(),
@@ -3154,22 +3186,22 @@ where
             HandlerEvent::MessageDropped(rpc) => {
                 // Account for this in the scoring logic
                 if let Some((peer_score, _, _, _)) = &mut self.peer_score {
-                    peer_score.expired_message(&propagation_source);
+                    peer_score.failed_message_slow_peer(&propagation_source);
                 }
 
                 // Keep track of expired messages for the application layer.
                 match rpc {
                     RpcOut::Publish { .. } => {
-                        self.expired_messages
+                        self.failed_messages
                             .entry(propagation_source)
                             .or_default()
-                            .increment_publish();
+                            .publish += 1;
                     }
                     RpcOut::Forward { .. } => {
-                        self.expired_messages
+                        self.failed_messages
                             .entry(propagation_source)
                             .or_default()
-                            .increment_forward();
+                            .forward += 1;
                     }
                     _ => {} //
                 }

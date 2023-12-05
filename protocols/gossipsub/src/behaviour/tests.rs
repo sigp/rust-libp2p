@@ -230,7 +230,7 @@ where
         }
     };
 
-    let sender = RpcSender::new(peer, gs.config.connection_handler_queue_len());
+    let sender = RpcSender::new(gs.config.connection_handler_queue_len());
     let receiver = sender.new_receiver();
     gs.handler_send_queues.insert(peer, sender);
 

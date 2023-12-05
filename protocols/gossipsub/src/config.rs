@@ -366,7 +366,7 @@ impl Config {
     }
 
     /// The duration a message to be forwarded can wait to be sent before it is abandoned. The
-    /// default is 500ms.
+    /// default is 1s.
     pub fn forward_queue_duration(&self) -> Duration {
         self.connection_handler_forward_duration
     }
@@ -439,7 +439,7 @@ impl Default for ConfigBuilder {
                 published_message_ids_cache_time: Duration::from_secs(10),
                 connection_handler_queue_len: 5000,
                 connection_handler_publish_duration: Duration::from_secs(5),
-                connection_handler_forward_duration: Duration::from_millis(500),
+                connection_handler_forward_duration: Duration::from_millis(1000),
             },
             invalid_protocol: false,
         }
@@ -817,7 +817,7 @@ impl ConfigBuilder {
     }
 
     /// The duration a message to be forwarded can wait to be sent before it is abandoned. The
-    /// default is 500ms.
+    /// default is 1s.
     pub fn forward_queue_duration(&mut self, duration: Duration) {
         self.config.connection_handler_forward_duration = duration;
     }

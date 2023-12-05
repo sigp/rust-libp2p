@@ -1,4 +1,6 @@
 ## 0.46.1 - unreleased
+- Adds scoring for slow peers and introduces a message to inform the application of slow peers.
+
 - Implement publish and forward message dropping.
 
 - Implement backpressure by diferentiating between priority and non priority messages.

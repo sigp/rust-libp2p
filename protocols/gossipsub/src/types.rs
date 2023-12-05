@@ -39,29 +39,33 @@ use crate::rpc_proto::proto;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-/// The kind of message a peer is unable to download in time.
+/// The type of messages that have expired while attempting to send to a peer.
 #[derive(Clone, Debug, Default)]
-pub struct ExpiredMessages {
+pub struct FailedMessages {
     /// The number of publish messages that failed to be published in a heartbeat.
     pub publish: usize,
     /// The number of forward messages that failed to be published in a heartbeat.
     pub forward: usize,
+    /// The number of messages that were failed to be sent to the priority queue as it was full.
+    pub priority: usize,
+    /// The number of messages that were failed to be sent to the non-priority queue as it was full.
+    pub non_priority: usize,
 }
 
-impl ExpiredMessages {
-    /// Increments the number of expired publish messages.
-    pub fn increment_publish(&mut self) {
-        self.publish += 1;
-    }
-
-    /// Increments the number of expired forward messages.
-    pub fn increment_forward(&mut self) {
-        self.forward += 1;
-    }
-
-    /// Provides the total expired messages.
-    pub fn total(&self) -> usize {
+impl FailedMessages {
+    /// The total number of messages that expired due a timeout.
+    pub fn total_timeout(&self) -> usize {
         self.publish + self.forward
+    }
+
+    /// The total number of messages that failed due to the queue being full.
+    pub fn total_queue_full(&self) -> usize {
+        self.priority + self.non_priority
+    }
+
+    /// The total failed messages in a heartbeat.
+    pub fn total(&self) -> usize {
+        self.total_timeout() + self.total_queue_full()
     }
 }
 
@@ -558,7 +562,6 @@ impl fmt::Display for PeerKind {
 /// `RpcOut` sender that is priority aware.
 #[derive(Debug, Clone)]
 pub(crate) struct RpcSender {
-    peer_id: PeerId,
     cap: usize,
     len: Arc<AtomicUsize>,
     priority: Sender<RpcOut>,
@@ -568,7 +571,7 @@ pub(crate) struct RpcSender {
 
 impl RpcSender {
     /// Create a RpcSender.
-    pub(crate) fn new(peer_id: PeerId, cap: usize) -> RpcSender {
+    pub(crate) fn new(cap: usize) -> RpcSender {
         let (priority_sender, priority_receiver) = async_channel::unbounded();
         let (non_priority_sender, non_priority_receiver) = async_channel::bounded(cap / 2);
         let len = Arc::new(AtomicUsize::new(0));
@@ -578,7 +581,6 @@ impl RpcSender {
             non_priority: non_priority_receiver,
         };
         RpcSender {
-            peer_id,
             cap: cap / 2,
             len,
             priority: priority_sender,
@@ -618,6 +620,7 @@ impl RpcSender {
 
     /// Send a `RpcOut::Publish` message to the `RpcReceiver`
     /// this is high priority. If message sending fails, an `Err` is returned.
+    #[must_use]
     pub(crate) fn publish(
         &mut self,
         message: RawMessage,
@@ -644,28 +647,25 @@ impl RpcSender {
 
     /// Send a `RpcOut::Forward` message to the `RpcReceiver`
     /// this is high priority. If the queue is full the message is discarded.
+    #[must_use]
     pub(crate) fn forward(
         &mut self,
         message: RawMessage,
         timeout: Duration,
         metrics: Option<&mut Metrics>,
-    ) {
-        if let Err(err) = self.non_priority.try_send(RpcOut::Forward {
-            message: message.clone(),
-            timeout: Delay::new(timeout),
-        }) {
-            let rpc = err.into_inner();
-            tracing::trace!(
-                "{:?} message to peer {} dropped, queue is full",
-                rpc,
-                self.peer_id
-            );
-            return;
-        }
+    ) -> Result<(), ()> {
+        self.non_priority
+            .try_send(RpcOut::Forward {
+                message: message.clone(),
+                timeout: Delay::new(timeout),
+            })
+            .map_err(|_| ())?;
 
         if let Some(m) = metrics {
             m.msg_sent(&message.topic, message.raw_protobuf_len());
         }
+
+        Ok(())
     }
 }
 

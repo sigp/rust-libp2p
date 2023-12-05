@@ -473,7 +473,7 @@ impl PeerScore {
     }
 
     /// Indicate that a peer has been too slow to consume a message.
-    pub(crate) fn expired_message(&mut self, peer_id: &PeerId) {
+    pub(crate) fn failed_message_slow_peer(&mut self, peer_id: &PeerId) {
         if let Some(peer_stats) = self.peer_stats.get_mut(peer_id) {
             peer_stats.slow_peer_penalty += 1.0;
             tracing::debug!(peer=%peer_id, %peer_stats.slow_peer_penalty, "[Penalty] Expired message penalty.");
