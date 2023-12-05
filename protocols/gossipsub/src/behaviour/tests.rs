@@ -1404,7 +1404,7 @@ fn test_explicit_peer_reconnects() {
         .check_explicit_peers_ticks(2)
         .build()
         .unwrap();
-    let (mut gs, others, mut queues, _) = inject_nodes1()
+    let (mut gs, others, queues, _) = inject_nodes1()
         .peer_no(1)
         .topics(Vec::new())
         .to_subscribe(true)
@@ -1416,7 +1416,7 @@ fn test_explicit_peer_reconnects() {
     //add peer as explicit peer
     gs.add_explicit_peer(peer);
 
-    flush_events(&mut gs, &mut queues);
+    flush_events(&mut gs, &queues);
 
     //disconnect peer
     disconnect_peer(&mut gs, peer);
@@ -1875,7 +1875,7 @@ fn test_prune_backoffed_peer_on_graft() {
     let config: Config = Config::default();
 
     //build mesh with enough peers for px
-    let (mut gs, peers, mut queues, topics) = inject_nodes1()
+    let (mut gs, peers, queues, topics) = inject_nodes1()
         .peer_no(config.prune_peers() + 1)
         .topics(vec!["test".into()])
         .to_subscribe(true)
@@ -1892,7 +1892,7 @@ fn test_prune_backoffed_peer_on_graft() {
     );
 
     //ignore all messages until now
-    flush_events(&mut gs, &mut queues);
+    flush_events(&mut gs, &queues);
 
     //handle graft
     gs.handle_graft(&peers[0], vec![topics[0].clone()]);
@@ -1924,7 +1924,7 @@ fn test_do_not_graft_within_backoff_period() {
         .build()
         .unwrap();
     //only one peer => mesh too small and will try to regraft as early as possible
-    let (mut gs, peers, mut queues, topics) = inject_nodes1()
+    let (mut gs, peers, queues, topics) = inject_nodes1()
         .peer_no(1)
         .topics(vec!["test".into()])
         .to_subscribe(true)
@@ -1935,7 +1935,7 @@ fn test_do_not_graft_within_backoff_period() {
     gs.handle_prune(&peers[0], vec![(topics[0].clone(), Vec::new(), Some(1))]);
 
     //forget all events until now
-    flush_events(&mut gs, &mut queues);
+    flush_events(&mut gs, &queues);
 
     //call heartbeat
     gs.heartbeat();
@@ -1975,7 +1975,7 @@ fn test_do_not_graft_within_default_backoff_period_after_receiving_prune_without
         .build()
         .unwrap();
     //only one peer => mesh too small and will try to regraft as early as possible
-    let (mut gs, peers, mut queues, topics) = inject_nodes1()
+    let (mut gs, peers, queues, topics) = inject_nodes1()
         .peer_no(1)
         .topics(vec!["test".into()])
         .to_subscribe(true)
@@ -1986,7 +1986,7 @@ fn test_do_not_graft_within_default_backoff_period_after_receiving_prune_without
     gs.handle_prune(&peers[0], vec![(topics[0].clone(), Vec::new(), None)]);
 
     //forget all events until now
-    flush_events(&mut gs, &mut queues);
+    flush_events(&mut gs, &queues);
 
     //call heartbeat
     gs.heartbeat();
@@ -2028,7 +2028,7 @@ fn test_unsubscribe_backoff() {
 
     let topic = String::from("test");
     // only one peer => mesh too small and will try to regraft as early as possible
-    let (mut gs, _, mut queues, topics) = inject_nodes1()
+    let (mut gs, _, queues, topics) = inject_nodes1()
         .peer_no(1)
         .topics(vec![topic.clone()])
         .to_subscribe(true)
@@ -2049,7 +2049,7 @@ fn test_unsubscribe_backoff() {
     let _ = gs.subscribe(&Topic::new(topics[0].to_string()));
 
     // forget all events until now
-    flush_events(&mut gs, &mut queues);
+    flush_events(&mut gs, &queues);
 
     // call heartbeat
     gs.heartbeat();
@@ -4371,7 +4371,7 @@ fn test_ignore_too_many_iwants_from_same_peer_for_same_message() {
     gs.handle_received_message(m1, &PeerId::random());
 
     //clear events
-    flush_events(&mut gs, &mut queues);
+    flush_events(&mut gs, &queues);
 
     //the first gossip_retransimission many iwants return the valid message, all others are
     // ignored.
