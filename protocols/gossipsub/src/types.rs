@@ -641,6 +641,16 @@ impl RpcSender {
             m.msg_sent(&message.topic, message.raw_protobuf_len());
         }
     }
+
+    /// Returns the current size of the priority queue.
+    pub(crate) fn priority_len(&self) -> usize {
+        self.len.load(Ordering::Relaxed)
+    }
+
+    /// Returns the current size of the non-priority queue.
+    pub(crate) fn non_priority_len(&self) -> usize {
+        self.non_priority.len()
+    }
 }
 
 /// `RpcOut` sender that is priority aware.
