@@ -1033,13 +1033,14 @@ where
             if let Some((peer_score, ..)) = &mut self.peer_score {
                 peer_score.graft(&peer_id, topic_hash.clone());
             }
-            Self::control_pool_add(
-                &mut self.control_pool,
-                peer_id,
-                RpcOut::Graft(Graft {
-                    topic_hash: topic_hash.clone(),
-                }),
-            );
+            let sender = self
+                .handler_send_queues
+                .get_mut(&peer_id)
+                .expect("Peerid should exist");
+
+            sender.graft(Graft {
+                topic_hash: topic_hash.clone(),
+            });
 
             // If the peer did not previously exist in any mesh, inform the handler
             peer_added_to_mesh(

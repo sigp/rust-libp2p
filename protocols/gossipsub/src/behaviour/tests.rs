@@ -521,11 +521,14 @@ fn test_join() {
         .map(|t| Topic::new(t.clone()))
         .collect::<Vec<Topic>>();
 
-    let (mut gs, _, _receivers, topic_hashes) = inject_nodes1()
+    let (mut gs, _, mut receivers, topic_hashes) = inject_nodes1()
         .peer_no(20)
         .topics(topic_strings)
         .to_subscribe(true)
         .create_network();
+
+    // Flush previous GRAFT messages.
+    flush_events(&mut gs, &receivers);
 
     // unsubscribe, then call join to invoke functionality
     assert!(
@@ -549,24 +552,20 @@ fn test_join() {
         "Should have added 6 nodes to the mesh"
     );
 
-    fn collect_grafts<'a>(
-        mut collected_grafts: Vec<&'a RpcOut>,
-        (_, controls): (&'a PeerId, &'a Vec<RpcOut>),
-    ) -> Vec<&'a RpcOut> {
-        for c in controls.iter() {
-            if let RpcOut::Graft(Graft { topic_hash: _ }) = c {
-                collected_grafts.push(c)
+    fn count_grafts(mut acc: usize, receiver: &RpcReceiver) -> usize {
+        while !receiver.priority.is_empty() || !receiver.non_priority.is_empty() {
+            if let Ok(RpcOut::Graft(_)) = receiver.priority.try_recv() {
+                acc += 1;
             }
         }
-        collected_grafts
+        acc
     }
 
     // there should be mesh_n GRAFT messages.
-    let graft_messages = gs.control_pool.iter().fold(vec![], collect_grafts);
+    let graft_messages = receivers.values().fold(0, count_grafts);
 
     assert_eq!(
-        graft_messages.len(),
-        6,
+        graft_messages, 6,
         "There should be 6 grafts messages sent to peers"
     );
 
@@ -590,6 +589,10 @@ fn test_join() {
             )
             .unwrap();
         peers.push(peer);
+        let sender = RpcSender::new(random_peer, gs.config.connection_handler_queue_len());
+        let receiver = sender.new_receiver();
+        gs.handler_send_queues.insert(random_peer, sender);
+        receivers.insert(random_peer, receiver);
 
         gs.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
             peer_id: random_peer,
@@ -625,10 +628,10 @@ fn test_join() {
     }
 
     // there should now be 12 graft messages to be sent
-    let graft_messages = gs.control_pool.iter().fold(vec![], collect_grafts);
+    let graft_messages = receivers.values().fold(graft_messages, count_grafts);
 
-    assert!(
-        graft_messages.len() == 12,
+    assert_eq!(
+        graft_messages, 12,
         "There should be 12 grafts messages sent to peers"
     );
 }
