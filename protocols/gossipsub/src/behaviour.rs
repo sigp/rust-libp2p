@@ -2507,14 +2507,14 @@ where
                 }
 
                 // send an IHAVE message
-                Self::control_pool_add(
-                    &mut self.control_pool,
-                    peer,
-                    RpcOut::IHave(IHave {
-                        topic_hash: topic_hash.clone(),
-                        message_ids: peer_message_ids,
-                    }),
-                );
+                let sender = self
+                    .handler_send_queues
+                    .get_mut(&peer)
+                    .expect("Peerid should exist");
+                sender.ihave(IHave {
+                    topic_hash: topic_hash.clone(),
+                    message_ids: peer_message_ids,
+                });
             }
         }
     }
@@ -2799,9 +2799,6 @@ where
 
                 match msg {
                     RpcOut::IHave(ihave) => sender.ihave(ihave),
-                    RpcOut::IWant(iwant) => sender.iwant(iwant),
-                    RpcOut::Graft(graft) => sender.graft(graft),
-                    RpcOut::Prune(prune) => sender.prune(prune),
                     _ => unreachable!(),
                 }
             }
