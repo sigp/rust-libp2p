@@ -1,4 +1,6 @@
 ## 0.46.1 - unreleased
+- Adds metrics for priority and non-priority queue lengths.
+
 - Implement publish and forward message dropping.
 
 - Implement backpressure by diferentiating between priority and non priority messages.

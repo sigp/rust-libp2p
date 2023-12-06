@@ -2042,6 +2042,16 @@ where
         tracing::debug!("Starting heartbeat");
         let start = Instant::now();
 
+        // Every heartbeat we sample the send queues to add to our metrics. We do this intentionally
+        // before we add all the gossip from this heartbeat in order to gain a true measure of
+        // steady-state size of the queues.
+        if let Some(m) = &mut self.metrics {
+            for sender_queue in self.handler_send_queues.values() {
+                m.observe_priority_queue_size(sender_queue.priority_len());
+                m.observe_non_priority_queue_size(sender_queue.non_priority_len());
+            }
+        }
+
         self.heartbeat_ticks += 1;
 
         let mut to_graft = HashMap::new();
