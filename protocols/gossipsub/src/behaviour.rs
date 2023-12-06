@@ -71,7 +71,7 @@ use crate::{
     metrics::{Churn, Config as MetricsConfig, Inclusion, Metrics, Penalty},
     types::IHave,
 };
-use crate::{rpc_proto::proto, TopicScoreParams};
+use crate::{rpc_proto::proto, FailedMessages, TopicScoreParams};
 use crate::{PublishError, SubscriptionError, ValidationError};
 use instant::SystemTime;
 use quick_protobuf::{MessageWrite, Writer};
@@ -153,6 +153,13 @@ pub enum Event {
     },
     /// A peer that does not support gossipsub has connected.
     GossipsubNotSupported { peer_id: PeerId },
+    /// A peer is not able to download messages in time.
+    SlowPeer {
+        /// The peer_id
+        peer_id: PeerId,
+        /// The types and amounts of failed messages that are occurring for this peer.
+        failed_messages: FailedMessages,
+    },
 }
 
 /// A data structure for storing configuration for publishing messages. See [`MessageAuthenticity`]
@@ -337,6 +344,9 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
 
     /// Connection handler message queue channels.
     handler_send_queues: HashMap<PeerId, RpcSender>,
+
+    /// Tracks the numbers of failed messages per peer-id.
+    failed_messages: HashMap<PeerId, FailedMessages>,
 }
 
 impl<D, F> Behaviour<D, F>
@@ -475,6 +485,7 @@ where
             subscription_filter,
             data_transform,
             handler_send_queues: Default::default(),
+            failed_messages: Default::default(),
         })
     }
 }
@@ -739,6 +750,14 @@ where
                 )
                 .is_err()
             {
+                self.failed_messages.entry(*peer_id).or_default().priority += 1;
+
+                tracing::warn!(peer=%peer_id, "Publish queue full. Could not publish to peer");
+                // Downscore the peer due to failed message.
+                if let Some((peer_score, ..)) = &mut self.peer_score {
+                    peer_score.failed_message_slow_peer(peer_id);
+                }
+
                 errors += 1;
             }
         }
@@ -1300,9 +1319,23 @@ where
                 .get_mut(peer_id)
                 .expect("Peerid should exist");
 
-            sender.iwant(IWant {
-                message_ids: iwant_ids_vec,
-            });
+            if sender
+                .iwant(IWant {
+                    message_ids: iwant_ids_vec,
+                })
+                .is_err()
+            {
+                tracing::warn!(peer=%peer_id, "Send Queue full. Could not send IWANT");
+
+                if let Some((peer_score, ..)) = &mut self.peer_score {
+                    peer_score.failed_message_slow_peer(peer_id);
+                }
+                // Increment failed message count
+                self.failed_messages
+                    .entry(*peer_id)
+                    .or_default()
+                    .non_priority += 1;
+            }
         }
         tracing::trace!(peer=%peer_id, "Completed IHAVE handling for peer");
     }
@@ -1343,11 +1376,24 @@ where
                         .get_mut(peer_id)
                         .expect("Peerid should exist");
 
-                    sender.forward(
-                        msg,
-                        self.config.forward_queue_duration(),
-                        self.metrics.as_mut(),
-                    );
+                    if sender
+                        .forward(
+                            msg,
+                            self.config.forward_queue_duration(),
+                            self.metrics.as_mut(),
+                        )
+                        .is_err()
+                    {
+                        // Downscore the peer
+                        if let Some((peer_score, ..)) = &mut self.peer_score {
+                            peer_score.failed_message_slow_peer(peer_id);
+                        }
+                        // Increment the failed message count
+                        self.failed_messages
+                            .entry(*peer_id)
+                            .or_default()
+                            .non_priority += 1;
+                    }
                 }
             }
         }
@@ -2442,6 +2488,17 @@ where
         // shift the memcache
         self.mcache.shift();
 
+        // Report expired messages
+        for (peer_id, failed_messages) in self.failed_messages.drain() {
+            tracing::debug!("Peer couldn't consume messages: {:?}", failed_messages);
+            self.events
+                .push_back(ToSwarm::GenerateEvent(Event::SlowPeer {
+                    peer_id,
+                    failed_messages,
+                }));
+        }
+        self.failed_messages.shrink_to_fit();
+
         tracing::debug!("Completed Heartbeat");
         if let Some(metrics) = self.metrics.as_mut() {
             let duration = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -2493,7 +2550,7 @@ where
 
             tracing::debug!("Gossiping IHAVE to {} peers", to_msg_peers.len());
 
-            for peer in to_msg_peers {
+            for peer_id in to_msg_peers {
                 let mut peer_message_ids = message_ids.clone();
 
                 if peer_message_ids.len() > self.config.max_ihave_length() {
@@ -2507,12 +2564,26 @@ where
                 // send an IHAVE message
                 let sender = self
                     .handler_send_queues
-                    .get_mut(&peer)
+                    .get_mut(&peer_id)
                     .expect("Peerid should exist");
-                sender.ihave(IHave {
-                    topic_hash: topic_hash.clone(),
-                    message_ids: peer_message_ids,
-                });
+                if sender
+                    .ihave(IHave {
+                        topic_hash: topic_hash.clone(),
+                        message_ids: peer_message_ids,
+                    })
+                    .is_err()
+                {
+                    tracing::warn!(peer=%peer_id, "Send Queue full. Could not send IHAVE");
+
+                    if let Some((peer_score, ..)) = &mut self.peer_score {
+                        peer_score.failed_message_slow_peer(&peer_id);
+                    }
+                    // Increment failed message count
+                    self.failed_messages
+                        .entry(peer_id)
+                        .or_default()
+                        .non_priority += 1;
+                }
             }
         }
     }
@@ -2666,17 +2737,30 @@ where
 
         // forward the message to peers
         if !recipient_peers.is_empty() {
-            for peer in recipient_peers.iter() {
-                tracing::debug!(%peer, message=%msg_id, "Sending message to peer");
+            for peer_id in recipient_peers.iter() {
+                tracing::debug!(%peer_id, message=%msg_id, "Sending message to peer");
                 let sender = self
                     .handler_send_queues
-                    .get_mut(peer)
+                    .get_mut(peer_id)
                     .expect("Peerid should exist");
-                sender.forward(
-                    message.clone(),
-                    self.config.forward_queue_duration(),
-                    self.metrics.as_mut(),
-                );
+                if sender
+                    .forward(
+                        message.clone(),
+                        self.config.forward_queue_duration(),
+                        self.metrics.as_mut(),
+                    )
+                    .is_err()
+                {
+                    // Downscore the peer
+                    if let Some((peer_score, ..)) = &mut self.peer_score {
+                        peer_score.failed_message_slow_peer(peer_id);
+                    }
+                    // Increment the failed message count
+                    self.failed_messages
+                        .entry(*peer_id)
+                        .or_default()
+                        .non_priority += 1;
+                }
             }
             tracing::debug!("Completed forwarding message");
             Ok(true)
@@ -3044,7 +3128,7 @@ where
         let sender = self
             .handler_send_queues
             .entry(peer_id)
-            .or_insert_with(|| RpcSender::new(peer_id, self.config.connection_handler_queue_len()));
+            .or_insert_with(|| RpcSender::new(self.config.connection_handler_queue_len()));
         Ok(Handler::new(
             self.config.protocol_config(),
             sender.new_receiver(),
@@ -3061,7 +3145,7 @@ where
         let sender = self
             .handler_send_queues
             .entry(peer_id)
-            .or_insert_with(|| RpcSender::new(peer_id, self.config.connection_handler_queue_len()));
+            .or_insert_with(|| RpcSender::new(self.config.connection_handler_queue_len()));
         Ok(Handler::new(
             self.config.protocol_config(),
             sender.new_receiver(),
@@ -3106,8 +3190,29 @@ where
                 }
             }
             HandlerEvent::MessageDropped(rpc) => {
-                // TODO:
-                // * Build scoring logic to handle peers that are dropping messages
+                // Account for this in the scoring logic
+                if let Some((peer_score, _, _, _)) = &mut self.peer_score {
+                    peer_score.failed_message_slow_peer(&propagation_source);
+                }
+
+                // Keep track of expired messages for the application layer.
+                match rpc {
+                    RpcOut::Publish { .. } => {
+                        self.failed_messages
+                            .entry(propagation_source)
+                            .or_default()
+                            .publish += 1;
+                    }
+                    RpcOut::Forward { .. } => {
+                        self.failed_messages
+                            .entry(propagation_source)
+                            .or_default()
+                            .forward += 1;
+                    }
+                    _ => {} //
+                }
+
+                // Record metrics on the failure.
                 if let Some(metrics) = self.metrics.as_mut() {
                     match rpc {
                         RpcOut::Publish { message, .. } => {

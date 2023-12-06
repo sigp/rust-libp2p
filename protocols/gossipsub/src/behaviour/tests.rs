@@ -230,7 +230,7 @@ where
         }
     };
 
-    let sender = RpcSender::new(peer, gs.config.connection_handler_queue_len());
+    let sender = RpcSender::new(gs.config.connection_handler_queue_len());
     let receiver = sender.new_receiver();
     gs.handler_send_queues.insert(peer, sender);
 
@@ -589,7 +589,7 @@ fn test_join() {
             )
             .unwrap();
         peers.push(peer);
-        let sender = RpcSender::new(random_peer, gs.config.connection_handler_queue_len());
+        let sender = RpcSender::new(gs.config.connection_handler_queue_len());
         let receiver = sender.new_receiver();
         gs.handler_send_queues.insert(random_peer, sender);
         receivers.insert(random_peer, receiver);
@@ -2522,6 +2522,10 @@ fn test_only_send_nonnegative_scoring_peers_in_px() {
 
 #[test]
 fn test_do_not_gossip_to_peers_below_gossip_threshold() {
+    use tracing_subscriber::EnvFilter;
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .try_init();
     let config = Config::default();
     let peer_score_params = PeerScoreParams::default();
     let peer_score_thresholds = PeerScoreThresholds {
