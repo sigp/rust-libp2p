@@ -315,33 +315,39 @@ fn proto_to_message(rpc: &proto::RPC) -> Rpc {
         let ihave_msgs: Vec<ControlAction> = rpc_control
             .ihave
             .into_iter()
-            .map(|ihave| ControlAction::IHave {
-                topic_hash: TopicHash::from_raw(ihave.topic_id.unwrap_or_default()),
-                message_ids: ihave
-                    .message_ids
-                    .into_iter()
-                    .map(MessageId::from)
-                    .collect::<Vec<_>>(),
+            .map(|ihave| {
+                ControlAction::IHave(IHave {
+                    topic_hash: TopicHash::from_raw(ihave.topic_id.unwrap_or_default()),
+                    message_ids: ihave
+                        .message_ids
+                        .into_iter()
+                        .map(MessageId::from)
+                        .collect::<Vec<_>>(),
+                })
             })
             .collect();
 
         let iwant_msgs: Vec<ControlAction> = rpc_control
             .iwant
             .into_iter()
-            .map(|iwant| ControlAction::IWant {
-                message_ids: iwant
-                    .message_ids
-                    .into_iter()
-                    .map(MessageId::from)
-                    .collect::<Vec<_>>(),
+            .map(|iwant| {
+                ControlAction::IWant(IWant {
+                    message_ids: iwant
+                        .message_ids
+                        .into_iter()
+                        .map(MessageId::from)
+                        .collect::<Vec<_>>(),
+                })
             })
             .collect();
 
         let graft_msgs: Vec<ControlAction> = rpc_control
             .graft
             .into_iter()
-            .map(|graft| ControlAction::Graft {
-                topic_hash: TopicHash::from_raw(graft.topic_id.unwrap_or_default()),
+            .map(|graft| {
+                ControlAction::Graft(Graft {
+                    topic_hash: TopicHash::from_raw(graft.topic_id.unwrap_or_default()),
+                })
             })
             .collect();
 
@@ -364,11 +370,11 @@ fn proto_to_message(rpc: &proto::RPC) -> Rpc {
                 .collect::<Vec<PeerInfo>>();
 
             let topic_hash = TopicHash::from_raw(prune.topic_id.unwrap_or_default());
-            prune_msgs.push(ControlAction::Prune {
+            prune_msgs.push(ControlAction::Prune(Prune {
                 topic_hash,
                 peers,
                 backoff: prune.backoff,
-            });
+            }));
         }
 
         control_msgs.extend(ihave_msgs);
@@ -515,11 +521,14 @@ fn test_join() {
         .map(|t| Topic::new(t.clone()))
         .collect::<Vec<Topic>>();
 
-    let (mut gs, _, _receivers, topic_hashes) = inject_nodes1()
+    let (mut gs, _, mut receivers, topic_hashes) = inject_nodes1()
         .peer_no(20)
         .topics(topic_strings)
         .to_subscribe(true)
         .create_network();
+
+    // Flush previous GRAFT messages.
+    flush_events(&mut gs, &receivers);
 
     // unsubscribe, then call join to invoke functionality
     assert!(
@@ -543,24 +552,20 @@ fn test_join() {
         "Should have added 6 nodes to the mesh"
     );
 
-    fn collect_grafts(
-        mut collected_grafts: Vec<ControlAction>,
-        (_, controls): (&PeerId, &Vec<ControlAction>),
-    ) -> Vec<ControlAction> {
-        for c in controls.iter() {
-            if let ControlAction::Graft { topic_hash: _ } = c {
-                collected_grafts.push(c.clone())
+    fn count_grafts(mut acc: usize, receiver: &RpcReceiver) -> usize {
+        while !receiver.priority.is_empty() || !receiver.non_priority.is_empty() {
+            if let Ok(RpcOut::Graft(_)) = receiver.priority.try_recv() {
+                acc += 1;
             }
         }
-        collected_grafts
+        acc
     }
 
     // there should be mesh_n GRAFT messages.
-    let graft_messages = gs.control_pool.iter().fold(vec![], collect_grafts);
+    let graft_messages = receivers.values().fold(0, count_grafts);
 
     assert_eq!(
-        graft_messages.len(),
-        6,
+        graft_messages, 6,
         "There should be 6 grafts messages sent to peers"
     );
 
@@ -584,6 +589,10 @@ fn test_join() {
             )
             .unwrap();
         peers.push(peer);
+        let sender = RpcSender::new(gs.config.connection_handler_queue_len());
+        let receiver = sender.new_receiver();
+        gs.handler_send_queues.insert(random_peer, sender);
+        receivers.insert(random_peer, receiver);
 
         gs.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
             peer_id: random_peer,
@@ -619,10 +628,10 @@ fn test_join() {
     }
 
     // there should now be 12 graft messages to be sent
-    let graft_messages = gs.control_pool.iter().fold(vec![], collect_grafts);
+    let graft_messages = receivers.values().fold(graft_messages, count_grafts);
 
-    assert!(
-        graft_messages.len() == 12,
+    assert_eq!(
+        graft_messages, 12,
         "There should be 12 grafts messages sent to peers"
     );
 }
@@ -1139,7 +1148,7 @@ fn test_handle_iwant_msg_not_cached() {
 #[test]
 // tests that an event is created when a peer shares that it has a message we want
 fn test_handle_ihave_subscribed_and_msg_not_cached() {
-    let (mut gs, peers, _, topic_hashes) = inject_nodes1()
+    let (mut gs, peers, receivers, topic_hashes) = inject_nodes1()
         .peer_no(20)
         .topics(vec![String::from("topic1")])
         .to_subscribe(true)
@@ -1151,15 +1160,19 @@ fn test_handle_ihave_subscribed_and_msg_not_cached() {
     );
 
     // check that we sent an IWANT request for `unknown id`
-    let iwant_exists = match gs.control_pool.get(&peers[7]) {
-        Some(controls) => controls.iter().any(|c| match c {
-            ControlAction::IWant { message_ids } => message_ids
+    let mut iwant_exists = false;
+    let receiver = receivers.get(&peers[7]).unwrap();
+    while !receiver.non_priority.is_empty() {
+        if let Ok(RpcOut::IWant(IWant { message_ids })) = receiver.non_priority.try_recv() {
+            if message_ids
                 .iter()
-                .any(|m| *m == MessageId::new(b"unknown id")),
-            _ => false,
-        }),
-        _ => false,
-    };
+                .any(|m| *m == MessageId::new(b"unknown id"))
+            {
+                iwant_exists = true;
+                break;
+            }
+        }
+    }
 
     assert!(
         iwant_exists,
@@ -1319,41 +1332,35 @@ fn test_handle_prune_peer_in_mesh() {
     );
 }
 
-fn count_control_msgs<D: DataTransform, F: TopicSubscriptionFilter>(
-    gs: &Behaviour<D, F>,
+fn count_control_msgs(
     queues: &HashMap<PeerId, RpcReceiver>,
-    mut filter: impl FnMut(&PeerId, &ControlAction) -> bool,
+    mut filter: impl FnMut(&PeerId, &RpcOut) -> bool,
 ) -> usize {
-    gs.control_pool
+    queues
         .iter()
-        .map(|(peer_id, actions)| actions.iter().filter(|m| filter(peer_id, m)).count())
-        .sum::<usize>()
-        + queues
-            .iter()
-            .fold(0, |mut collected_messages, (peer_id, c)| {
-                while !c.priority.is_empty() || !c.non_priority.is_empty() {
-                    if let Ok(RpcOut::Control(action)) = c.priority.try_recv() {
-                        if filter(peer_id, &action) {
-                            collected_messages += 1;
-                        }
-                    }
-                    if let Ok(RpcOut::Control(action)) = c.non_priority.try_recv() {
-                        if filter(peer_id, &action) {
-                            collected_messages += 1;
-                        }
+        .fold(0, |mut collected_messages, (peer_id, c)| {
+            while !c.priority.is_empty() || !c.non_priority.is_empty() {
+                if let Ok(rpc) = c.priority.try_recv() {
+                    if filter(peer_id, &rpc) {
+                        collected_messages += 1;
                     }
                 }
-                collected_messages
-            })
+                if let Ok(rpc) = c.non_priority.try_recv() {
+                    if filter(peer_id, &rpc) {
+                        collected_messages += 1;
+                    }
+                }
+            }
+            collected_messages
+        })
 }
 
 fn flush_events<D: DataTransform, F: TopicSubscriptionFilter>(
     gs: &mut Behaviour<D, F>,
-    receiver_queues: &mut HashMap<PeerId, RpcReceiver>,
+    receiver_queues: &HashMap<PeerId, RpcReceiver>,
 ) {
-    gs.control_pool.clear();
     gs.events.clear();
-    for c in receiver_queues.values_mut() {
+    for c in receiver_queues.values() {
         while !c.priority.is_empty() || !c.non_priority.is_empty() {
             let _ = c.priority.try_recv();
             let _ = c.non_priority.try_recv();
@@ -1397,7 +1404,7 @@ fn test_explicit_peer_reconnects() {
         .check_explicit_peers_ticks(2)
         .build()
         .unwrap();
-    let (mut gs, others, mut queues, _) = inject_nodes1()
+    let (mut gs, others, queues, _) = inject_nodes1()
         .peer_no(1)
         .topics(Vec::new())
         .to_subscribe(true)
@@ -1409,7 +1416,7 @@ fn test_explicit_peer_reconnects() {
     //add peer as explicit peer
     gs.add_explicit_peer(peer);
 
-    flush_events(&mut gs, &mut queues);
+    flush_events(&mut gs, &queues);
 
     //disconnect peer
     disconnect_peer(&mut gs, peer);
@@ -1465,9 +1472,9 @@ fn test_handle_graft_explicit_peer() {
 
     //check prunes
     assert!(
-        count_control_msgs(&gs, &queues, |peer_id, m| peer_id == peer
+        count_control_msgs(&queues, |peer_id, m| peer_id == peer
             && match m {
-                ControlAction::Prune { topic_hash, .. } =>
+                RpcOut::Prune(Prune { topic_hash, .. }) =>
                     topic_hash == &topic_hashes[0] || topic_hash == &topic_hashes[1],
                 _ => false,
             })
@@ -1494,16 +1501,16 @@ fn explicit_peers_not_added_to_mesh_on_receiving_subscription() {
 
     //assert that graft gets created to non-explicit peer
     assert!(
-        count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[1]
-            && matches!(m, ControlAction::Graft { .. }))
+        count_control_msgs(&queues, |peer_id, m| peer_id == &peers[1]
+            && matches!(m, RpcOut::Graft { .. }))
             >= 1,
         "No graft message got created to non-explicit peer"
     );
 
     //assert that no graft gets created to explicit peer
     assert_eq!(
-        count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[0]
-            && matches!(m, ControlAction::Graft { .. })),
+        count_control_msgs(&queues, |peer_id, m| peer_id == &peers[0]
+            && matches!(m, RpcOut::Graft { .. })),
         0,
         "A graft message got created to an explicit peer"
     );
@@ -1526,8 +1533,8 @@ fn do_not_graft_explicit_peer() {
 
     //assert that no graft gets created to explicit peer
     assert_eq!(
-        count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &others[0]
-            && matches!(m, ControlAction::Graft { .. })),
+        count_control_msgs(&queues, |peer_id, m| peer_id == &others[0]
+            && matches!(m, RpcOut::Graft { .. })),
         0,
         "A graft message got created to an explicit peer"
     );
@@ -1600,16 +1607,16 @@ fn explicit_peers_not_added_to_mesh_on_subscribe() {
 
     //assert that graft gets created to non-explicit peer
     assert!(
-        count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[1]
-            && matches!(m, ControlAction::Graft { .. }))
+        count_control_msgs(&queues, |peer_id, m| peer_id == &peers[1]
+            && matches!(m, RpcOut::Graft { .. }))
             > 0,
         "No graft message got created to non-explicit peer"
     );
 
     //assert that no graft gets created to explicit peer
     assert_eq!(
-        count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[0]
-            && matches!(m, ControlAction::Graft { .. })),
+        count_control_msgs(&queues, |peer_id, m| peer_id == &peers[0]
+            && matches!(m, RpcOut::Graft { .. })),
         0,
         "A graft message got created to an explicit peer"
     );
@@ -1649,16 +1656,16 @@ fn explicit_peers_not_added_to_mesh_from_fanout_on_subscribe() {
 
     //assert that graft gets created to non-explicit peer
     assert!(
-        count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[1]
-            && matches!(m, ControlAction::Graft { .. }))
+        count_control_msgs(&queues, |peer_id, m| peer_id == &peers[1]
+            && matches!(m, RpcOut::Graft { .. }))
             >= 1,
         "No graft message got created to non-explicit peer"
     );
 
     //assert that no graft gets created to explicit peer
     assert_eq!(
-        count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[0]
-            && matches!(m, ControlAction::Graft { .. })),
+        count_control_msgs(&queues, |peer_id, m| peer_id == &peers[0]
+            && matches!(m, RpcOut::Graft { .. })),
         0,
         "A graft message got created to an explicit peer"
     );
@@ -1666,7 +1673,7 @@ fn explicit_peers_not_added_to_mesh_from_fanout_on_subscribe() {
 
 #[test]
 fn no_gossip_gets_sent_to_explicit_peers() {
-    let (mut gs, peers, _, topic_hashes) = inject_nodes1()
+    let (mut gs, peers, receivers, topic_hashes) = inject_nodes1()
         .peer_no(2)
         .topics(vec![String::from("topic1"), String::from("topic2")])
         .to_subscribe(true)
@@ -1695,16 +1702,14 @@ fn no_gossip_gets_sent_to_explicit_peers() {
     }
 
     //assert that no gossip gets sent to explicit peer
-    assert_eq!(
-        gs.control_pool
-            .get(&peers[0])
-            .unwrap_or(&Vec::new())
-            .iter()
-            .filter(|m| matches!(m, ControlAction::IHave { .. }))
-            .count(),
-        0,
-        "Gossip got emitted to explicit peer"
-    );
+    let receiver = receivers.get(&peers[0]).unwrap();
+    let mut gossips = 0;
+    while !receiver.non_priority.is_empty() {
+        if let Ok(RpcOut::IHave(_)) = receiver.non_priority.try_recv() {
+            gossips += 1;
+        }
+    }
+    assert_eq!(gossips, 0, "Gossip got emitted to explicit peer");
 }
 
 // Tests the mesh maintenance addition
@@ -1846,13 +1851,13 @@ fn test_send_px_and_backoff_in_prune() {
 
     //check prune message
     assert_eq!(
-        count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[0]
+        count_control_msgs(&queues, |peer_id, m| peer_id == &peers[0]
             && match m {
-                ControlAction::Prune {
+                RpcOut::Prune(Prune {
                     topic_hash,
                     peers,
                     backoff,
-                } =>
+                }) =>
                     topic_hash == &topics[0] &&
                     peers.len() == config.prune_peers() &&
                     //all peers are different
@@ -1870,7 +1875,7 @@ fn test_prune_backoffed_peer_on_graft() {
     let config: Config = Config::default();
 
     //build mesh with enough peers for px
-    let (mut gs, peers, mut queues, topics) = inject_nodes1()
+    let (mut gs, peers, queues, topics) = inject_nodes1()
         .peer_no(config.prune_peers() + 1)
         .topics(vec!["test".into()])
         .to_subscribe(true)
@@ -1887,20 +1892,20 @@ fn test_prune_backoffed_peer_on_graft() {
     );
 
     //ignore all messages until now
-    flush_events(&mut gs, &mut queues);
+    flush_events(&mut gs, &queues);
 
     //handle graft
     gs.handle_graft(&peers[0], vec![topics[0].clone()]);
 
     //check prune message
     assert_eq!(
-        count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[0]
+        count_control_msgs(&queues, |peer_id, m| peer_id == &peers[0]
             && match m {
-                ControlAction::Prune {
+                RpcOut::Prune(Prune {
                     topic_hash,
                     peers,
                     backoff,
-                } =>
+                }) =>
                     topic_hash == &topics[0] &&
                     //no px in this case
                     peers.is_empty() &&
@@ -1919,7 +1924,7 @@ fn test_do_not_graft_within_backoff_period() {
         .build()
         .unwrap();
     //only one peer => mesh too small and will try to regraft as early as possible
-    let (mut gs, peers, mut queues, topics) = inject_nodes1()
+    let (mut gs, peers, queues, topics) = inject_nodes1()
         .peer_no(1)
         .topics(vec!["test".into()])
         .to_subscribe(true)
@@ -1930,7 +1935,7 @@ fn test_do_not_graft_within_backoff_period() {
     gs.handle_prune(&peers[0], vec![(topics[0].clone(), Vec::new(), Some(1))]);
 
     //forget all events until now
-    flush_events(&mut gs, &mut queues);
+    flush_events(&mut gs, &queues);
 
     //call heartbeat
     gs.heartbeat();
@@ -1944,10 +1949,7 @@ fn test_do_not_graft_within_backoff_period() {
     //Check that no graft got created (we have backoff_slack = 1 therefore one more heartbeat
     // is needed).
     assert_eq!(
-        count_control_msgs(&gs, &queues, |_, m| matches!(
-            m,
-            ControlAction::Graft { .. }
-        )),
+        count_control_msgs(&queues, |_, m| matches!(m, RpcOut::Graft { .. })),
         0,
         "Graft message created too early within backoff period"
     );
@@ -1958,10 +1960,7 @@ fn test_do_not_graft_within_backoff_period() {
 
     //check that graft got created
     assert!(
-        count_control_msgs(&gs, &queues, |_, m| matches!(
-            m,
-            ControlAction::Graft { .. }
-        )) > 0,
+        count_control_msgs(&queues, |_, m| matches!(m, RpcOut::Graft { .. })) > 0,
         "No graft message was created after backoff period"
     );
 }
@@ -1976,7 +1975,7 @@ fn test_do_not_graft_within_default_backoff_period_after_receiving_prune_without
         .build()
         .unwrap();
     //only one peer => mesh too small and will try to regraft as early as possible
-    let (mut gs, peers, mut queues, topics) = inject_nodes1()
+    let (mut gs, peers, queues, topics) = inject_nodes1()
         .peer_no(1)
         .topics(vec!["test".into()])
         .to_subscribe(true)
@@ -1987,7 +1986,7 @@ fn test_do_not_graft_within_default_backoff_period_after_receiving_prune_without
     gs.handle_prune(&peers[0], vec![(topics[0].clone(), Vec::new(), None)]);
 
     //forget all events until now
-    flush_events(&mut gs, &mut queues);
+    flush_events(&mut gs, &queues);
 
     //call heartbeat
     gs.heartbeat();
@@ -1999,10 +1998,7 @@ fn test_do_not_graft_within_default_backoff_period_after_receiving_prune_without
     //Check that no graft got created (we have backoff_slack = 1 therefore one more heartbeat
     // is needed).
     assert_eq!(
-        count_control_msgs(&gs, &queues, |_, m| matches!(
-            m,
-            ControlAction::Graft { .. }
-        )),
+        count_control_msgs(&queues, |_, m| matches!(m, RpcOut::Graft { .. })),
         0,
         "Graft message created too early within backoff period"
     );
@@ -2013,10 +2009,7 @@ fn test_do_not_graft_within_default_backoff_period_after_receiving_prune_without
 
     //check that graft got created
     assert!(
-        count_control_msgs(&gs, &queues, |_, m| matches!(
-            m,
-            ControlAction::Graft { .. }
-        )) > 0,
+        count_control_msgs(&queues, |_, m| matches!(m, RpcOut::Graft { .. })) > 0,
         "No graft message was created after backoff period"
     );
 }
@@ -2035,7 +2028,7 @@ fn test_unsubscribe_backoff() {
 
     let topic = String::from("test");
     // only one peer => mesh too small and will try to regraft as early as possible
-    let (mut gs, _, mut queues, topics) = inject_nodes1()
+    let (mut gs, _, queues, topics) = inject_nodes1()
         .peer_no(1)
         .topics(vec![topic.clone()])
         .to_subscribe(true)
@@ -2045,8 +2038,8 @@ fn test_unsubscribe_backoff() {
     let _ = gs.unsubscribe(&Topic::new(topic));
 
     assert_eq!(
-        count_control_msgs(&gs, &queues, |_, m| match m {
-            ControlAction::Prune { backoff, .. } => backoff == &Some(1),
+        count_control_msgs(&queues, |_, m| match m {
+            RpcOut::Prune(Prune { backoff, .. }) => backoff == &Some(1),
             _ => false,
         }),
         1,
@@ -2056,7 +2049,7 @@ fn test_unsubscribe_backoff() {
     let _ = gs.subscribe(&Topic::new(topics[0].to_string()));
 
     // forget all events until now
-    flush_events(&mut gs, &mut queues);
+    flush_events(&mut gs, &queues);
 
     // call heartbeat
     gs.heartbeat();
@@ -2070,10 +2063,7 @@ fn test_unsubscribe_backoff() {
     // Check that no graft got created (we have backoff_slack = 1 therefore one more heartbeat
     // is needed).
     assert_eq!(
-        count_control_msgs(&gs, &queues, |_, m| matches!(
-            m,
-            ControlAction::Graft { .. }
-        )),
+        count_control_msgs(&queues, |_, m| matches!(m, RpcOut::Graft { .. })),
         0,
         "Graft message created too early within backoff period"
     );
@@ -2084,10 +2074,7 @@ fn test_unsubscribe_backoff() {
 
     // check that graft got created
     assert!(
-        count_control_msgs(&gs, &queues, |_, m| matches!(
-            m,
-            ControlAction::Graft { .. }
-        )) > 0,
+        count_control_msgs(&queues, |_, m| matches!(m, RpcOut::Graft { .. })) > 0,
         "No graft message was created after backoff period"
     );
 }
@@ -2180,11 +2167,11 @@ fn test_gossip_to_at_least_gossip_lazy_peers() {
 
     //check that exactly config.gossip_lazy() many gossip messages were sent.
     assert_eq!(
-        count_control_msgs(&gs, &queues, |_, action| match action {
-            ControlAction::IHave {
+        count_control_msgs(&queues, |_, action| match action {
+            RpcOut::IHave(IHave {
                 topic_hash,
                 message_ids,
-            } => topic_hash == &topic_hashes[0] && message_ids.iter().any(|id| id == &msg_id),
+            }) => topic_hash == &topic_hashes[0] && message_ids.iter().any(|id| id == &msg_id),
             _ => false,
         }),
         config.gossip_lazy()
@@ -2224,11 +2211,11 @@ fn test_gossip_to_at_most_gossip_factor_peers() {
     let msg_id = gs.config.message_id(message);
     //check that exactly config.gossip_lazy() many gossip messages were sent.
     assert_eq!(
-        count_control_msgs(&gs, &queues, |_, action| match action {
-            ControlAction::IHave {
+        count_control_msgs(&queues, |_, action| match action {
+            RpcOut::IHave(IHave {
                 topic_hash,
                 message_ids,
-            } => topic_hash == &topic_hashes[0] && message_ids.iter().any(|id| id == &msg_id),
+            }) => topic_hash == &topic_hashes[0] && message_ids.iter().any(|id| id == &msg_id),
             _ => false,
         }),
         ((m - config.mesh_n_low()) as f64 * config.gossip_factor()) as usize
@@ -2383,13 +2370,13 @@ fn test_prune_negative_scored_peers() {
 
     //check prune message
     assert_eq!(
-        count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[0]
+        count_control_msgs(&queues, |peer_id, m| peer_id == &peers[0]
             && match m {
-                ControlAction::Prune {
+                RpcOut::Prune(Prune {
                     topic_hash,
                     peers,
                     backoff,
-                } =>
+                }) =>
                     topic_hash == &topics[0] &&
                     //no px in this case
                     peers.is_empty() &&
@@ -2517,13 +2504,13 @@ fn test_only_send_nonnegative_scoring_peers_in_px() {
 
     // Check that px in prune message only contains third peer
     assert_eq!(
-        count_control_msgs(&gs, &queues, |peer_id, m| peer_id == &peers[1]
+        count_control_msgs(&queues, |peer_id, m| peer_id == &peers[1]
             && match m {
-                ControlAction::Prune {
+                RpcOut::Prune(Prune {
                     topic_hash,
                     peers: px,
                     ..
-                } =>
+                }) =>
                     topic_hash == &topics[0]
                         && px.len() == 1
                         && px[0].peer_id.as_ref().unwrap() == &peers[2],
@@ -2547,7 +2534,7 @@ fn test_do_not_gossip_to_peers_below_gossip_threshold() {
     };
 
     // Build full mesh
-    let (mut gs, peers, queues, topics) = inject_nodes1()
+    let (mut gs, peers, mut receivers, topics) = inject_nodes1()
         .peer_no(config.mesh_n_high())
         .topics(vec!["test".into()])
         .to_subscribe(true)
@@ -2561,8 +2548,10 @@ fn test_do_not_gossip_to_peers_below_gossip_threshold() {
     }
 
     // Add two additional peers that will not be part of the mesh
-    let (p1, _receiver1) = add_peer(&mut gs, &topics, false, false);
-    let (p2, _receiver2) = add_peer(&mut gs, &topics, false, false);
+    let (p1, receiver1) = add_peer(&mut gs, &topics, false, false);
+    receivers.insert(p1, receiver1);
+    let (p2, receiver2) = add_peer(&mut gs, &topics, false, false);
+    receivers.insert(p2, receiver2);
 
     // Reduce score of p1 below peer_score_thresholds.gossip_threshold
     // note that penalties get squared so two penalties means a score of
@@ -2594,11 +2583,11 @@ fn test_do_not_gossip_to_peers_below_gossip_threshold() {
 
     // Check that exactly one gossip messages got sent and it got sent to p2
     assert_eq!(
-        count_control_msgs(&gs, &queues, |peer, action| match action {
-            ControlAction::IHave {
+        count_control_msgs(&receivers, |peer, action| match action {
+            RpcOut::IHave(IHave {
                 topic_hash,
                 message_ids,
-            } => {
+            }) => {
                 if topic_hash == &topics[0] && message_ids.iter().any(|id| id == &msg_id) {
                     assert_eq!(peer, &p2);
                     true
@@ -2710,7 +2699,7 @@ fn test_ihave_msg_from_peer_below_gossip_threshold_gets_ignored() {
         ..PeerScoreThresholds::default()
     };
     //build full mesh
-    let (mut gs, peers, queues, topics) = inject_nodes1()
+    let (mut gs, peers, mut queues, topics) = inject_nodes1()
         .peer_no(config.mesh_n_high())
         .topics(vec!["test".into()])
         .to_subscribe(true)
@@ -2726,8 +2715,10 @@ fn test_ihave_msg_from_peer_below_gossip_threshold_gets_ignored() {
     }
 
     //add two additional peers that will not be part of the mesh
-    let (p1, _receiver1) = add_peer(&mut gs, &topics, false, false);
-    let (p2, _receiver2) = add_peer(&mut gs, &topics, false, false);
+    let (p1, receiver1) = add_peer(&mut gs, &topics, false, false);
+    queues.insert(p1, receiver1);
+    let (p2, receiver2) = add_peer(&mut gs, &topics, false, false);
+    queues.insert(p2, receiver2);
 
     //reduce score of p1 below peer_score_thresholds.gossip_threshold
     //note that penalties get squared so two penalties means a score of
@@ -2758,8 +2749,8 @@ fn test_ihave_msg_from_peer_below_gossip_threshold_gets_ignored() {
 
     // check that we sent exactly one IWANT request to p2
     assert_eq!(
-        count_control_msgs(&gs, &queues, |peer, c| match c {
-            ControlAction::IWant { message_ids } =>
+        count_control_msgs(&queues, |peer, c| match c {
+            RpcOut::IWant(IWant { message_ids }) =>
                 if message_ids.iter().any(|m| m == &msg_id) {
                     assert_eq!(peer, &p2);
                     true
@@ -2968,10 +2959,10 @@ fn test_ignore_rpc_from_peers_below_graylist_threshold() {
         topic_hash: topics[0].clone(),
     };
 
-    let control_action = ControlAction::IHave {
+    let control_action = ControlAction::IHave(IHave {
         topic_hash: topics[0].clone(),
         message_ids: vec![config.message_id(message2)],
-    };
+    });
 
     //clear events
     gs.events.clear();
@@ -2997,10 +2988,10 @@ fn test_ignore_rpc_from_peers_below_graylist_threshold() {
         ToSwarm::GenerateEvent(Event::Subscribed { .. })
     ));
 
-    let control_action = ControlAction::IHave {
+    let control_action = ControlAction::IHave(IHave {
         topic_hash: topics[0].clone(),
         message_ids: vec![config.message_id(message4)],
-    };
+    });
 
     //receive from p2
     gs.on_connection_handler_event(
@@ -4352,10 +4343,7 @@ fn test_ignore_graft_from_unknown_topic() {
 
     //assert that no prune got created
     assert_eq!(
-        count_control_msgs(&gs, &queues, |_, a| matches!(
-            a,
-            ControlAction::Prune { .. }
-        )),
+        count_control_msgs(&queues, |_, a| matches!(a, RpcOut::Prune { .. })),
         0,
         "we should not prune after graft in unknown topic"
     );
@@ -4387,7 +4375,7 @@ fn test_ignore_too_many_iwants_from_same_peer_for_same_message() {
     gs.handle_received_message(m1, &PeerId::random());
 
     //clear events
-    flush_events(&mut gs, &mut queues);
+    flush_events(&mut gs, &queues);
 
     //the first gossip_retransimission many iwants return the valid message, all others are
     // ignored.
@@ -4416,7 +4404,7 @@ fn test_ignore_too_many_ihaves() {
         .build()
         .unwrap();
     //build gossipsub with full mesh
-    let (mut gs, _, mut queues, topics) = inject_nodes1()
+    let (mut gs, _, mut receivers, topics) = inject_nodes1()
         .peer_no(config.mesh_n_high())
         .topics(vec!["test".into()])
         .to_subscribe(false)
@@ -4425,7 +4413,7 @@ fn test_ignore_too_many_ihaves() {
 
     //add another peer not in the mesh
     let (peer, receiver) = add_peer(&mut gs, &topics, false, false);
-    queues.insert(peer, receiver);
+    receivers.insert(peer, receiver);
 
     //peer has 20 messages
     let mut seq = 0;
@@ -4454,14 +4442,15 @@ fn test_ignore_too_many_ihaves() {
 
     //we send iwant only for the first 10 messages
     assert_eq!(
-        count_control_msgs(&gs, &queues, |p, action| p == &peer
-            && matches!(action, ControlAction::IWant { message_ids } if message_ids.len() == 1 && first_ten.contains(&message_ids[0]))),
+        count_control_msgs(&receivers, |p, action| p == &peer
+            && matches!(action, RpcOut::IWant(IWant { message_ids }) if message_ids.len() == 1 && first_ten.contains(&message_ids[0]))),
         10,
         "exactly the first ten ihaves should be processed and one iwant for each created"
     );
 
     //after a heartbeat everything is forgotten
     gs.heartbeat();
+
     for raw_message in messages[10..].iter() {
         // Transform the inbound message
         let message = &gs
@@ -4475,11 +4464,11 @@ fn test_ignore_too_many_ihaves() {
         );
     }
 
-    //we sent iwant for all 20 messages
+    //we sent iwant for all 10 messages
     assert_eq!(
-        count_control_msgs(&gs, &queues, |p, action| p == &peer
-            && matches!(action, ControlAction::IWant { message_ids } if message_ids.len() == 1)),
-        20,
+        count_control_msgs(&receivers, |p, action| p == &peer
+            && matches!(action, RpcOut::IWant(IWant { message_ids }) if message_ids.len() == 1)),
+        10,
         "all 20 should get sent"
     );
 }
@@ -4527,13 +4516,14 @@ fn test_ignore_too_many_messages_in_ihave() {
     //we send iwant only for the first 10 messages
     let mut sum = 0;
     assert_eq!(
-        count_control_msgs(&gs, &queues, |p, action| match action {
-            ControlAction::IWant { message_ids } =>
+        count_control_msgs(&queues, |p, rpc| match rpc {
+            RpcOut::IWant(IWant { message_ids }) => {
                 p == &peer && {
                     assert!(first_twelve.is_superset(&message_ids.iter().collect()));
                     sum += message_ids.len();
                     true
-                },
+                }
+            }
             _ => false,
         }),
         2,
@@ -4549,20 +4539,23 @@ fn test_ignore_too_many_messages_in_ihave() {
         vec![(topics[0].clone(), message_ids[10..20].to_vec())],
     );
 
-    //we sent 20 iwant messages
+    //we sent 10 iwant messages ids via a IWANT rpc.
     let mut sum = 0;
     assert_eq!(
-        count_control_msgs(&gs, &queues, |p, action| match action {
-            ControlAction::IWant { message_ids } =>
-                p == &peer && {
-                    sum += message_ids.len();
-                    true
-                },
-            _ => false,
+        count_control_msgs(&queues, |p, rpc| {
+            match rpc {
+                RpcOut::IWant(IWant { message_ids }) => {
+                    p == &peer && {
+                        sum += message_ids.len();
+                        true
+                    }
+                }
+                _ => false,
+            }
         }),
-        3
+        1
     );
-    assert_eq!(sum, 20, "exactly 20 iwants should get sent");
+    assert_eq!(sum, 10, "exactly 20 iwants should get sent");
 }
 
 #[test]
@@ -4573,7 +4566,7 @@ fn test_limit_number_of_message_ids_inside_ihave() {
         .build()
         .unwrap();
     //build gossipsub with full mesh
-    let (mut gs, peers, queues, topics) = inject_nodes1()
+    let (mut gs, peers, mut receivers, topics) = inject_nodes1()
         .peer_no(config.mesh_n_high())
         .topics(vec!["test".into()])
         .to_subscribe(false)
@@ -4586,8 +4579,10 @@ fn test_limit_number_of_message_ids_inside_ihave() {
     }
 
     //add two other peers not in the mesh
-    let (p1, _) = add_peer(&mut gs, &topics, false, false);
-    let (p2, _) = add_peer(&mut gs, &topics, false, false);
+    let (p1, receiver1) = add_peer(&mut gs, &topics, false, false);
+    receivers.insert(p1, receiver1);
+    let (p2, receiver2) = add_peer(&mut gs, &topics, false, false);
+    receivers.insert(p2, receiver2);
 
     //receive 200 messages from another peer
     let mut seq = 0;
@@ -4606,8 +4601,8 @@ fn test_limit_number_of_message_ids_inside_ihave() {
     let mut ihaves2 = HashSet::new();
 
     assert_eq!(
-        count_control_msgs(&gs, &queues, |p, action| match action {
-            ControlAction::IHave { message_ids, .. } => {
+        count_control_msgs(&receivers, |p, action| match action {
+            RpcOut::IHave(IHave { message_ids, .. }) => {
                 if p == &p1 {
                     ihaves1 = message_ids.iter().cloned().collect();
                     true
@@ -4941,8 +4936,8 @@ fn test_dont_send_px_to_old_gossipsub_peers() {
 
     //check that prune does not contain px
     assert_eq!(
-        count_control_msgs(&gs, &queues, |_, m| match m {
-            ControlAction::Prune { peers: px, .. } => !px.is_empty(),
+        count_control_msgs(&queues, |_, m| match m {
+            RpcOut::Prune(Prune { peers: px, .. }) => !px.is_empty(),
             _ => false,
         }),
         0,
@@ -4979,8 +4974,8 @@ fn test_dont_send_floodsub_peers_in_px() {
 
     //check that px in prune message is empty
     assert_eq!(
-        count_control_msgs(&gs, &queues, |_, m| match m {
-            ControlAction::Prune { peers: px, .. } => !px.is_empty(),
+        count_control_msgs(&queues, |_, m| match m {
+            RpcOut::Prune(Prune { peers: px, .. }) => !px.is_empty(),
             _ => false,
         }),
         0,

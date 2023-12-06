@@ -233,8 +233,8 @@ pub enum SubscriptionAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PeerInfo {
-    pub peer_id: Option<PeerId>,
+pub(crate) struct PeerInfo {
+    pub(crate) peer_id: Option<PeerId>,
     //TODO add this when RFC: Signed Address Records got added to the spec (see pull request
     // https://github.com/libp2p/specs/pull/217)
     //pub signed_peer_record: ?,
@@ -244,31 +244,47 @@ pub struct PeerInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ControlAction {
     /// Node broadcasts known messages per topic - IHave control message.
-    IHave {
-        /// The topic of the messages.
-        topic_hash: TopicHash,
-        /// A list of known message ids (peer_id + sequence _number) as a string.
-        message_ids: Vec<MessageId>,
-    },
+    IHave(IHave),
     /// The node requests specific message ids (peer_id + sequence _number) - IWant control message.
-    IWant {
-        /// A list of known message ids (peer_id + sequence _number) as a string.
-        message_ids: Vec<MessageId>,
-    },
+    IWant(IWant),
     /// The node has been added to the mesh - Graft control message.
-    Graft {
-        /// The mesh topic the peer should be added to.
-        topic_hash: TopicHash,
-    },
+    Graft(Graft),
     /// The node has been removed from the mesh - Prune control message.
-    Prune {
-        /// The mesh topic the peer should be removed from.
-        topic_hash: TopicHash,
-        /// A list of peers to be proposed to the removed peer as peer exchange
-        peers: Vec<PeerInfo>,
-        /// The backoff time in seconds before we allow to reconnect
-        backoff: Option<u64>,
-    },
+    Prune(Prune),
+}
+
+/// Node broadcasts known messages per topic - IHave control message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IHave {
+    /// The topic of the messages.
+    pub(crate) topic_hash: TopicHash,
+    /// A list of known message ids (peer_id + sequence _number) as a string.
+    pub(crate) message_ids: Vec<MessageId>,
+}
+
+/// The node requests specific message ids (peer_id + sequence _number) - IWant control message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IWant {
+    /// A list of known message ids (peer_id + sequence _number) as a string.
+    pub(crate) message_ids: Vec<MessageId>,
+}
+
+/// The node has been added to the mesh - Graft control message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Graft {
+    /// The mesh topic the peer should be added to.
+    pub(crate) topic_hash: TopicHash,
+}
+
+/// The node has been removed from the mesh - Prune control message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Prune {
+    /// The mesh topic the peer should be removed from.
+    pub(crate) topic_hash: TopicHash,
+    /// A list of peers to be proposed to the removed peer as peer exchange
+    pub(crate) peers: Vec<PeerInfo>,
+    /// The backoff time in seconds before we allow to reconnect
+    pub(crate) backoff: Option<u64>,
 }
 
 /// A Gossipsub RPC message sent.
@@ -284,8 +300,14 @@ pub enum RpcOut {
     Subscribe(TopicHash),
     /// Unsubscribe a topic.
     Unsubscribe(TopicHash),
-    /// List of Gossipsub control messages.
-    Control(ControlAction),
+    /// Send a GRAFT control message.
+    Graft(Graft),
+    /// Send a PRUNE control message.
+    Prune(Prune),
+    /// Send a IHave control message.
+    IHave(IHave),
+    /// Send a IWant control message.
+    IWant(IWant),
 }
 
 impl RpcOut {
@@ -332,7 +354,7 @@ impl From<RpcOut> for proto::RPC {
                 }],
                 control: None,
             },
-            RpcOut::Control(ControlAction::IHave {
+            RpcOut::IHave(IHave {
                 topic_hash,
                 message_ids,
             }) => proto::RPC {
@@ -348,7 +370,7 @@ impl From<RpcOut> for proto::RPC {
                     prune: vec![],
                 }),
             },
-            RpcOut::Control(ControlAction::IWant { message_ids }) => proto::RPC {
+            RpcOut::IWant(IWant { message_ids }) => proto::RPC {
                 publish: Vec::new(),
                 subscriptions: Vec::new(),
                 control: Some(proto::ControlMessage {
@@ -360,7 +382,7 @@ impl From<RpcOut> for proto::RPC {
                     prune: vec![],
                 }),
             },
-            RpcOut::Control(ControlAction::Graft { topic_hash }) => proto::RPC {
+            RpcOut::Graft(Graft { topic_hash }) => proto::RPC {
                 publish: Vec::new(),
                 subscriptions: vec![],
                 control: Some(proto::ControlMessage {
@@ -372,7 +394,7 @@ impl From<RpcOut> for proto::RPC {
                     prune: vec![],
                 }),
             },
-            RpcOut::Control(ControlAction::Prune {
+            RpcOut::Prune(Prune {
                 topic_hash,
                 peers,
                 backoff,
@@ -464,33 +486,33 @@ impl From<Rpc> for proto::RPC {
         for action in rpc.control_msgs {
             match action {
                 // collect all ihave messages
-                ControlAction::IHave {
+                ControlAction::IHave(IHave {
                     topic_hash,
                     message_ids,
-                } => {
+                }) => {
                     let rpc_ihave = proto::ControlIHave {
                         topic_id: Some(topic_hash.into_string()),
                         message_ids: message_ids.into_iter().map(|msg_id| msg_id.0).collect(),
                     };
                     control.ihave.push(rpc_ihave);
                 }
-                ControlAction::IWant { message_ids } => {
+                ControlAction::IWant(IWant { message_ids }) => {
                     let rpc_iwant = proto::ControlIWant {
                         message_ids: message_ids.into_iter().map(|msg_id| msg_id.0).collect(),
                     };
                     control.iwant.push(rpc_iwant);
                 }
-                ControlAction::Graft { topic_hash } => {
+                ControlAction::Graft(Graft { topic_hash }) => {
                     let rpc_graft = proto::ControlGraft {
                         topic_id: Some(topic_hash.into_string()),
                     };
                     control.graft.push(rpc_graft);
                 }
-                ControlAction::Prune {
+                ControlAction::Prune(Prune {
                     topic_hash,
                     peers,
                     backoff,
-                } => {
+                }) => {
                     let rpc_prune = proto::ControlPrune {
                         topic_id: Some(topic_hash.into_string()),
                         peers: peers
@@ -594,12 +616,38 @@ impl RpcSender {
         self.receiver.clone()
     }
 
-    /// Send a `RpcOut::Control` message to the `RpcReceiver`
+    /// Send a `RpcOut::Graft` message to the `RpcReceiver`
     /// this is high priority.
-    pub(crate) fn control(&mut self, control: ControlAction) {
+    pub(crate) fn graft(&mut self, graft: Graft) {
         self.priority
-            .try_send(RpcOut::Control(control))
+            .try_send(RpcOut::Graft(graft))
             .expect("Channel is unbounded and should always be open");
+    }
+
+    /// Send a `RpcOut::Prune` message to the `RpcReceiver`
+    /// this is high priority.
+    pub(crate) fn prune(&mut self, prune: Prune) {
+        self.priority
+            .try_send(RpcOut::Prune(prune))
+            .expect("Channel is unbounded and should always be open");
+    }
+
+    /// Send a `RpcOut::IHave` message to the `RpcReceiver`
+    /// this is low priority and if queue is full the message is dropped.
+    #[must_use]
+    pub(crate) fn ihave(&mut self, ihave: IHave) -> Result<(), ()> {
+        self.non_priority
+            .try_send(RpcOut::IHave(ihave))
+            .map_err(|_| ())
+    }
+
+    /// Send a `RpcOut::IHave` message to the `RpcReceiver`
+    /// this is low priority and if queue is full the message is dropped.
+    #[must_use]
+    pub(crate) fn iwant(&mut self, iwant: IWant) -> Result<(), ()> {
+        self.non_priority
+            .try_send(RpcOut::IWant(iwant))
+            .map_err(|_| ())
     }
 
     /// Send a `RpcOut::Subscribe` message to the `RpcReceiver`
@@ -666,6 +714,16 @@ impl RpcSender {
         }
 
         Ok(())
+    }
+
+    /// Returns the current size of the priority queue.
+    pub(crate) fn priority_len(&self) -> usize {
+        self.len.load(Ordering::Relaxed)
+    }
+
+    /// Returns the current size of the non-priority queue.
+    pub(crate) fn non_priority_len(&self) -> usize {
+        self.non_priority.len()
     }
 }
 

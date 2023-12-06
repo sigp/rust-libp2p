@@ -45,10 +45,6 @@ use libp2p_swarm::{
     THandlerOutEvent, ToSwarm,
 };
 
-use crate::gossip_promises::GossipPromises;
-use crate::handler::{Handler, HandlerEvent, HandlerIn};
-use crate::mcache::MessageCache;
-use crate::metrics::{Churn, Config as MetricsConfig, Inclusion, Metrics, Penalty};
 use crate::peer_score::{PeerScore, PeerScoreParams, PeerScoreThresholds, RejectReason};
 use crate::protocol::SIGNING_PREFIX;
 use crate::subscription_filter::{AllowAllSubscriptionFilter, TopicSubscriptionFilter};
@@ -64,6 +60,16 @@ use crate::{backoff::BackoffStorage, types::RpcSender};
 use crate::{
     config::{Config, ValidationMode},
     types::RpcOut,
+};
+use crate::{gossip_promises::GossipPromises, types::Graft};
+use crate::{
+    handler::{Handler, HandlerEvent, HandlerIn},
+    types::Prune,
+};
+use crate::{mcache::MessageCache, types::IWant};
+use crate::{
+    metrics::{Churn, Config as MetricsConfig, Inclusion, Metrics, Penalty},
+    types::IHave,
 };
 use crate::{rpc_proto::proto, FailedMessages, TopicScoreParams};
 use crate::{PublishError, SubscriptionError, ValidationError};
@@ -254,9 +260,6 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     /// Events that need to be yielded to the outside when polling.
     events: VecDeque<ToSwarm<Event, HandlerIn>>,
 
-    /// Pools non-urgent control messages between heartbeats.
-    control_pool: HashMap<PeerId, Vec<ControlAction>>,
-
     /// Information used for publishing messages.
     publish_config: PublishConfig,
 
@@ -323,10 +326,6 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
 
     /// Counts the number of `IWANT` that we sent the each peer since the last heartbeat.
     count_sent_iwant: HashMap<PeerId, usize>,
-
-    /// Keeps track of IWANT messages that we are awaiting to send.
-    /// This is used to prevent sending duplicate IWANT messages for the same message.
-    pending_iwant_msgs: HashSet<MessageId>,
 
     /// Short term cache for published message ids. This is used for penalizing peers sending
     /// our own messages back if the messages are anonymous or use a random author.
@@ -455,7 +454,6 @@ where
         Ok(Behaviour {
             metrics: metrics.map(|(registry, cfg)| Metrics::new(registry, cfg)),
             events: VecDeque::new(),
-            control_pool: HashMap::new(),
             publish_config: privacy.into(),
             duplicate_cache: DuplicateCache::new(config.duplicate_cache_time()),
             topic_peers: HashMap::new(),
@@ -481,7 +479,6 @@ where
             peer_score: None,
             count_received_ihave: HashMap::new(),
             count_sent_iwant: HashMap::new(),
-            pending_iwant_msgs: HashSet::new(),
             connected_peers: HashMap::new(),
             published_message_ids: DuplicateCache::new(config.published_message_ids_cache_time()),
             config,
@@ -1046,13 +1043,14 @@ where
             if let Some((peer_score, ..)) = &mut self.peer_score {
                 peer_score.graft(&peer_id, topic_hash.clone());
             }
-            Self::control_pool_add(
-                &mut self.control_pool,
-                peer_id,
-                ControlAction::Graft {
-                    topic_hash: topic_hash.clone(),
-                },
-            );
+            let sender = self
+                .handler_send_queues
+                .get_mut(&peer_id)
+                .expect("Peerid should exist");
+
+            sender.graft(Graft {
+                topic_hash: topic_hash.clone(),
+            });
 
             // If the peer did not previously exist in any mesh, inform the handler
             peer_added_to_mesh(
@@ -1080,7 +1078,7 @@ where
         peer: &PeerId,
         do_px: bool,
         on_unsubscribe: bool,
-    ) -> ControlAction {
+    ) -> Prune {
         if let Some((peer_score, ..)) = &mut self.peer_score {
             peer_score.prune(peer, topic_hash.clone());
         }
@@ -1091,7 +1089,7 @@ where
             }
             Some(PeerKind::Gossipsub) => {
                 // GossipSub v1.0 -- no peer exchange, the peer won't be able to parse it anyway
-                return ControlAction::Prune {
+                return Prune {
                     topic_hash: topic_hash.clone(),
                     peers: Vec::new(),
                     backoff: None,
@@ -1128,7 +1126,7 @@ where
         // update backoff
         self.backoffs.update_backoff(topic_hash, peer, backoff);
 
-        ControlAction::Prune {
+        Prune {
             topic_hash: topic_hash.clone(),
             peers,
             backoff: Some(backoff.as_secs()),
@@ -1148,9 +1146,13 @@ where
                 // Send a PRUNE control message
                 tracing::debug!(%peer, "LEAVE: Sending PRUNE to peer");
                 let on_unsubscribe = true;
-                let control =
-                    self.make_prune(topic_hash, &peer, self.config.do_px(), on_unsubscribe);
-                Self::control_pool_add(&mut self.control_pool, peer, control);
+                let prune = self.make_prune(topic_hash, &peer, self.config.do_px(), on_unsubscribe);
+                let sender = self
+                    .handler_send_queues
+                    .get_mut(&peer)
+                    .expect("Peerid should exist");
+
+                sender.prune(prune);
 
                 // If the peer did not previously exist in any mesh, inform the handler
                 peer_removed_from_mesh(
@@ -1249,10 +1251,6 @@ where
                 return false;
             }
 
-            if self.pending_iwant_msgs.contains(id) {
-                return false;
-            }
-
             self.peer_score
                 .as_ref()
                 .map(|(_, _, _, promises)| !promises.contains(id))
@@ -1303,11 +1301,6 @@ where
             iwant_ids_vec.truncate(iask);
             *iasked += iask;
 
-            for message_id in &iwant_ids_vec {
-                // Add all messages to the pending list
-                self.pending_iwant_msgs.insert(message_id.clone());
-            }
-
             if let Some((_, _, _, gossip_promises)) = &mut self.peer_score {
                 gossip_promises.add_promise(
                     *peer_id,
@@ -1321,13 +1314,28 @@ where
                 iwant_ids_vec
             );
 
-            Self::control_pool_add(
-                &mut self.control_pool,
-                *peer_id,
-                ControlAction::IWant {
+            let sender = self
+                .handler_send_queues
+                .get_mut(peer_id)
+                .expect("Peerid should exist");
+
+            if sender
+                .iwant(IWant {
                     message_ids: iwant_ids_vec,
-                },
-            );
+                })
+                .is_err()
+            {
+                tracing::warn!(peer=%peer_id, "Send Queue full. Could not send IWANT");
+
+                if let Some((peer_score, ..)) = &mut self.peer_score {
+                    peer_score.failed_message_slow_peer(peer_id);
+                }
+                // Increment failed message count
+                self.failed_messages
+                    .entry(*peer_id)
+                    .or_default()
+                    .non_priority += 1;
+            }
         }
         tracing::trace!(peer=%peer_id, "Completed IHAVE handling for peer");
     }
@@ -1541,11 +1549,11 @@ where
                 .expect("Peerid should exist")
                 .clone();
 
-            for action in to_prune_topics
+            for prune in to_prune_topics
                 .iter()
                 .map(|t| self.make_prune(t, peer_id, do_px, on_unsubscribe))
             {
-                sender.control(action);
+                sender.prune(prune);
             }
             // Send the prune messages to the peer
             tracing::debug!(
@@ -2045,11 +2053,8 @@ where
             .get_mut(propagation_source)
             .expect("Peerid should exist");
 
-        for action in topics_to_graft
-            .into_iter()
-            .map(|topic_hash| ControlAction::Graft { topic_hash })
-        {
-            sender.control(action);
+        for topic_hash in topics_to_graft.into_iter() {
+            sender.graft(Graft { topic_hash });
         }
 
         // Notify the application of the subscriptions
@@ -2079,6 +2084,16 @@ where
     fn heartbeat(&mut self) {
         tracing::debug!("Starting heartbeat");
         let start = Instant::now();
+
+        // Every heartbeat we sample the send queues to add to our metrics. We do this intentionally
+        // before we add all the gossip from this heartbeat in order to gain a true measure of
+        // steady-state size of the queues.
+        if let Some(m) = &mut self.metrics {
+            for sender_queue in self.handler_send_queues.values() {
+                m.observe_priority_queue_size(sender_queue.priority_len());
+                m.observe_non_priority_queue_size(sender_queue.non_priority_len());
+            }
+        }
 
         self.heartbeat_ticks += 1;
 
@@ -2467,9 +2482,6 @@ where
             self.send_graft_prune(to_graft, to_prune, no_px);
         }
 
-        // piggyback pooled control messages
-        self.flush_control_pool();
-
         // shift the memcache
         self.mcache.shift();
 
@@ -2535,7 +2547,7 @@ where
 
             tracing::debug!("Gossiping IHAVE to {} peers", to_msg_peers.len());
 
-            for peer in to_msg_peers {
+            for peer_id in to_msg_peers {
                 let mut peer_message_ids = message_ids.clone();
 
                 if peer_message_ids.len() > self.config.max_ihave_length() {
@@ -2547,14 +2559,28 @@ where
                 }
 
                 // send an IHAVE message
-                Self::control_pool_add(
-                    &mut self.control_pool,
-                    peer,
-                    ControlAction::IHave {
+                let sender = self
+                    .handler_send_queues
+                    .get_mut(&peer_id)
+                    .expect("Peerid should exist");
+                if sender
+                    .ihave(IHave {
                         topic_hash: topic_hash.clone(),
                         message_ids: peer_message_ids,
-                    },
-                );
+                    })
+                    .is_err()
+                {
+                    tracing::warn!(peer=%peer_id, "Send Queue full. Could not send IHAVE");
+
+                    if let Some((peer_score, ..)) = &mut self.peer_score {
+                        peer_score.failed_message_slow_peer(&peer_id);
+                    }
+                    // Increment failed message count
+                    self.failed_messages
+                        .entry(peer_id)
+                        .or_default()
+                        .non_priority += 1;
+                }
             }
         }
     }
@@ -2586,9 +2612,6 @@ where
                     &self.connected_peers,
                 );
             }
-            let control_msgs = topics.iter().map(|topic_hash| ControlAction::Graft {
-                topic_hash: topic_hash.clone(),
-            });
 
             // If there are prunes associated with the same peer add them.
             // NOTE: In this case a peer has been added to a topic mesh, and removed from another.
@@ -2616,8 +2639,14 @@ where
                     )
                 });
 
-            for msg in control_msgs.chain(prunes) {
-                sender.control(msg);
+            for topic_hash in topics {
+                sender.graft(Graft {
+                    topic_hash: topic_hash.clone(),
+                });
+            }
+
+            for prune in prunes {
+                sender.prune(prune);
             }
         }
 
@@ -2637,7 +2666,7 @@ where
                     .expect("Peerid should exist")
                     .clone();
 
-                sender.control(prune);
+                sender.prune(prune);
 
                 // inform the handler
                 peer_removed_from_mesh(
@@ -2827,32 +2856,6 @@ where
                 })
             }
         }
-    }
-
-    // adds a control action to control_pool
-    fn control_pool_add(
-        control_pool: &mut HashMap<PeerId, Vec<ControlAction>>,
-        peer: PeerId,
-        control: ControlAction,
-    ) {
-        control_pool.entry(peer).or_default().push(control);
-    }
-
-    /// Takes each control action mapping and turns it into a message
-    fn flush_control_pool(&mut self) {
-        for (peer, controls) in self.control_pool.drain().collect::<Vec<_>>() {
-            for msg in controls {
-                let sender = self
-                    .handler_send_queues
-                    .get_mut(&peer)
-                    .expect("Peerid should exist");
-
-                sender.control(msg);
-            }
-        }
-
-        // This clears all pending IWANT messages
-        self.pending_iwant_msgs.clear();
     }
 
     fn on_connection_established(
@@ -3279,21 +3282,21 @@ where
                 let mut prune_msgs = vec![];
                 for control_msg in rpc.control_msgs {
                     match control_msg {
-                        ControlAction::IHave {
+                        ControlAction::IHave(IHave {
                             topic_hash,
                             message_ids,
-                        } => {
+                        }) => {
                             ihave_msgs.push((topic_hash, message_ids));
                         }
-                        ControlAction::IWant { message_ids } => {
+                        ControlAction::IWant(IWant { message_ids }) => {
                             self.handle_iwant(&propagation_source, message_ids)
                         }
-                        ControlAction::Graft { topic_hash } => graft_msgs.push(topic_hash),
-                        ControlAction::Prune {
+                        ControlAction::Graft(Graft { topic_hash }) => graft_msgs.push(topic_hash),
+                        ControlAction::Prune(Prune {
                             topic_hash,
                             peers,
                             backoff,
-                        } => prune_msgs.push((topic_hash, peers, backoff)),
+                        }) => prune_msgs.push((topic_hash, peers, backoff)),
                     }
                 }
                 if !ihave_msgs.is_empty() {
@@ -3516,7 +3519,6 @@ impl<C: DataTransform, F: TopicSubscriptionFilter> fmt::Debug for Behaviour<C, F
         f.debug_struct("Behaviour")
             .field("config", &self.config)
             .field("events", &self.events.len())
-            .field("control_pool", &self.control_pool)
             .field("publish_config", &self.publish_config)
             .field("topic_peers", &self.topic_peers)
             .field("peer_topics", &self.peer_topics)

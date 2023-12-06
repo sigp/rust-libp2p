@@ -1,9 +1,13 @@
 ## 0.46.1 - unreleased
 - Adds scoring for slow peers and introduces a message to inform the application of slow peers.
 
+- Adds metrics for priority and non-priority queue lengths.
+
+- Removes the control pool and sends control messages on demand.
+
 - Implement publish and forward message dropping.
 
-- Implement backpressure by diferentiating between priority and non priority messages.
+- Implement backpressure by differentiating between priority and non priority messages.
   Drop `Publish` and `Forward` messages when the queue becomes full.
   See [PR 4914](https://github.com/libp2p/rust-libp2p/pull/4914)
 
