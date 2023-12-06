@@ -253,9 +253,6 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     /// Events that need to be yielded to the outside when polling.
     events: VecDeque<ToSwarm<Event, HandlerIn>>,
 
-    /// Pools non-urgent control messages between heartbeats.
-    control_pool: HashMap<PeerId, Vec<RpcOut>>,
-
     /// Information used for publishing messages.
     publish_config: PublishConfig,
 
@@ -322,10 +319,6 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
 
     /// Counts the number of `IWANT` that we sent the each peer since the last heartbeat.
     count_sent_iwant: HashMap<PeerId, usize>,
-
-    /// Keeps track of IWANT messages that we are awaiting to send.
-    /// This is used to prevent sending duplicate IWANT messages for the same message.
-    pending_iwant_msgs: HashSet<MessageId>,
 
     /// Short term cache for published message ids. This is used for penalizing peers sending
     /// our own messages back if the messages are anonymous or use a random author.
@@ -451,7 +444,6 @@ where
         Ok(Behaviour {
             metrics: metrics.map(|(registry, cfg)| Metrics::new(registry, cfg)),
             events: VecDeque::new(),
-            control_pool: HashMap::new(),
             publish_config: privacy.into(),
             duplicate_cache: DuplicateCache::new(config.duplicate_cache_time()),
             topic_peers: HashMap::new(),
@@ -477,7 +469,6 @@ where
             peer_score: None,
             count_received_ihave: HashMap::new(),
             count_sent_iwant: HashMap::new(),
-            pending_iwant_msgs: HashSet::new(),
             connected_peers: HashMap::new(),
             published_message_ids: DuplicateCache::new(config.published_message_ids_cache_time()),
             config,
@@ -1033,13 +1024,14 @@ where
             if let Some((peer_score, ..)) = &mut self.peer_score {
                 peer_score.graft(&peer_id, topic_hash.clone());
             }
-            Self::control_pool_add(
-                &mut self.control_pool,
-                peer_id,
-                RpcOut::Graft(Graft {
-                    topic_hash: topic_hash.clone(),
-                }),
-            );
+            let sender = self
+                .handler_send_queues
+                .get_mut(&peer_id)
+                .expect("Peerid should exist");
+
+            sender.graft(Graft {
+                topic_hash: topic_hash.clone(),
+            });
 
             // If the peer did not previously exist in any mesh, inform the handler
             peer_added_to_mesh(
@@ -1136,7 +1128,12 @@ where
                 tracing::debug!(%peer, "LEAVE: Sending PRUNE to peer");
                 let on_unsubscribe = true;
                 let prune = self.make_prune(topic_hash, &peer, self.config.do_px(), on_unsubscribe);
-                Self::control_pool_add(&mut self.control_pool, peer, RpcOut::Prune(prune));
+                let sender = self
+                    .handler_send_queues
+                    .get_mut(&peer)
+                    .expect("Peerid should exist");
+
+                sender.prune(prune);
 
                 // If the peer did not previously exist in any mesh, inform the handler
                 peer_removed_from_mesh(
@@ -1235,10 +1232,6 @@ where
                 return false;
             }
 
-            if self.pending_iwant_msgs.contains(id) {
-                return false;
-            }
-
             self.peer_score
                 .as_ref()
                 .map(|(_, _, _, promises)| !promises.contains(id))
@@ -1289,11 +1282,6 @@ where
             iwant_ids_vec.truncate(iask);
             *iasked += iask;
 
-            for message_id in &iwant_ids_vec {
-                // Add all messages to the pending list
-                self.pending_iwant_msgs.insert(message_id.clone());
-            }
-
             if let Some((_, _, _, gossip_promises)) = &mut self.peer_score {
                 gossip_promises.add_promise(
                     *peer_id,
@@ -1307,13 +1295,14 @@ where
                 iwant_ids_vec
             );
 
-            Self::control_pool_add(
-                &mut self.control_pool,
-                *peer_id,
-                RpcOut::IWant(IWant {
-                    message_ids: iwant_ids_vec,
-                }),
-            );
+            let sender = self
+                .handler_send_queues
+                .get_mut(peer_id)
+                .expect("Peerid should exist");
+
+            sender.iwant(IWant {
+                message_ids: iwant_ids_vec,
+            });
         }
         tracing::trace!(peer=%peer_id, "Completed IHAVE handling for peer");
     }
@@ -2440,9 +2429,6 @@ where
             self.send_graft_prune(to_graft, to_prune, no_px);
         }
 
-        // piggyback pooled control messages
-        self.flush_control_pool();
-
         // shift the memcache
         self.mcache.shift();
 
@@ -2509,14 +2495,14 @@ where
                 }
 
                 // send an IHAVE message
-                Self::control_pool_add(
-                    &mut self.control_pool,
-                    peer,
-                    RpcOut::IHave(IHave {
-                        topic_hash: topic_hash.clone(),
-                        message_ids: peer_message_ids,
-                    }),
-                );
+                let sender = self
+                    .handler_send_queues
+                    .get_mut(&peer)
+                    .expect("Peerid should exist");
+                sender.ihave(IHave {
+                    topic_hash: topic_hash.clone(),
+                    message_ids: peer_message_ids,
+                });
             }
         }
     }
@@ -2779,38 +2765,6 @@ where
                 })
             }
         }
-    }
-
-    // adds a control action to control_pool
-    fn control_pool_add(
-        control_pool: &mut HashMap<PeerId, Vec<RpcOut>>,
-        peer: PeerId,
-        control: RpcOut,
-    ) {
-        control_pool.entry(peer).or_default().push(control);
-    }
-
-    /// Takes each control action mapping and turns it into a message
-    fn flush_control_pool(&mut self) {
-        for (peer, controls) in self.control_pool.drain().collect::<Vec<_>>() {
-            for msg in controls {
-                let sender = self
-                    .handler_send_queues
-                    .get_mut(&peer)
-                    .expect("Peerid should exist");
-
-                match msg {
-                    RpcOut::IHave(ihave) => sender.ihave(ihave),
-                    RpcOut::IWant(iwant) => sender.iwant(iwant),
-                    RpcOut::Graft(graft) => sender.graft(graft),
-                    RpcOut::Prune(prune) => sender.prune(prune),
-                    _ => unreachable!(),
-                }
-            }
-        }
-
-        // This clears all pending IWANT messages
-        self.pending_iwant_msgs.clear();
     }
 
     fn on_connection_established(
@@ -3453,7 +3407,6 @@ impl<C: DataTransform, F: TopicSubscriptionFilter> fmt::Debug for Behaviour<C, F
         f.debug_struct("Behaviour")
             .field("config", &self.config)
             .field("events", &self.events.len())
-            .field("control_pool", &self.control_pool)
             .field("publish_config", &self.publish_config)
             .field("topic_peers", &self.topic_peers)
             .field("peer_topics", &self.peer_topics)
