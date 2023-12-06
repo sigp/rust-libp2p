@@ -634,7 +634,6 @@ impl RpcSender {
 
     /// Send a `RpcOut::IHave` message to the `RpcReceiver`
     /// this is low priority and if queue is full the message is dropped.
-    #[must_use]
     pub(crate) fn ihave(&mut self, ihave: IHave) -> Result<(), ()> {
         self.non_priority
             .try_send(RpcOut::IHave(ihave))
@@ -643,7 +642,6 @@ impl RpcSender {
 
     /// Send a `RpcOut::IHave` message to the `RpcReceiver`
     /// this is low priority and if queue is full the message is dropped.
-    #[must_use]
     pub(crate) fn iwant(&mut self, iwant: IWant) -> Result<(), ()> {
         self.non_priority
             .try_send(RpcOut::IWant(iwant))
@@ -668,7 +666,6 @@ impl RpcSender {
 
     /// Send a `RpcOut::Publish` message to the `RpcReceiver`
     /// this is high priority. If message sending fails, an `Err` is returned.
-    #[must_use]
     pub(crate) fn publish(
         &mut self,
         message: RawMessage,
@@ -695,7 +692,6 @@ impl RpcSender {
 
     /// Send a `RpcOut::Forward` message to the `RpcReceiver`
     /// this is high priority. If the queue is full the message is discarded.
-    #[must_use]
     pub(crate) fn forward(
         &mut self,
         message: RawMessage,

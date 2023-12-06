@@ -1376,11 +1376,14 @@ where
                         .get_mut(peer_id)
                         .expect("Peerid should exist");
 
-                    if let Err(_) = sender.forward(
-                        msg,
-                        self.config.forward_queue_duration(),
-                        self.metrics.as_mut(),
-                    ) {
+                    if sender
+                        .forward(
+                            msg,
+                            self.config.forward_queue_duration(),
+                            self.metrics.as_mut(),
+                        )
+                        .is_err()
+                    {
                         // Downscore the peer
                         if let Some((peer_score, ..)) = &mut self.peer_score {
                             peer_score.failed_message_slow_peer(peer_id);
