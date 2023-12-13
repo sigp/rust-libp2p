@@ -321,14 +321,14 @@ impl Metrics {
             metric
         };
 
-        let priority_queue_size = Histogram::new(linear_buckets(0.0, 2500.0, 100));
+        let priority_queue_size = Histogram::new(linear_buckets(0.0, 25.0, 100));
         registry.register(
             "priority_queue_size",
             "Histogram of observed priority queue sizes",
             priority_queue_size.clone(),
         );
 
-        let non_priority_queue_size = Histogram::new(linear_buckets(0.0, 2500.0, 100));
+        let non_priority_queue_size = Histogram::new(linear_buckets(0.0, 25.0, 100));
         registry.register(
             "non_priority_queue_size",
             "Histogram of observed non-priority queue sizes",
