@@ -232,11 +232,19 @@ where
 
     let sender = RpcSender::new(gs.config.connection_handler_queue_len());
     let receiver = sender.new_receiver();
-    gs.handler_send_queues.insert(peer, sender);
+    let connection_id = ConnectionId::new_unchecked(0);
+    gs.connected_peers.insert(
+        peer,
+        PeerConnections {
+            kind: kind.clone().unwrap_or(PeerKind::Floodsub),
+            connections: vec![connection_id],
+            sender,
+        },
+    );
 
     gs.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
         peer_id: peer,
-        connection_id: ConnectionId::new_unchecked(0),
+        connection_id,
         endpoint: &endpoint,
         failed_addresses: &[],
         other_established: 0, // first connection
@@ -591,12 +599,20 @@ fn test_join() {
         peers.push(peer);
         let sender = RpcSender::new(gs.config.connection_handler_queue_len());
         let receiver = sender.new_receiver();
-        gs.handler_send_queues.insert(random_peer, sender);
+        let connection_id = ConnectionId::new_unchecked(0);
+        gs.connected_peers.insert(
+            random_peer,
+            PeerConnections {
+                kind: PeerKind::Floodsub,
+                connections: vec![connection_id],
+                sender,
+            },
+        );
         receivers.insert(random_peer, receiver);
 
         gs.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
             peer_id: random_peer,
-            connection_id: ConnectionId::new_unchecked(0),
+            connection_id,
             endpoint: &ConnectedPoint::Dialer {
                 address,
                 role_override: Endpoint::Dialer,
@@ -958,6 +974,7 @@ fn test_get_random_peers() {
                 PeerConnections {
                     kind: PeerKind::Gossipsubv1_1,
                     connections: vec![ConnectionId::new_unchecked(0)],
+                    sender: RpcSender::new(gs.config.connection_handler_queue_len()),
                 },
             )
         })

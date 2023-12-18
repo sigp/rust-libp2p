@@ -5,8 +5,6 @@
 
 - Removes the control pool and sends control messages on demand.
 
-- Implement publish and forward message dropping.
-
 - Implement backpressure by differentiating between priority and non priority messages.
   Drop `Publish` and `Forward` messages when the queue becomes full.
   See [PR 4914](https://github.com/libp2p/rust-libp2p/pull/4914)
