@@ -342,9 +342,6 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     /// Keep track of a set of internal metrics relating to gossipsub.
     metrics: Option<Metrics>,
 
-    /// Connection handler message queue channels.
-    handler_send_queues: HashMap<PeerId, RpcSender>,
-
     /// Tracks the numbers of failed messages per peer-id.
     failed_messages: HashMap<PeerId, FailedMessages>,
 }
@@ -484,7 +481,6 @@ where
             config,
             subscription_filter,
             data_transform,
-            handler_send_queues: Default::default(),
             failed_messages: Default::default(),
         })
     }
@@ -549,12 +545,13 @@ where
         }
 
         // send subscription request to all peers
-        for peer in self.peer_topics.keys() {
-            tracing::debug!(%peer, "Sending SUBSCRIBE to peer");
+        for peer_id in self.peer_topics.keys() {
+            tracing::debug!(%peer_id, "Sending SUBSCRIBE to peer");
             let sender = self
-                .handler_send_queues
-                .get_mut(peer)
-                .expect("Peerid should exist");
+                .connected_peers
+                .get_mut(peer_id)
+                .expect("Peer must be connected")
+                .send_queue();
 
             sender.subscribe(topic_hash.clone());
         }
@@ -580,12 +577,13 @@ where
         }
 
         // announce to all peers
-        for peer in self.peer_topics.keys() {
-            tracing::debug!(%peer, "Sending UNSUBSCRIBE to peer");
+        for peer_id in self.peer_topics.keys() {
+            tracing::debug!(%peer_id, "Sending UNSUBSCRIBE to peer");
             let sender = self
-                .handler_send_queues
-                .get_mut(peer)
-                .expect("Peerid should exist");
+                .connected_peers
+                .get_mut(peer_id)
+                .expect("Peer should be connected")
+                .send_queue();
 
             sender.unsubscribe(topic_hash.clone());
         }
@@ -643,10 +641,10 @@ where
         let topic_hash = raw_message.topic.clone();
 
         let mut recipient_peers = HashSet::new();
-        if let Some(set) = self.topic_peers.get(&topic_hash) {
+        if let Some(peers_on_topic) = self.topic_peers.get(&topic_hash) {
             if self.config.flood_publish() {
                 // Forward to all peers above score and all explicit peers
-                recipient_peers.extend(set.iter().filter(|p| {
+                recipient_peers.extend(peers_on_topic.iter().filter(|p| {
                     self.explicit_peers.contains(*p)
                         || !self.score_below_threshold(p, |ts| ts.publish_threshold).0
                 }));
@@ -696,9 +694,9 @@ where
                     }
                 }
 
-                // Explicit peers
+                // Explicit peers that are apart of the topic
                 for peer in &self.explicit_peers {
-                    if set.contains(peer) {
+                    if peers_on_topic.contains(peer) {
                         recipient_peers.insert(*peer);
                     }
                 }
@@ -738,9 +736,10 @@ where
         for peer_id in recipient_peers.iter() {
             tracing::trace!(peer=%peer_id, "Sending message to peer");
             let sender = self
-                .handler_send_queues
+                .connected_peers
                 .get_mut(peer_id)
-                .expect("Peerid should exist");
+                .expect("The peer must be connected")
+                .send_queue();
 
             if sender
                 .publish(
@@ -1044,9 +1043,10 @@ where
                 peer_score.graft(&peer_id, topic_hash.clone());
             }
             let sender = self
-                .handler_send_queues
+                .connected_peers
                 .get_mut(&peer_id)
-                .expect("Peerid should exist");
+                .expect("Peer must be connected")
+                .send_queue();
 
             sender.graft(Graft {
                 topic_hash: topic_hash.clone(),
@@ -1142,24 +1142,26 @@ where
             if let Some(m) = self.metrics.as_mut() {
                 m.left(topic_hash)
             }
-            for peer in peers {
+            for peer_id in peers {
                 // Send a PRUNE control message
-                tracing::debug!(%peer, "LEAVE: Sending PRUNE to peer");
+                tracing::debug!(%peer_id, "LEAVE: Sending PRUNE to peer");
                 let on_unsubscribe = true;
-                let prune = self.make_prune(topic_hash, &peer, self.config.do_px(), on_unsubscribe);
+                let prune =
+                    self.make_prune(topic_hash, &peer_id, self.config.do_px(), on_unsubscribe);
                 let sender = self
-                    .handler_send_queues
-                    .get_mut(&peer)
-                    .expect("Peerid should exist");
+                    .connected_peers
+                    .get_mut(&peer_id)
+                    .expect("Peer must be connected")
+                    .send_queue();
 
                 sender.prune(prune);
 
                 // If the peer did not previously exist in any mesh, inform the handler
                 peer_removed_from_mesh(
-                    peer,
+                    peer_id,
                     topic_hash,
                     &self.mesh,
-                    self.peer_topics.get(&peer),
+                    self.peer_topics.get(&peer_id),
                     &mut self.events,
                     &self.connected_peers,
                 );
@@ -1315,9 +1317,10 @@ where
             );
 
             let sender = self
-                .handler_send_queues
+                .connected_peers
                 .get_mut(peer_id)
-                .expect("Peerid should exist");
+                .expect("Peer must be connected")
+                .send_queue();
 
             if sender
                 .iwant(IWant {
@@ -1372,9 +1375,10 @@ where
                 } else {
                     tracing::debug!(peer=%peer_id, "IWANT: Sending cached messages to peer");
                     let sender = self
-                        .handler_send_queues
+                        .connected_peers
                         .get_mut(peer_id)
-                        .expect("Peerid should exist");
+                        .expect("Peer must be connected")
+                        .send_queue();
 
                     if sender
                         .forward(
@@ -1547,9 +1551,10 @@ where
             // build the prune messages to send
             let on_unsubscribe = false;
             let mut sender = self
-                .handler_send_queues
+                .connected_peers
                 .get_mut(peer_id)
-                .expect("Peerid should exist")
+                .expect("Peer must be connected")
+                .send_queue()
                 .clone();
 
             for prune in to_prune_topics
@@ -2051,13 +2056,16 @@ where
 
         // If we need to send grafts to peer, do so immediately, rather than waiting for the
         // heartbeat.
-        let sender = self
-            .handler_send_queues
+        // NOTE: There could be a potential race condition where the peer disconnects before we
+        // handle this message. We therefore ignore sending grafts if the peer is not connected.
+        if let Some(sender) = self
+            .connected_peers
             .get_mut(propagation_source)
-            .expect("Peerid should exist");
-
-        for topic_hash in topics_to_graft.into_iter() {
-            sender.graft(Graft { topic_hash });
+            .map(|connected_peer| connected_peer.send_queue())
+        {
+            for topic_hash in topics_to_graft.into_iter() {
+                sender.graft(Graft { topic_hash });
+            }
         }
 
         // Notify the application of the subscriptions
@@ -2092,7 +2100,7 @@ where
         // before we add all the gossip from this heartbeat in order to gain a true measure of
         // steady-state size of the queues.
         if let Some(m) = &mut self.metrics {
-            for sender_queue in self.handler_send_queues.values() {
+            for sender_queue in self.connected_peers.values_mut().map(|v| v.send_queue()) {
                 m.observe_priority_queue_size(sender_queue.priority_len());
                 m.observe_non_priority_queue_size(sender_queue.non_priority_len());
             }
@@ -2563,9 +2571,10 @@ where
 
                 // send an IHAVE message
                 let sender = self
-                    .handler_send_queues
+                    .connected_peers
                     .get_mut(&peer_id)
-                    .expect("Peerid should exist");
+                    .expect("Peer must be connected")
+                    .send_queue();
                 if sender
                     .ihave(IHave {
                         topic_hash: topic_hash.clone(),
@@ -2597,20 +2606,20 @@ where
         no_px: HashSet<PeerId>,
     ) {
         // handle the grafts and overlapping prunes per peer
-        for (peer, topics) in to_graft.into_iter() {
+        for (peer_id, topics) in to_graft.into_iter() {
             for topic in &topics {
                 // inform scoring of graft
                 if let Some((peer_score, ..)) = &mut self.peer_score {
-                    peer_score.graft(&peer, topic.clone());
+                    peer_score.graft(&peer_id, topic.clone());
                 }
 
                 // inform the handler of the peer being added to the mesh
                 // If the peer did not previously exist in any mesh, inform the handler
                 peer_added_to_mesh(
-                    peer,
+                    peer_id,
                     vec![topic],
                     &self.mesh,
-                    self.peer_topics.get(&peer),
+                    self.peer_topics.get(&peer_id),
                     &mut self.events,
                     &self.connected_peers,
                 );
@@ -2623,21 +2632,22 @@ where
 
             // send the control messages
             let mut sender = self
-                .handler_send_queues
-                .get_mut(&peer)
-                .expect("Peerid should exist")
+                .connected_peers
+                .get_mut(&peer_id)
+                .expect("Peer must be connected")
+                .send_queue()
                 .clone();
 
             // The following prunes are not due to unsubscribing.
             let prunes = to_prune
-                .remove(&peer)
+                .remove(&peer_id)
                 .into_iter()
                 .flatten()
                 .map(|topic_hash| {
                     self.make_prune(
                         &topic_hash,
-                        &peer,
-                        self.config.do_px() && !no_px.contains(&peer),
+                        &peer_id,
+                        self.config.do_px() && !no_px.contains(&peer_id),
                         false,
                     )
                 });
@@ -2655,28 +2665,28 @@ where
 
         // handle the remaining prunes
         // The following prunes are not due to unsubscribing.
-        for (peer, topics) in to_prune.iter() {
+        for (peer_id, topics) in to_prune.iter() {
             for topic_hash in topics {
                 let prune = self.make_prune(
                     topic_hash,
-                    peer,
-                    self.config.do_px() && !no_px.contains(peer),
+                    peer_id,
+                    self.config.do_px() && !no_px.contains(peer_id),
                     false,
                 );
-                let mut sender = self
-                    .handler_send_queues
-                    .get_mut(peer)
-                    .expect("Peerid should exist")
-                    .clone();
+                let sender = self
+                    .connected_peers
+                    .get_mut(peer_id)
+                    .expect("Peer must be connected")
+                    .send_queue();
 
                 sender.prune(prune);
 
                 // inform the handler
                 peer_removed_from_mesh(
-                    *peer,
+                    *peer_id,
                     topic_hash,
                     &self.mesh,
-                    self.peer_topics.get(peer),
+                    self.peer_topics.get(peer_id),
                     &mut self.events,
                     &self.connected_peers,
                 );
@@ -2740,9 +2750,10 @@ where
             for peer_id in recipient_peers.iter() {
                 tracing::debug!(%peer_id, message=%msg_id, "Sending message to peer");
                 let sender = self
-                    .handler_send_queues
+                    .connected_peers
                     .get_mut(peer_id)
-                    .expect("Peerid should exist");
+                    .expect("Peer must be connected")
+                    .send_queue();
                 if sender
                     .forward(
                         message.clone(),
@@ -2865,7 +2876,6 @@ where
         &mut self,
         ConnectionEstablished {
             peer_id,
-            connection_id,
             endpoint,
             other_established,
             ..
@@ -2893,20 +2903,6 @@ where
             }
         }
 
-        // By default we assume a peer is only a floodsub peer.
-        //
-        // The protocol negotiation occurs once a message is sent/received. Once this happens we
-        // update the type of peer that this is in order to determine which kind of routing should
-        // occur.
-        self.connected_peers
-            .entry(peer_id)
-            .or_insert(PeerConnections {
-                kind: PeerKind::Floodsub,
-                connections: vec![],
-            })
-            .connections
-            .push(connection_id);
-
         if other_established > 0 {
             return; // Not our first connection to this peer, hence nothing to do.
         }
@@ -2926,11 +2922,11 @@ where
 
         tracing::debug!(peer=%peer_id, "New peer connected");
         // We need to send our subscriptions to the newly-connected node.
-        let mut sender = self
-            .handler_send_queues
+        let sender = self
+            .connected_peers
             .get_mut(&peer_id)
-            .expect("Peerid should exist")
-            .clone();
+            .expect("Peer must be connected")
+            .send_queue();
 
         for topic_hash in self.mesh.clone().into_keys() {
             sender.subscribe(topic_hash);
@@ -2969,6 +2965,7 @@ where
                     .position(|v| v == &connection_id)
                     .expect("Previously established connection to peer must be present");
                 connections.connections.remove(index);
+                connections.handler_send_queue.remove(index);
 
                 // If there are more connections and this peer is in a mesh, inform the first connection
                 // handler.
@@ -3061,7 +3058,6 @@ where
             }
 
             self.connected_peers.remove(&peer_id);
-            self.handler_send_queues.remove(&peer_id);
 
             if let Some((peer_score, ..)) = &mut self.peer_score {
                 peer_score.remove_peer(&peer_id);
@@ -3120,36 +3116,64 @@ where
 
     fn handle_established_inbound_connection(
         &mut self,
-        _: ConnectionId,
+        connection_id: ConnectionId,
         peer_id: PeerId,
         _: &Multiaddr,
         _: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        let sender = self
-            .handler_send_queues
+        let handler_send_queue = RpcSender::new(self.config.connection_handler_queue_len());
+        let reciever = handler_send_queue.new_receiver();
+
+        // By default we assume a peer is only a floodsub peer.
+        //
+        // The protocol negotiation occurs once a message is sent/received. Once this happens we
+        // update the type of peer that this is in order to determine which kind of routing should
+        // occur.
+        let connected_peer = self
+            .connected_peers
             .entry(peer_id)
-            .or_insert_with(|| RpcSender::new(self.config.connection_handler_queue_len()));
-        Ok(Handler::new(
-            self.config.protocol_config(),
-            sender.new_receiver(),
-        ))
+            .or_insert(PeerConnections {
+                kind: PeerKind::Floodsub,
+                connections: vec![],
+                handler_send_queue: vec![],
+            });
+        // Add the new connection
+        connected_peer.connections.push(connection_id);
+        // Add the send_queue_handler associated with the connection id.
+        connected_peer.handler_send_queue.push(handler_send_queue);
+
+        Ok(Handler::new(self.config.protocol_config(), reciever))
     }
 
     fn handle_established_outbound_connection(
         &mut self,
-        _: ConnectionId,
+        connection_id: ConnectionId,
         peer_id: PeerId,
         _: &Multiaddr,
         _: Endpoint,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        let sender = self
-            .handler_send_queues
+        let handler_send_queue = RpcSender::new(self.config.connection_handler_queue_len());
+        let reciever = handler_send_queue.new_receiver();
+
+        // By default we assume a peer is only a floodsub peer.
+        //
+        // The protocol negotiation occurs once a message is sent/received. Once this happens we
+        // update the type of peer that this is in order to determine which kind of routing should
+        // occur.
+        let connected_peer = self
+            .connected_peers
             .entry(peer_id)
-            .or_insert_with(|| RpcSender::new(self.config.connection_handler_queue_len()));
-        Ok(Handler::new(
-            self.config.protocol_config(),
-            sender.new_receiver(),
-        ))
+            .or_insert(PeerConnections {
+                kind: PeerKind::Floodsub,
+                connections: vec![],
+                handler_send_queue: vec![],
+            });
+        // Add the new connection
+        connected_peer.connections.push(connection_id);
+        // Add the send_queue_handler associated with the connection id.
+        connected_peer.handler_send_queue.push(handler_send_queue);
+
+        Ok(Handler::new(self.config.protocol_config(), reciever))
     }
 
     fn on_connection_handler_event(

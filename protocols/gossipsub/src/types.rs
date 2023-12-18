@@ -109,12 +109,23 @@ impl std::fmt::Debug for MessageId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct PeerConnections {
     /// The kind of protocol the peer supports.
     pub(crate) kind: PeerKind,
     /// Its current connections.
     pub(crate) connections: Vec<ConnectionId>,
+    /// The send queue handler for each connection id.
+    pub(crate) handler_send_queue: Vec<RpcSender>,
+}
+
+impl PeerConnections {
+    /// Obtains the first send queue handler.
+    pub(crate) fn send_queue(&mut self) -> &mut RpcSender {
+        self.handler_send_queue
+            .first_mut()
+            .expect("There is always at least one handler send queue")
+    }
 }
 
 /// Describes the types of peers that can exist in the gossipsub context.
