@@ -230,37 +230,21 @@ where
         }
     };
 
-    let receiver = if outbound {
-        match gs
-            .handle_established_outbound_connection(
-                ConnectionId::new_unchecked(0),
-                peer,
-                &Multiaddr::empty(),
-                Endpoint::Dialer,
-            )
-            .unwrap()
-        {
-            Handler::Enabled(mut h) => h.receiver(),
-            Handler::Disabled(_) => unreachable!("Should be enabled"),
-        }
-    } else {
-        match gs
-            .handle_established_inbound_connection(
-                ConnectionId::new_unchecked(0),
-                peer,
-                &Multiaddr::empty(),
-                &Multiaddr::empty(),
-            )
-            .unwrap()
-        {
-            Handler::Enabled(mut h) => h.receiver(),
-            Handler::Disabled(_) => unreachable!("Should be enabled"),
-        }
-    };
+    let sender = RpcSender::new(gs.config.connection_handler_queue_len());
+    let receiver = sender.new_receiver();
+    let connection_id = ConnectionId::new_unchecked(0);
+    gs.connected_peers.insert(
+        peer,
+        PeerConnections {
+            kind: kind.clone().unwrap_or(PeerKind::Floodsub),
+            connections: vec![connection_id],
+            sender,
+        },
+    );
 
     gs.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
         peer_id: peer,
-        connection_id: ConnectionId::new_unchecked(0),
+        connection_id,
         endpoint: &endpoint,
         failed_addresses: &[],
         other_established: 0, // first connection
@@ -603,22 +587,29 @@ fn test_join() {
         let random_peer = PeerId::random();
         // inform the behaviour of a new peer
         let address = "/ip4/127.0.0.1".parse::<Multiaddr>().unwrap();
-        let enabled_handler = gs
-            .handle_established_inbound_connection(
-                ConnectionId::new_unchecked(0),
-                random_peer,
-                &address,
-                &address,
-            )
-            .unwrap();
-        // Add the receiver to the list of current receivers.
-        if let Handler::Enabled(mut h) = enabled_handler {
-            receivers.insert(random_peer, h.receiver());
-        }
+        gs.handle_established_inbound_connection(
+            ConnectionId::new_unchecked(0),
+            random_peer,
+            &address,
+            &address,
+        )
+        .unwrap();
+        let sender = RpcSender::new(gs.config.connection_handler_queue_len());
+        let receiver = sender.new_receiver();
+        let connection_id = ConnectionId::new_unchecked(0);
+        gs.connected_peers.insert(
+            random_peer,
+            PeerConnections {
+                kind: PeerKind::Floodsub,
+                connections: vec![connection_id],
+                sender,
+            },
+        );
+        receivers.insert(random_peer, receiver);
 
         gs.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
             peer_id: random_peer,
-            connection_id: ConnectionId::new_unchecked(0),
+            connection_id,
             endpoint: &ConnectedPoint::Dialer {
                 address,
                 role_override: Endpoint::Dialer,
@@ -980,7 +971,7 @@ fn test_get_random_peers() {
                 PeerConnections {
                     kind: PeerKind::Gossipsubv1_1,
                     connections: vec![ConnectionId::new_unchecked(0)],
-                    handler_send_queue: vec![],
+                    sender: RpcSender::new(gs.config.connection_handler_queue_len()),
                 },
             )
         })
