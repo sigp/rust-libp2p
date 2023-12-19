@@ -176,6 +176,12 @@ impl Handler {
 }
 
 impl EnabledHandler {
+    #[cfg(test)]
+    /// For testing purposed obtain the RPCReceiver
+    pub fn receiver(&mut self) -> RpcReceiver {
+        self.send_queue.clone()
+    }
+
     fn on_fully_negotiated_inbound(
         &mut self,
         (substream, peer_kind): (Framed<Stream, GossipsubCodec>, PeerKind),
