@@ -233,14 +233,8 @@ where
     let sender = RpcSender::new(gs.config.connection_handler_queue_len());
     let receiver = sender.new_receiver();
     let connection_id = ConnectionId::new_unchecked(0);
-    gs.connected_peers.insert(
-        peer,
-        PeerConnections {
-            kind: kind.clone().unwrap_or(PeerKind::Floodsub),
-            connections: vec![connection_id],
-            sender,
-        },
-    );
+    gs.connected_peers
+        .peer_connected(peer, connection_id, sender);
 
     gs.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
         peer_id: peer,
@@ -280,24 +274,20 @@ where
     D: DataTransform + Default + Clone + Send + 'static,
     F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
 {
-    if let Some(peer_connections) = gs.connected_peers.get(peer_id) {
+    while let Some(connection_id) = gs.connected_peers.connection_id(peer_id) {
         let fake_endpoint = ConnectedPoint::Dialer {
             address: Multiaddr::empty(),
             role_override: Endpoint::Dialer,
-        }; // this is not relevant
-           // peer_connections.connections should never be empty.
+        };
 
-        let mut active_connections = peer_connections.connections.len();
-        for connection_id in peer_connections.connections.clone() {
-            active_connections = active_connections.checked_sub(1).unwrap();
+        let remaining_established = gs.connected_peers.total_connections(peer_id);
 
-            gs.on_swarm_event(FromSwarm::ConnectionClosed(ConnectionClosed {
-                peer_id: *peer_id,
-                connection_id,
-                endpoint: &fake_endpoint,
-                remaining_established: active_connections,
-            }));
-        }
+        gs.on_swarm_event(FromSwarm::ConnectionClosed(ConnectionClosed {
+            peer_id: *peer_id,
+            connection_id,
+            endpoint: &fake_endpoint,
+            remaining_established,
+        }));
     }
 }
 
@@ -425,7 +415,7 @@ fn test_subscribe() {
         .create_network();
 
     assert!(
-        gs.mesh.get(&topic_hashes[0]).is_some(),
+        gs.connected_peers.mesh().get(&topic_hashes[0]).is_some(),
         "Subscribe should add a new entry to the mesh[topic] hashmap"
     );
 
@@ -468,11 +458,11 @@ fn test_unsubscribe() {
 
     for topic_hash in &topic_hashes {
         assert!(
-            gs.topic_peers.get(topic_hash).is_some(),
+            gs.connected_peers.get_peers_on_topic(topic_hash).is_some(),
             "Topic_peers contain a topic entry"
         );
         assert!(
-            gs.mesh.get(topic_hash).is_some(),
+            gs.connected_peers.mesh().get(topic_hash).is_some(),
             "mesh should contain a topic entry"
         );
     }
@@ -505,7 +495,7 @@ fn test_unsubscribe() {
     // check we clean up internal structures
     for topic_hash in &topic_hashes {
         assert!(
-            gs.mesh.get(topic_hash).is_none(),
+            gs.connected_peers.mesh().get(topic_hash).is_none(),
             "All topics should have been removed from the mesh"
         );
     }
@@ -556,7 +546,12 @@ fn test_join() {
 
     // should have added mesh_n nodes to the mesh
     assert!(
-        gs.mesh.get(&topic_hashes[0]).unwrap().len() == 6,
+        gs.connected_peers
+            .mesh()
+            .get(&topic_hashes[0])
+            .unwrap()
+            .len()
+            == 6,
         "Should have added 6 nodes to the mesh"
     );
 
@@ -579,33 +574,24 @@ fn test_join() {
 
     // verify fanout nodes
     // add 3 random peers to the fanout[topic1]
-    gs.fanout
-        .insert(topic_hashes[1].clone(), Default::default());
     let mut new_peers: Vec<PeerId> = vec![];
-
     for _ in 0..3 {
         let random_peer = PeerId::random();
         // inform the behaviour of a new peer
         let address = "/ip4/127.0.0.1".parse::<Multiaddr>().unwrap();
-        gs.handle_established_inbound_connection(
-            ConnectionId::new_unchecked(0),
-            random_peer,
-            &address,
-            &address,
-        )
-        .unwrap();
-        let sender = RpcSender::new(gs.config.connection_handler_queue_len());
-        let receiver = sender.new_receiver();
         let connection_id = ConnectionId::new_unchecked(0);
-        gs.connected_peers.insert(
-            random_peer,
-            PeerConnections {
-                kind: PeerKind::Floodsub,
-                connections: vec![connection_id],
-                sender,
-            },
-        );
-        receivers.insert(random_peer, receiver);
+        let handler = gs
+            .handle_established_inbound_connection(
+                connection_id.clone(),
+                random_peer,
+                &address,
+                &address,
+            )
+            .unwrap();
+
+        if let Handler::Enabled(mut new_h) = handler {
+            receivers.insert(random_peer, new_h.receiver());
+        }
 
         gs.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
             peer_id: random_peer,
@@ -619,8 +605,8 @@ fn test_join() {
         }));
 
         // add the new peer to the fanout
-        let fanout_peers = gs.fanout.get_mut(&topic_hashes[1]).unwrap();
-        fanout_peers.insert(random_peer);
+        gs.connected_peers
+            .add_to_fanout(topic_hashes[1].clone(), std::iter::once(&random_peer));
         new_peers.push(random_peer);
     }
 
@@ -629,10 +615,15 @@ fn test_join() {
 
     // the three new peers should have been added, along with 3 more from the pool.
     assert!(
-        gs.mesh.get(&topic_hashes[1]).unwrap().len() == 6,
+        gs.connected_peers
+            .mesh()
+            .get(&topic_hashes[1])
+            .unwrap()
+            .len()
+            == 6,
         "Should have added 6 nodes to the mesh"
     );
-    let mesh_peers = gs.mesh.get(&topic_hashes[1]).unwrap();
+    let mesh_peers = gs.connected_peers.mesh().get(&topic_hashes[1]).unwrap();
     for new_peer in new_peers {
         assert!(
             mesh_peers.contains(&new_peer),
@@ -671,13 +662,15 @@ fn test_publish_without_flood_publishing() {
         .create_network();
 
     assert!(
-        gs.mesh.get(&topic_hashes[0]).is_some(),
+        gs.connected_peers.mesh().get(&topic_hashes[0]).is_some(),
         "Subscribe should add a new entry to the mesh[topic] hashmap"
     );
 
     // all peers should be subscribed to the topic
     assert_eq!(
-        gs.topic_peers.get(&topic_hashes[0]).map(|p| p.len()),
+        gs.connected_peers
+            .get_peers_on_topic(&topic_hashes[0])
+            .map(|p| p.len()),
         Some(20),
         "Peers should be subscribed to the topic"
     );
@@ -747,7 +740,7 @@ fn test_fanout() {
         .create_network();
 
     assert!(
-        gs.mesh.get(&topic_hashes[0]).is_some(),
+        gs.connected_peers.mesh().get(&topic_hashes[0]).is_some(),
         "Subscribe should add a new entry to the mesh[topic] hashmap"
     );
     // Unsubscribe from topic
@@ -762,7 +755,8 @@ fn test_fanout() {
         .unwrap();
 
     assert_eq!(
-        gs.fanout
+        gs.connected_peers
+            .fanout()
             .get(&TopicHash::from_raw(fanout_topic))
             .unwrap()
             .len(),
@@ -844,7 +838,7 @@ fn test_inject_connected() {
 
     // should add the new peers to `peer_topics` with an empty vec as a gossipsub node
     for peer in peers {
-        let known_topics = gs.peer_topics.get(&peer).unwrap();
+        let known_topics = gs.connected_peers.get_topics_for_peer(&peer).unwrap();
         assert!(
             known_topics == &topic_hashes.iter().cloned().collect(),
             "The topics for each node should all topics"
@@ -895,24 +889,38 @@ fn test_handle_received_subscriptions() {
 
     // verify the result
 
-    let peer_topics = gs.peer_topics.get(&peers[0]).unwrap().clone();
+    let peer_topics = gs
+        .connected_peers
+        .get_topics_for_peer(&peers[0])
+        .unwrap()
+        .clone();
     assert!(
         peer_topics == topic_hashes.iter().take(3).cloned().collect(),
         "First peer should be subscribed to three topics"
     );
-    let peer_topics = gs.peer_topics.get(&peers[1]).unwrap().clone();
+    let peer_topics = gs
+        .connected_peers
+        .get_topics_for_peer(&peers[1])
+        .unwrap()
+        .clone();
     assert!(
         peer_topics == topic_hashes.iter().take(3).cloned().collect(),
         "Second peer should be subscribed to three topics"
     );
 
     assert!(
-        gs.peer_topics.get(&unknown_peer).is_none(),
+        gs.connected_peers
+            .get_topics_for_peer(&unknown_peer)
+            .is_none(),
         "Unknown peer should not have been added"
     );
 
     for topic_hash in topic_hashes[..3].iter() {
-        let topic_peers = gs.topic_peers.get(topic_hash).unwrap().clone();
+        let topic_peers = gs
+            .connected_peers
+            .get_peers_on_topic(topic_hash)
+            .unwrap()
+            .clone();
         assert!(
             topic_peers == peers[..2].iter().cloned().collect(),
             "Two peers should be added to the first three topics"
@@ -929,13 +937,21 @@ fn test_handle_received_subscriptions() {
         &peers[0],
     );
 
-    let peer_topics = gs.peer_topics.get(&peers[0]).unwrap().clone();
+    let peer_topics = gs
+        .connected_peers
+        .get_topics_for_peer(&peers[0])
+        .unwrap()
+        .clone();
     assert!(
         peer_topics == topic_hashes[1..3].iter().cloned().collect(),
         "Peer should be subscribed to two topics"
     );
 
-    let topic_peers = gs.topic_peers.get(&topic_hashes[0]).unwrap().clone(); // only gossipsub at the moment
+    let topic_peers = gs
+        .connected_peers
+        .get_peers_on_topic(&topic_hashes[0])
+        .unwrap()
+        .clone(); // only gossipsub at the moment
     assert!(
         topic_peers == peers[1..2].iter().cloned().collect(),
         "Only the second peers should be in the first topic"
@@ -960,64 +976,39 @@ fn test_get_random_peers() {
         peers.push(PeerId::random())
     }
 
-    gs.topic_peers
-        .insert(topic_hash.clone(), peers.iter().cloned().collect());
+    for peer_id in &peers {
+        gs.connected_peers.peer_connected(
+            peer_id.clone(),
+            ConnectionId::new_unchecked(0),
+            RpcSender::new(gs.config.connection_handler_queue_len()),
+        );
+        gs.connected_peers
+            .update_connection_kind(*peer_id, PeerKind::Gossipsub);
+        let _ = gs
+            .connected_peers
+            .add_peer_to_a_topic(peer_id, topic_hash.clone());
+    }
 
-    gs.connected_peers = peers
-        .iter()
-        .map(|p| {
-            (
-                *p,
-                PeerConnections {
-                    kind: PeerKind::Gossipsubv1_1,
-                    connections: vec![ConnectionId::new_unchecked(0)],
-                    sender: RpcSender::new(gs.config.connection_handler_queue_len()),
-                },
-            )
-        })
-        .collect();
-
-    let random_peers =
-        get_random_peers(&gs.topic_peers, &gs.connected_peers, &topic_hash, 5, |_| {
-            true
-        });
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_| true);
     assert_eq!(random_peers.len(), 5, "Expected 5 peers to be returned");
-    let random_peers = get_random_peers(
-        &gs.topic_peers,
-        &gs.connected_peers,
-        &topic_hash,
-        30,
-        |_| true,
-    );
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 30, |_| true);
     assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
     assert!(
         random_peers == peers.iter().cloned().collect(),
         "Expected no shuffling"
     );
-    let random_peers = get_random_peers(
-        &gs.topic_peers,
-        &gs.connected_peers,
-        &topic_hash,
-        20,
-        |_| true,
-    );
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 20, |_| true);
     assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
     assert!(
         random_peers == peers.iter().cloned().collect(),
         "Expected no shuffling"
     );
-    let random_peers =
-        get_random_peers(&gs.topic_peers, &gs.connected_peers, &topic_hash, 0, |_| {
-            true
-        });
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 0, |_| true);
     assert!(random_peers.is_empty(), "Expected 0 peers to be returned");
     // test the filter
-    let random_peers =
-        get_random_peers(&gs.topic_peers, &gs.connected_peers, &topic_hash, 5, |_| {
-            false
-        });
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_| false);
     assert!(random_peers.is_empty(), "Expected 0 peers to be returned");
-    let random_peers = get_random_peers(&gs.topic_peers, &gs.connected_peers, &topic_hash, 10, {
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 10, {
         |peer| peers.contains(peer)
     });
     assert!(random_peers.len() == 10, "Expected 10 peers to be returned");
@@ -1255,7 +1246,11 @@ fn test_handle_graft_is_subscribed() {
     gs.handle_graft(&peers[7], topic_hashes.clone());
 
     assert!(
-        gs.mesh.get(&topic_hashes[0]).unwrap().contains(&peers[7]),
+        gs.connected_peers
+            .mesh()
+            .get(&topic_hashes[0])
+            .unwrap()
+            .contains(&peers[7]),
         "Expected peer to have been added to mesh"
     );
 }
@@ -1276,7 +1271,11 @@ fn test_handle_graft_is_not_subscribed() {
     );
 
     assert!(
-        !gs.mesh.get(&topic_hashes[0]).unwrap().contains(&peers[7]),
+        !gs.connected_peers
+            .mesh()
+            .get(&topic_hashes[0])
+            .unwrap()
+            .contains(&peers[7]),
         "Expected peer to have been added to mesh"
     );
 }
@@ -1305,13 +1304,17 @@ fn test_handle_graft_multiple_topics() {
 
     for hash in topic_hashes.iter().take(2) {
         assert!(
-            gs.mesh.get(hash).unwrap().contains(&peers[7]),
+            gs.connected_peers
+                .mesh()
+                .get(hash)
+                .unwrap()
+                .contains(&peers[7]),
             "Expected peer to be in the mesh for the first 2 topics"
         );
     }
 
     assert!(
-        gs.mesh.get(&topic_hashes[2]).is_none(),
+        gs.connected_peers.mesh().get(&topic_hashes[2]).is_none(),
         "Expected the second topic to not be in the mesh"
     );
 }
@@ -1326,10 +1329,14 @@ fn test_handle_prune_peer_in_mesh() {
         .create_network();
 
     // insert peer into our mesh for 'topic1'
-    gs.mesh
-        .insert(topic_hashes[0].clone(), peers.iter().cloned().collect());
+    gs.connected_peers
+        .add_to_mesh(topic_hashes[0].clone(), peers.iter());
     assert!(
-        gs.mesh.get(&topic_hashes[0]).unwrap().contains(&peers[7]),
+        gs.connected_peers
+            .mesh()
+            .get(&topic_hashes[0])
+            .unwrap()
+            .contains(&peers[7]),
         "Expected peer to be in mesh"
     );
 
@@ -1341,7 +1348,11 @@ fn test_handle_prune_peer_in_mesh() {
             .collect(),
     );
     assert!(
-        !gs.mesh.get(&topic_hashes[0]).unwrap().contains(&peers[7]),
+        !gs.connected_peers
+            .mesh()
+            .get(&topic_hashes[0])
+            .unwrap()
+            .contains(&peers[7]),
         "Expected peer to be removed from mesh"
     );
 }
@@ -1481,8 +1492,8 @@ fn test_handle_graft_explicit_peer() {
     gs.handle_graft(peer, topic_hashes.clone());
 
     //peer got not added to mesh
-    assert!(gs.mesh[&topic_hashes[0]].is_empty());
-    assert!(gs.mesh[&topic_hashes[1]].is_empty());
+    assert!(gs.connected_peers.mesh()[&topic_hashes[0]].is_empty());
+    assert!(gs.connected_peers.mesh()[&topic_hashes[1]].is_empty());
 
     //check prunes
     assert!(
@@ -1509,7 +1520,7 @@ fn explicit_peers_not_added_to_mesh_on_receiving_subscription() {
 
     //only peer 1 is in the mesh not peer 0 (which is an explicit peer)
     assert_eq!(
-        gs.mesh[&topic_hashes[0]],
+        gs.connected_peers.mesh()[&topic_hashes[0]],
         vec![peers[1]].into_iter().collect()
     );
 
@@ -1543,7 +1554,7 @@ fn do_not_graft_explicit_peer() {
     gs.heartbeat();
 
     //mesh stays empty
-    assert_eq!(gs.mesh[&topic_hashes[0]], BTreeSet::new());
+    assert_eq!(gs.connected_peers.mesh()[&topic_hashes[0]], BTreeSet::new());
 
     //assert that no graft gets created to explicit peer
     assert_eq!(
@@ -1617,7 +1628,10 @@ fn explicit_peers_not_added_to_mesh_on_subscribe() {
     gs.subscribe(&topic).unwrap();
 
     //only peer 1 is in the mesh not peer 0 (which is an explicit peer)
-    assert_eq!(gs.mesh[&topic_hash], vec![peers[1]].into_iter().collect());
+    assert_eq!(
+        gs.connected_peers.mesh()[&topic_hash],
+        vec![peers[1]].into_iter().collect()
+    );
 
     //assert that graft gets created to non-explicit peer
     assert!(
@@ -1666,7 +1680,10 @@ fn explicit_peers_not_added_to_mesh_from_fanout_on_subscribe() {
     gs.subscribe(&topic).unwrap();
 
     //only peer 1 is in the mesh not peer 0 (which is an explicit peer)
-    assert_eq!(gs.mesh[&topic_hash], vec![peers[1]].into_iter().collect());
+    assert_eq!(
+        gs.connected_peers.mesh()[&topic_hash],
+        vec![peers[1]].into_iter().collect()
+    );
 
     //assert that graft gets created to non-explicit peer
     assert!(
@@ -1749,7 +1766,7 @@ fn test_mesh_addition() {
 
     // Verify the pruned peers are removed from the mesh.
     assert_eq!(
-        gs.mesh.get(&topics[0]).unwrap().len(),
+        gs.connected_peers.mesh().get(&topics[0]).unwrap().len(),
         config.mesh_n_low() - 1
     );
 
@@ -1757,7 +1774,10 @@ fn test_mesh_addition() {
     gs.heartbeat();
 
     // Peers should be added to reach mesh_n
-    assert_eq!(gs.mesh.get(&topics[0]).unwrap().len(), config.mesh_n());
+    assert_eq!(
+        gs.connected_peers.mesh().get(&topics[0]).unwrap().len(),
+        config.mesh_n()
+    );
 }
 
 // Tests the mesh maintenance subtraction
@@ -1785,7 +1805,10 @@ fn test_mesh_subtraction() {
     gs.heartbeat();
 
     // Peers should be removed to reach mesh_n
-    assert_eq!(gs.mesh.get(&topics[0]).unwrap().len(), config.mesh_n());
+    assert_eq!(
+        gs.connected_peers.mesh().get(&topics[0]).unwrap().len(),
+        config.mesh_n()
+    );
 }
 
 #[test]
@@ -1896,7 +1919,8 @@ fn test_prune_backoffed_peer_on_graft() {
         .create_network();
 
     //remove peer from mesh and send prune to peer => this adds a backoff for this peer
-    gs.mesh.get_mut(&topics[0]).unwrap().remove(&peers[0]);
+    gs.connected_peers
+        .remove_peer_from_mesh(&peers[0], &topics[0]);
     gs.send_graft_prune(
         HashMap::new(),
         vec![(peers[0], vec![topics[0].clone()])]
@@ -2253,7 +2277,10 @@ fn test_accept_only_outbound_peer_grafts_when_mesh_full() {
     }
 
     //assert current mesh size
-    assert_eq!(gs.mesh[&topics[0]].len(), config.mesh_n_high());
+    assert_eq!(
+        gs.connected_peers.mesh()[&topics[0]].len(),
+        config.mesh_n_high()
+    );
 
     //create an outbound and an inbound peer
     let (inbound, _in_reciver) = add_peer(&mut gs, &topics, false, false);
@@ -2264,13 +2291,16 @@ fn test_accept_only_outbound_peer_grafts_when_mesh_full() {
     gs.handle_graft(&outbound, vec![topics[0].clone()]);
 
     //assert mesh size
-    assert_eq!(gs.mesh[&topics[0]].len(), config.mesh_n_high() + 1);
+    assert_eq!(
+        gs.connected_peers.mesh()[&topics[0]].len(),
+        config.mesh_n_high() + 1
+    );
 
     //inbound is not in mesh
-    assert!(!gs.mesh[&topics[0]].contains(&inbound));
+    assert!(!gs.connected_peers.mesh()[&topics[0]].contains(&inbound));
 
     //outbound is in mesh
-    assert!(gs.mesh[&topics[0]].contains(&outbound));
+    assert!(gs.connected_peers.mesh()[&topics[0]].contains(&outbound));
 }
 
 #[test]
@@ -2308,16 +2338,21 @@ fn test_do_not_remove_too_many_outbound_peers() {
     }
 
     //mesh is overly full
-    assert_eq!(gs.mesh.get(&topics[0]).unwrap().len(), n + m);
+    assert_eq!(
+        gs.connected_peers.mesh().get(&topics[0]).unwrap().len(),
+        n + m
+    );
 
     // run a heartbeat
     gs.heartbeat();
 
     // Peers should be removed to reach n
-    assert_eq!(gs.mesh.get(&topics[0]).unwrap().len(), n);
+    assert_eq!(gs.connected_peers.mesh().get(&topics[0]).unwrap().len(), n);
 
     //all outbound peers are still in the mesh
-    assert!(outbound.iter().all(|p| gs.mesh[&topics[0]].contains(p)));
+    assert!(outbound
+        .iter()
+        .all(|p| gs.connected_peers.mesh()[&topics[0]].contains(p)));
 }
 
 #[test]
@@ -2343,14 +2378,17 @@ fn test_add_outbound_peers_if_min_is_not_satisfied() {
     }
 
     // Nothing changed in the mesh yet
-    assert_eq!(gs.mesh[&topics[0]].len(), config.mesh_n_high());
+    assert_eq!(
+        gs.connected_peers.mesh()[&topics[0]].len(),
+        config.mesh_n_high()
+    );
 
     // run a heartbeat
     gs.heartbeat();
 
     // The outbound peers got additionally added
     assert_eq!(
-        gs.mesh[&topics[0]].len(),
+        gs.connected_peers.mesh()[&topics[0]].len(),
         config.mesh_n_high() + config.mesh_outbound_min()
     );
 }
@@ -2380,7 +2418,7 @@ fn test_prune_negative_scored_peers() {
     gs.heartbeat();
 
     //peer should not be in mesh anymore
-    assert!(gs.mesh[&topics[0]].is_empty());
+    assert!(gs.connected_peers.mesh()[&topics[0]].is_empty());
 
     //check prune message
     assert_eq!(
@@ -2432,8 +2470,13 @@ fn test_dont_graft_to_negative_scored_peers() {
     gs.heartbeat();
 
     //assert that mesh only contains p2
-    assert_eq!(gs.mesh.get(&topics[0]).unwrap().len(), 1);
-    assert!(gs.mesh.get(&topics[0]).unwrap().contains(&p2));
+    assert_eq!(gs.connected_peers.mesh().get(&topics[0]).unwrap().len(), 1);
+    assert!(gs
+        .connected_peers
+        .mesh()
+        .get(&topics[0])
+        .unwrap()
+        .contains(&p2));
 }
 
 ///Note that in this test also without a penalty the px would be ignored because of the
@@ -3130,15 +3173,15 @@ fn test_keep_best_scoring_peers_on_oversubscription() {
         gs.set_application_score(peer, index as f64);
     }
 
-    assert_eq!(gs.mesh[&topics[0]].len(), n);
+    assert_eq!(gs.connected_peers.mesh()[&topics[0]].len(), n);
 
     //heartbeat to prune some peers
     gs.heartbeat();
 
-    assert_eq!(gs.mesh[&topics[0]].len(), config.mesh_n());
+    assert_eq!(gs.connected_peers.mesh()[&topics[0]].len(), config.mesh_n());
 
     //mesh contains retain_scores best peers
-    assert!(gs.mesh[&topics[0]].is_superset(
+    assert!(gs.connected_peers.mesh()[&topics[0]].is_superset(
         &peers[(n - config.retain_scores())..]
             .iter()
             .cloned()
@@ -4204,7 +4247,7 @@ fn test_scoring_p7_grafts_before_backoff() {
 
     //remove peers from mesh and send prune to them => this adds a backoff for the peers
     for peer in peers.iter().take(2) {
-        gs.mesh.get_mut(&topics[0]).unwrap().remove(peer);
+        gs.connected_peers.remove_peer_from_mesh(peer, &topics[0]);
         gs.send_graft_prune(
             HashMap::new(),
             HashMap::from([(*peer, vec![topics[0].clone()])]),
@@ -4290,7 +4333,10 @@ fn test_opportunistic_grafting() {
         .collect();
 
     //currently mesh equals peers
-    assert_eq!(gs.mesh[&topics[0]], peers.iter().cloned().collect());
+    assert_eq!(
+        gs.connected_peers.mesh()[&topics[0]],
+        peers.iter().cloned().collect()
+    );
 
     //give others high scores (but the first two have not high enough scores)
     for (i, peer) in peers.iter().enumerate().take(5) {
@@ -4307,7 +4353,7 @@ fn test_opportunistic_grafting() {
     gs.heartbeat();
 
     assert_eq!(
-        gs.mesh[&topics[0]].len(),
+        gs.connected_peers.mesh()[&topics[0]].len(),
         5,
         "should not apply opportunistic grafting"
     );
@@ -4319,7 +4365,7 @@ fn test_opportunistic_grafting() {
 
     gs.heartbeat();
     assert_eq!(
-        gs.mesh[&topics[0]].len(),
+        gs.connected_peers.mesh()[&topics[0]].len(),
         5,
         "should not apply opportunistic grafting after first tick"
     );
@@ -4327,18 +4373,19 @@ fn test_opportunistic_grafting() {
     gs.heartbeat();
 
     assert_eq!(
-        gs.mesh[&topics[0]].len(),
+        gs.connected_peers.mesh()[&topics[0]].len(),
         7,
         "opportunistic grafting should have added 2 peers"
     );
 
     assert!(
-        gs.mesh[&topics[0]].is_superset(&peers.iter().cloned().collect()),
+        gs.connected_peers.mesh()[&topics[0]].is_superset(&peers.iter().cloned().collect()),
         "old peers are still part of the mesh"
     );
 
     assert!(
-        gs.mesh[&topics[0]].is_disjoint(&others.iter().map(|(p, _)| p).cloned().take(2).collect()),
+        gs.connected_peers.mesh()[&topics[0]]
+            .is_disjoint(&others.iter().map(|(p, _)| p).cloned().take(2).collect()),
         "peers below or equal to median should not be added in opportunistic grafting"
     );
 }
@@ -4807,7 +4854,10 @@ fn test_publish_to_floodsub_peers_without_flood_publish() {
     queues.insert(p2, receiver2);
 
     //p1 and p2 are not in the mesh
-    assert!(!gs.mesh[&topics[0]].contains(&p1) && !gs.mesh[&topics[0]].contains(&p2));
+    assert!(
+        !gs.connected_peers.mesh()[&topics[0]].contains(&p1)
+            && !gs.connected_peers.mesh()[&topics[0]].contains(&p2)
+    );
 
     //publish a message
     let publish_data = vec![0; 42];
@@ -4888,7 +4938,8 @@ fn test_do_not_use_floodsub_in_fanout() {
     );
 
     assert!(
-        !gs.fanout[&topics[0]].contains(&p1) && !gs.fanout[&topics[0]].contains(&p2),
+        !gs.connected_peers.fanout()[&topics[0]].contains(&p1)
+            && !gs.connected_peers.fanout()[&topics[0]].contains(&p2),
         "Floodsub peers are not allowed in fanout"
     );
 }
@@ -4918,7 +4969,7 @@ fn test_dont_add_floodsub_peers_to_mesh_on_join() {
     gs.join(&topics[0]);
 
     assert!(
-        gs.mesh[&topics[0]].is_empty(),
+        gs.connected_peers.mesh()[&topics[0]].is_empty(),
         "Floodsub peers should not get added to mesh"
     );
 }
@@ -5019,7 +5070,7 @@ fn test_dont_add_floodsub_peers_to_mesh_in_heartbeat() {
     gs.heartbeat();
 
     assert!(
-        gs.mesh[&topics[0]].is_empty(),
+        gs.connected_peers.mesh()[&topics[0]].is_empty(),
         "Floodsub peers should not get added to mesh"
     );
 }
@@ -5041,9 +5092,10 @@ fn test_public_api() {
     );
 
     assert_eq!(
-        gs.mesh_peers(&TopicHash::from_raw("topic1"))
+        gs.connected_peers
+            .mesh_peers(&TopicHash::from_raw("topic1"))
             .cloned()
-            .collect::<BTreeSet<_>>(),
+            .unwrap_or_default(),
         peers,
         "Expected peers for a registered topic to contain all peers."
     );
@@ -5152,7 +5204,7 @@ fn test_graft_without_subscribe() {
         .create_network();
 
     assert!(
-        gs.mesh.get(&topic_hashes[0]).is_some(),
+        gs.connected_peers.mesh().get(&topic_hashes[0]).is_some(),
         "Subscribe should add a new entry to the mesh[topic] hashmap"
     );
 
