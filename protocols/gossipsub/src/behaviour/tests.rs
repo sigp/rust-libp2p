@@ -238,6 +238,7 @@ where
         PeerConnections {
             kind: kind.clone().unwrap_or(PeerKind::Floodsub),
             connections: vec![connection_id],
+            topics: Default::default(),
             sender,
         },
     );
@@ -602,6 +603,7 @@ fn test_join() {
             PeerConnections {
                 kind: PeerKind::Floodsub,
                 connections: vec![connection_id],
+                topics: Default::default(),
                 sender,
             },
         );
@@ -844,9 +846,9 @@ fn test_inject_connected() {
 
     // should add the new peers to `peer_topics` with an empty vec as a gossipsub node
     for peer in peers {
-        let known_topics = gs.peer_topics.get(&peer).unwrap();
+        let peer = gs.connected_peers.get(&peer).unwrap();
         assert!(
-            known_topics == &topic_hashes.iter().cloned().collect(),
+            &peer.topics == &topic_hashes.iter().cloned().collect(),
             "The topics for each node should all topics"
         );
     }
@@ -895,19 +897,29 @@ fn test_handle_received_subscriptions() {
 
     // verify the result
 
-    let peer_topics = gs.peer_topics.get(&peers[0]).unwrap().clone();
+    let peer = gs.connected_peers.get(&peers[0]).unwrap();
     assert!(
-        peer_topics == topic_hashes.iter().take(3).cloned().collect(),
+        peer.topics
+            == topic_hashes
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<BTreeSet<_>>(),
         "First peer should be subscribed to three topics"
     );
-    let peer_topics = gs.peer_topics.get(&peers[1]).unwrap().clone();
+    let peer1 = gs.connected_peers.get(&peers[1]).unwrap();
     assert!(
-        peer_topics == topic_hashes.iter().take(3).cloned().collect(),
+        peer1.topics
+            == topic_hashes
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<BTreeSet<_>>(),
         "Second peer should be subscribed to three topics"
     );
 
     assert!(
-        gs.peer_topics.get(&unknown_peer).is_none(),
+        gs.connected_peers.get(&unknown_peer).is_none(),
         "Unknown peer should not have been added"
     );
 
@@ -929,9 +941,9 @@ fn test_handle_received_subscriptions() {
         &peers[0],
     );
 
-    let peer_topics = gs.peer_topics.get(&peers[0]).unwrap().clone();
+    let peer = gs.connected_peers.get(&peers[0]).unwrap();
     assert!(
-        peer_topics == topic_hashes[1..3].iter().cloned().collect(),
+        peer.topics == topic_hashes[1..3].iter().cloned().collect::<BTreeSet<_>>(),
         "Peer should be subscribed to two topics"
     );
 
@@ -971,6 +983,7 @@ fn test_get_random_peers() {
                 PeerConnections {
                     kind: PeerKind::Gossipsubv1_1,
                     connections: vec![ConnectionId::new_unchecked(0)],
+                    topics: Default::default(),
                     sender: RpcSender::new(gs.config.connection_handler_queue_len()),
                 },
             )
@@ -4346,14 +4359,14 @@ fn test_opportunistic_grafting() {
 #[test]
 fn test_ignore_graft_from_unknown_topic() {
     //build gossipsub without subscribing to any topics
-    let (mut gs, _, queues, _) = inject_nodes1()
-        .peer_no(0)
+    let (mut gs, peers, queues, _) = inject_nodes1()
+        .peer_no(1)
         .topics(vec![])
         .to_subscribe(false)
         .create_network();
 
     //handle an incoming graft for some topic
-    gs.handle_graft(&PeerId::random(), vec![Topic::new("test").hash()]);
+    gs.handle_graft(&peers[0], vec![Topic::new("test").hash()]);
 
     //assert that no prune got created
     assert_eq!(
@@ -5152,7 +5165,7 @@ fn test_graft_without_subscribe() {
         .create_network();
 
     assert!(
-        gs.mesh.get(&topic_hashes[0]).is_some(),
+        gs.mesh.get(dbg!(&topic_hashes[0])).is_some(),
         "Subscribe should add a new entry to the mesh[topic] hashmap"
     );
 
