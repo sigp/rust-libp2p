@@ -1326,12 +1326,9 @@ where
         }
 
         tracing::debug!(peer=%peer_id, "Handling IWANT for peer");
-        let sender = match self.connected_peers.get_sender(peer_id) {
-            Some(sender) => sender,
-            None => {
-                tracing::error!(peer=%peer_id, "Send handler non-existent from IWANT peer");
-                return;
-            }
+        let Some(sender) = self.connected_peers.get_sender(peer_id) else {
+            tracing::error!(peer=%peer_id, "Send handler non-existent from IWANT peer");
+            return;
         };
 
         for id in iwant_msgs {
@@ -1553,7 +1550,7 @@ where
         // Remove the peer if it exists in the mesh
         if self
             .connected_peers
-            .remove_peer_from_mesh(&peer_id, topic_hash)
+            .remove_peer_from_mesh(peer_id, topic_hash)
         {
             tracing::debug!(
                 peer=%peer_id,
@@ -1964,38 +1961,33 @@ where
                         && !self
                             .connected_peers
                             .mesh_peers(topic_hash).map(|v| v.contains(propagation_source)).unwrap_or(false)
-                    {
-                        if self
+                        &&
+                        self
                             .connected_peers
                             .mesh_peers(topic_hash)
                             .map(|p| p.len() < self.config.mesh_n_low())
                             .unwrap_or(false)
-                        {
-                            {
-                                self.connected_peers.add_to_mesh(
-                                    topic_hash.clone(),
-                                    std::iter::once(propagation_source),
-                                );
-                                tracing::debug!(
-                                    peer=%propagation_source,
-                                    topic=%topic_hash,
-                                    "SUBSCRIPTION: Adding peer to the mesh for topic"
-                                );
-                                if let Some(m) = self.metrics.as_mut() {
-                                    m.peers_included(topic_hash, Inclusion::Subscribed, 1)
-                                }
-                                // send graft to the peer
-                                tracing::debug!(
-                                    peer=%propagation_source,
-                                    topic=%topic_hash,
-                                    "Sending GRAFT to peer for topic"
-                                );
-                                if let Some((peer_score, ..)) = &mut self.peer_score {
-                                    peer_score.graft(propagation_source, topic_hash.clone());
-                                }
-                                topics_to_graft.push(topic_hash.clone());
-                            }
+                    {
+                        self.connected_peers
+                            .add_to_mesh(topic_hash.clone(), std::iter::once(propagation_source));
+                        tracing::debug!(
+                            peer=%propagation_source,
+                            topic=%topic_hash,
+                            "SUBSCRIPTION: Adding peer to the mesh for topic"
+                        );
+                        if let Some(m) = self.metrics.as_mut() {
+                            m.peers_included(topic_hash, Inclusion::Subscribed, 1)
                         }
+                        // send graft to the peer
+                        tracing::debug!(
+                            peer=%propagation_source,
+                            topic=%topic_hash,
+                            "Sending GRAFT to peer for topic"
+                        );
+                        if let Some((peer_score, ..)) = &mut self.peer_score {
+                            peer_score.graft(propagation_source, topic_hash.clone());
+                        }
+                        topics_to_graft.push(topic_hash.clone());
                     }
                     // generates a subscription event to be polled
                     application_event.push(ToSwarm::GenerateEvent(Event::Subscribed {
@@ -2337,10 +2329,10 @@ where
                         let sub_middle_peer = *peers_by_score
                             .get(middle - 1)
                             .expect("middle < vector length and middle > 0 since peers.len() > 0");
-                        let sub_middle_score = *scores.get(&sub_middle_peer).unwrap_or(&0.0);
+                        let sub_middle_score = *scores.get(sub_middle_peer).unwrap_or(&0.0);
                         let middle_peer =
                             *peers_by_score.get(middle).expect("middle < vector length");
-                        let middle_score = *scores.get(&middle_peer).unwrap_or(&0.0);
+                        let middle_score = *scores.get(middle_peer).unwrap_or(&0.0);
 
                         (sub_middle_score + middle_score) * 0.5
                     } else {
@@ -3329,10 +3321,10 @@ fn get_random_peers_dynamic(
     n_map: impl Fn(usize) -> usize,
     mut f: impl FnMut(&PeerId) -> bool,
 ) -> BTreeSet<PeerId> {
-    let mut gossip_peers = connected_peers
+    let mut gossip_peers: Vec<PeerId> = connected_peers
         .get_gossipsub_peers_on_topic(topic_hash)
         .map(|peers| peers.filter(|p| f(p)).cloned().collect())
-        .unwrap_or_else(|| Vec::new());
+        .unwrap_or_default();
 
     // if we have less than needed, return them
     let n = n_map(gossip_peers.len());

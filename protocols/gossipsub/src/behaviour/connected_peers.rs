@@ -139,10 +139,10 @@ impl ConnectedPeers {
 
     /// Returns true if the peer is in a mesh.
     pub(crate) fn is_peer_in_mesh(&self, peer_id: &PeerId) -> bool {
-        if let Some(topics) = self.peer_topics.get(&peer_id) {
+        if let Some(topics) = self.peer_topics.get(peer_id) {
             for topic in topics {
                 if let Some(mesh_peers) = self.mesh.get(topic) {
-                    if mesh_peers.contains(&peer_id) {
+                    if mesh_peers.contains(peer_id) {
                         return true;
                     }
                 }
@@ -189,9 +189,9 @@ impl ConnectedPeers {
         debug_assert!(self.peer_topics.contains_key(peer_id));
 
         if let Some(peer_set) = self.fanout.get_mut(topic) {
-            return peer_set.remove(peer_id);
+            peer_set.remove(peer_id)
         } else {
-            return false;
+            false
         }
     }
 
@@ -218,9 +218,9 @@ impl ConnectedPeers {
         debug_assert!(self.peer_topics.contains_key(peer_id));
 
         if let Some(peer_set) = self.mesh.get_mut(topic) {
-            return peer_set.remove(peer_id);
+            peer_set.remove(peer_id)
         } else {
-            return false;
+            false
         }
     }
 
@@ -255,16 +255,14 @@ impl ConnectedPeers {
         }
 
         // Remove the peer from the mappings
-        let topics = match self.peer_topics.get_mut(peer_id) {
-            Some(topics) => topics,
-            None => return Err(()),
+        let Some(topics) = self.peer_topics.get_mut(peer_id) else {
+            return Err(());
         };
         topics.remove(topic);
 
         // Remove the peer from the mappings
-        let peers = match self.topic_peers.get_mut(topic) {
-            Some(peers) => peers,
-            None => return Ok(false), // We may not know of this topic
+        let Some(peers) = self.topic_peers.get_mut(topic) else {
+            return Ok(false); // We may not know of this topic
         };
         Ok(peers.remove(peer_id))
     }
@@ -317,13 +315,10 @@ impl ConnectedPeers {
         connection_id: ConnectionId,
         metrics: &mut Option<Metrics>,
     ) {
-        let peer_connection = match self.peer_connections.get_mut(&peer_id) {
-            Some(connection) => connection,
-            None => {
-                tracing::error!(peer_id=%peer_id, "Libp2p reported a disconnection for a non-connected peer");
-                self.remove_peer_from_all_mappings(peer_id, metrics);
-                return;
-            }
+        let Some(peer_connection) = self.peer_connections.get_mut(&peer_id) else {
+            tracing::error!(peer_id=%peer_id, "Libp2p reported a disconnection for a non-connected peer");
+            self.remove_peer_from_all_mappings(peer_id, metrics);
+            return;
         };
 
         // Remove the connection from the list
