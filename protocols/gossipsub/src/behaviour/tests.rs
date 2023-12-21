@@ -469,7 +469,11 @@ fn test_unsubscribe() {
 
     for topic_hash in &topic_hashes {
         assert!(
-            gs.topic_peers.get(topic_hash).is_some(),
+            gs.connected_peers
+                .values()
+                .filter(|p| p.topics.contains(topic_hash))
+                .next()
+                .is_some(),
             "Topic_peers contain a topic entry"
         );
         assert!(
@@ -679,8 +683,11 @@ fn test_publish_without_flood_publishing() {
 
     // all peers should be subscribed to the topic
     assert_eq!(
-        gs.topic_peers.get(&topic_hashes[0]).map(|p| p.len()),
-        Some(20),
+        gs.connected_peers
+            .values()
+            .filter(|p| p.topics.contains(&topic_hashes[0]))
+            .count(),
+        20,
         "Peers should be subscribed to the topic"
     );
 
@@ -924,7 +931,12 @@ fn test_handle_received_subscriptions() {
     );
 
     for topic_hash in topic_hashes[..3].iter() {
-        let topic_peers = gs.topic_peers.get(topic_hash).unwrap().clone();
+        let topic_peers = gs
+            .connected_peers
+            .iter()
+            .filter(|(_, p)| p.topics.contains(&topic_hash))
+            .map(|(peer_id, _)| *peer_id)
+            .collect::<BTreeSet<PeerId>>();
         assert!(
             topic_peers == peers[..2].iter().cloned().collect(),
             "Two peers should be added to the first three topics"
@@ -947,7 +959,14 @@ fn test_handle_received_subscriptions() {
         "Peer should be subscribed to two topics"
     );
 
-    let topic_peers = gs.topic_peers.get(&topic_hashes[0]).unwrap().clone(); // only gossipsub at the moment
+    // only gossipsub at the moment
+    let topic_peers = gs
+        .connected_peers
+        .iter()
+        .filter(|(_, p)| p.topics.contains(&topic_hashes[0]))
+        .map(|(peer_id, _)| *peer_id)
+        .collect::<BTreeSet<PeerId>>();
+
     assert!(
         topic_peers == peers[1..2].iter().cloned().collect(),
         "Only the second peers should be in the first topic"
@@ -968,69 +987,43 @@ fn test_get_random_peers() {
     // create a topic and fill it with some peers
     let topic_hash = Topic::new("Test").hash();
     let mut peers = vec![];
+    let mut topics = BTreeSet::new();
+    topics.insert(topic_hash.clone());
+
     for _ in 0..20 {
-        peers.push(PeerId::random())
+        let peer_id = PeerId::random();
+        peers.push(peer_id);
+        gs.connected_peers.insert(
+            peer_id,
+            PeerConnections {
+                kind: PeerKind::Gossipsubv1_1,
+                connections: vec![ConnectionId::new_unchecked(0)],
+                topics: topics.clone(),
+                sender: RpcSender::new(gs.config.connection_handler_queue_len()),
+            },
+        );
     }
 
-    gs.topic_peers
-        .insert(topic_hash.clone(), peers.iter().cloned().collect());
-
-    gs.connected_peers = peers
-        .iter()
-        .map(|p| {
-            (
-                *p,
-                PeerConnections {
-                    kind: PeerKind::Gossipsubv1_1,
-                    connections: vec![ConnectionId::new_unchecked(0)],
-                    topics: Default::default(),
-                    sender: RpcSender::new(gs.config.connection_handler_queue_len()),
-                },
-            )
-        })
-        .collect();
-
-    let random_peers =
-        get_random_peers(&gs.topic_peers, &gs.connected_peers, &topic_hash, 5, |_| {
-            true
-        });
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_| true);
     assert_eq!(random_peers.len(), 5, "Expected 5 peers to be returned");
-    let random_peers = get_random_peers(
-        &gs.topic_peers,
-        &gs.connected_peers,
-        &topic_hash,
-        30,
-        |_| true,
-    );
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 30, |_| true);
     assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
     assert!(
         random_peers == peers.iter().cloned().collect(),
         "Expected no shuffling"
     );
-    let random_peers = get_random_peers(
-        &gs.topic_peers,
-        &gs.connected_peers,
-        &topic_hash,
-        20,
-        |_| true,
-    );
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 20, |_| true);
     assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
     assert!(
         random_peers == peers.iter().cloned().collect(),
         "Expected no shuffling"
     );
-    let random_peers =
-        get_random_peers(&gs.topic_peers, &gs.connected_peers, &topic_hash, 0, |_| {
-            true
-        });
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 0, |_| true);
     assert!(random_peers.is_empty(), "Expected 0 peers to be returned");
     // test the filter
-    let random_peers =
-        get_random_peers(&gs.topic_peers, &gs.connected_peers, &topic_hash, 5, |_| {
-            false
-        });
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_| false);
     assert!(random_peers.is_empty(), "Expected 0 peers to be returned");
-    let random_peers = get_random_peers(&gs.topic_peers, &gs.connected_peers, &topic_hash, 10, {
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 10, {
         |peer| peers.contains(peer)
     });
     assert!(random_peers.len() == 10, "Expected 10 peers to be returned");
