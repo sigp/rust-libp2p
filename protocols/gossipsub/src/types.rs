@@ -639,6 +639,7 @@ impl RpcSender {
 
     /// Send a `RpcOut::IHave` message to the `RpcReceiver`
     /// this is low priority, if the queue is full an Err is returned.
+    #[allow(clippy::result_large_err)]
     pub(crate) fn ihave(&mut self, ihave: IHave) -> Result<(), RpcOut> {
         self.non_priority
             .try_send(RpcOut::IHave(ihave))
@@ -647,6 +648,7 @@ impl RpcSender {
 
     /// Send a `RpcOut::IHave` message to the `RpcReceiver`
     /// this is low priority, if the queue is full an Err is returned.
+    #[allow(clippy::result_large_err)]
     pub(crate) fn iwant(&mut self, iwant: IWant) -> Result<(), RpcOut> {
         self.non_priority
             .try_send(RpcOut::IWant(iwant))

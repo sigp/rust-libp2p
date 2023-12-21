@@ -471,9 +471,7 @@ fn test_unsubscribe() {
         assert!(
             gs.connected_peers
                 .values()
-                .filter(|p| p.topics.contains(topic_hash))
-                .next()
-                .is_some(),
+                .any(|p| p.topics.contains(topic_hash)),
             "Topic_peers contain a topic entry"
         );
         assert!(
@@ -855,7 +853,7 @@ fn test_inject_connected() {
     for peer in peers {
         let peer = gs.connected_peers.get(&peer).unwrap();
         assert!(
-            &peer.topics == &topic_hashes.iter().cloned().collect(),
+            peer.topics == topic_hashes.iter().cloned().collect(),
             "The topics for each node should all topics"
         );
     }
@@ -934,7 +932,7 @@ fn test_handle_received_subscriptions() {
         let topic_peers = gs
             .connected_peers
             .iter()
-            .filter(|(_, p)| p.topics.contains(&topic_hash))
+            .filter(|(_, p)| p.topics.contains(topic_hash))
             .map(|(peer_id, _)| *peer_id)
             .collect::<BTreeSet<PeerId>>();
         assert!(
@@ -5158,7 +5156,7 @@ fn test_graft_without_subscribe() {
         .create_network();
 
     assert!(
-        gs.mesh.get(dbg!(&topic_hashes[0])).is_some(),
+        gs.mesh.get(&topic_hashes[0]).is_some(),
         "Subscribe should add a new entry to the mesh[topic] hashmap"
     );
 

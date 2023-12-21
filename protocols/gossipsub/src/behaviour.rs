@@ -3370,7 +3370,7 @@ fn get_random_peers_dynamic(
 ) -> BTreeSet<PeerId> {
     let mut gossip_peers = connected_peers
         .iter()
-        .filter(|(_, p)| p.topics.contains(&topic_hash))
+        .filter(|(_, p)| p.topics.contains(topic_hash))
         .filter(|(peer_id, _)| f(peer_id))
         .filter(|(_, p)| p.kind == PeerKind::Gossipsub || p.kind == PeerKind::Gossipsubv1_1)
         .map(|(peer_id, _)| *peer_id)
