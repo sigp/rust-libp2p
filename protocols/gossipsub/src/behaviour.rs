@@ -621,80 +621,78 @@ where
 
         let topic_hash = raw_message.topic.clone();
 
-        let mut recipient_peers = HashSet::new();
         let mut peers_on_topic = self
             .connected_peers
             .iter()
             .filter(|(_, p)| p.topics.contains(&topic_hash))
             .map(|(peer_id, _)| peer_id)
             .peekable();
-        if peers_on_topic.peek().is_some() {
-            if self.config.flood_publish() {
-                // Forward to all peers above score and all explicit peers
-                recipient_peers.extend(peers_on_topic.filter(|p| {
-                    self.explicit_peers.contains(*p)
-                        || !self.score_below_threshold(p, |ts| ts.publish_threshold).0
-                }));
-            } else {
-                match self.mesh.get(&raw_message.topic) {
-                    // Mesh peers
-                    Some(mesh_peers) => {
-                        recipient_peers.extend(mesh_peers);
-                    }
-                    // Gossipsub peers
-                    None => {
-                        tracing::debug!(topic=%topic_hash, "Topic not in the mesh");
-                        // If we have fanout peers add them to the map.
-                        if self.fanout.contains_key(&topic_hash) {
-                            for peer in self.fanout.get(&topic_hash).expect("Topic must exist") {
-                                recipient_peers.insert(*peer);
-                            }
-                        } else {
-                            // We have no fanout peers, select mesh_n of them and add them to the fanout
-                            let mesh_n = self.config.mesh_n();
-                            let new_peers =
-                                get_random_peers(&self.connected_peers, &topic_hash, mesh_n, {
-                                    |p| {
-                                        !self.explicit_peers.contains(p)
-                                            && !self
-                                                .score_below_threshold(p, |pst| {
-                                                    pst.publish_threshold
-                                                })
-                                                .0
-                                    }
-                                });
-                            // Add the new peers to the fanout and recipient peers
-                            self.fanout.insert(topic_hash.clone(), new_peers.clone());
-                            for peer in new_peers {
-                                tracing::debug!(%peer, "Peer added to fanout");
-                                recipient_peers.insert(peer);
-                            }
-                        }
-                        // We are publishing to fanout peers - update the time we published
-                        self.fanout_last_pub
-                            .insert(topic_hash.clone(), Instant::now());
-                    }
-                }
 
-                // Explicit peers that are part of the topic
-                recipient_peers
-                    .extend(peers_on_topic.filter(|peer_id| self.explicit_peers.contains(peer_id)));
-
-                // Floodsub peers
-                for (peer, connections) in &self.connected_peers {
-                    if connections.kind == PeerKind::Floodsub
-                        && !self
-                            .score_below_threshold(peer, |ts| ts.publish_threshold)
-                            .0
-                    {
-                        recipient_peers.insert(*peer);
-                    }
-                }
-            }
+        if peers_on_topic.peek().is_none() {
+            return Err(PublishError::InsufficientPeers);
         }
 
-        if recipient_peers.is_empty() {
-            return Err(PublishError::InsufficientPeers);
+        let mut recipient_peers = HashSet::new();
+
+        if self.config.flood_publish() {
+            // Forward to all peers above score and all explicit peers
+            recipient_peers.extend(peers_on_topic.filter(|p| {
+                self.explicit_peers.contains(*p)
+                    || !self.score_below_threshold(p, |ts| ts.publish_threshold).0
+            }));
+        } else {
+            match self.mesh.get(&raw_message.topic) {
+                // Mesh peers
+                Some(mesh_peers) => {
+                    recipient_peers.extend(mesh_peers);
+                }
+                // Gossipsub peers
+                None => {
+                    tracing::debug!(topic=%topic_hash, "Topic not in the mesh");
+                    // If we have fanout peers add them to the map.
+                    if self.fanout.contains_key(&topic_hash) {
+                        for peer in self.fanout.get(&topic_hash).expect("Topic must exist") {
+                            recipient_peers.insert(*peer);
+                        }
+                    } else {
+                        // We have no fanout peers, select mesh_n of them and add them to the fanout
+                        let mesh_n = self.config.mesh_n();
+                        let new_peers =
+                            get_random_peers(&self.connected_peers, &topic_hash, mesh_n, {
+                                |p| {
+                                    !self.explicit_peers.contains(p)
+                                        && !self
+                                            .score_below_threshold(p, |pst| pst.publish_threshold)
+                                            .0
+                                }
+                            });
+                        // Add the new peers to the fanout and recipient peers
+                        self.fanout.insert(topic_hash.clone(), new_peers.clone());
+                        for peer in new_peers {
+                            tracing::debug!(%peer, "Peer added to fanout");
+                            recipient_peers.insert(peer);
+                        }
+                    }
+                    // We are publishing to fanout peers - update the time we published
+                    self.fanout_last_pub
+                        .insert(topic_hash.clone(), Instant::now());
+                }
+            }
+
+            // Explicit peers that are part of the topic
+            recipient_peers
+                .extend(peers_on_topic.filter(|peer_id| self.explicit_peers.contains(peer_id)));
+
+            // Floodsub peers
+            for (peer, connections) in &self.connected_peers {
+                if connections.kind == PeerKind::Floodsub
+                    && !self
+                        .score_below_threshold(peer, |ts| ts.publish_threshold)
+                        .0
+                {
+                    recipient_peers.insert(*peer);
+                }
+            }
         }
 
         // If the message isn't a duplicate and we have sent it to some peers add it to the
