@@ -2914,37 +2914,32 @@ where
         } else {
             // remove from mesh, topic_peers, peer_topic and the fanout
             tracing::debug!(peer=%peer_id, "Peer disconnected");
-            {
-                let Some(peer) = self.connected_peers.get(&peer_id) else {
-                    debug_assert!(
-                        self.blacklisted_peers.contains(&peer_id),
-                        "Disconnected node not in connected list"
-                    );
-                    return;
-                };
+            let peer = self
+                .connected_peers
+                .get(&peer_id)
+                .expect("Peer should exist in the connected_peers");
 
-                // remove peer from all mappings
-                for topic in &peer.topics {
-                    // check the mesh for the topic
-                    if let Some(mesh_peers) = self.mesh.get_mut(topic) {
-                        // check if the peer is in the mesh and remove it
-                        if mesh_peers.remove(&peer_id) {
-                            if let Some(m) = self.metrics.as_mut() {
-                                m.peers_removed(topic, Churn::Dc, 1);
-                                m.set_mesh_peers(topic, mesh_peers.len());
-                            }
-                        };
-                    }
-
-                    if let Some(m) = self.metrics.as_mut() {
-                        m.dec_topic_peers(topic);
-                    }
-
-                    // remove from fanout
-                    self.fanout
-                        .get_mut(topic)
-                        .map(|peers| peers.remove(&peer_id));
+            // remove peer from all mappings
+            for topic in &peer.topics {
+                // check the mesh for the topic
+                if let Some(mesh_peers) = self.mesh.get_mut(topic) {
+                    // check if the peer is in the mesh and remove it
+                    if mesh_peers.remove(&peer_id) {
+                        if let Some(m) = self.metrics.as_mut() {
+                            m.peers_removed(topic, Churn::Dc, 1);
+                            m.set_mesh_peers(topic, mesh_peers.len());
+                        }
+                    };
                 }
+
+                if let Some(m) = self.metrics.as_mut() {
+                    m.dec_topic_peers(topic);
+                }
+
+                // remove from fanout
+                self.fanout
+                    .get_mut(topic)
+                    .map(|peers| peers.remove(&peer_id));
             }
 
             // Forget px and outbound status for this peer
