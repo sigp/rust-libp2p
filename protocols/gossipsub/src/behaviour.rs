@@ -711,7 +711,7 @@ where
         // Send to peers we know are subscribed to the topic.
         let mut publish_failed = true;
         for peer_id in recipient_peers.iter() {
-            if let Some(peer) = &mut self.connected_peers.get_mut(peer_id) {
+            if let Some(peer) = self.connected_peers.get_mut(peer_id) {
                 tracing::trace!(peer=%peer_id, "Sending message to peer");
                 match peer.sender.publish(
                     raw_message.clone(),
@@ -1340,32 +1340,30 @@ where
                         message=%id,
                         "IWANT: Peer has asked for message too many times; ignoring request"
                     );
-                } else {
-                    if let Some(peer) = &mut self.connected_peers.get_mut(peer_id) {
-                        tracing::debug!(peer=%peer_id, "IWANT: Sending cached messages to peer");
-                        if peer
-                            .sender
-                            .forward(
-                                msg,
-                                self.config.forward_queue_duration(),
-                                self.metrics.as_mut(),
-                            )
-                            .is_err()
-                        {
-                            // Downscore the peer
-                            if let Some((peer_score, ..)) = &mut self.peer_score {
-                                peer_score.failed_message_slow_peer(peer_id);
-                            }
-                            // Increment the failed message count
-                            self.failed_messages
-                                .entry(*peer_id)
-                                .or_default()
-                                .non_priority += 1;
+                } else if let Some(peer) = &mut self.connected_peers.get_mut(peer_id) {
+                    tracing::debug!(peer=%peer_id, "IWANT: Sending cached messages to peer");
+                    if peer
+                        .sender
+                        .forward(
+                            msg,
+                            self.config.forward_queue_duration(),
+                            self.metrics.as_mut(),
+                        )
+                        .is_err()
+                    {
+                        // Downscore the peer
+                        if let Some((peer_score, ..)) = &mut self.peer_score {
+                            peer_score.failed_message_slow_peer(peer_id);
                         }
-                    } else {
-                        tracing::error!(peer = %peer_id,
-                        "Could not IWANT, peer doesn't exist in connected peer list");
+                        // Increment the failed message count
+                        self.failed_messages
+                            .entry(*peer_id)
+                            .or_default()
+                            .non_priority += 1;
                     }
+                } else {
+                    tracing::error!(peer = %peer_id,
+                        "Could not IWANT, peer doesn't exist in connected peer list");
                 }
             }
         }
@@ -2604,7 +2602,7 @@ where
                     self.config.do_px() && !no_px.contains(peer_id),
                     false,
                 );
-                if let Some(peer) = &mut self.connected_peers.get_mut(&peer_id) {
+                if let Some(peer) = self.connected_peers.get_mut(peer_id) {
                     peer.sender.prune(prune);
                 } else {
                     tracing::error!(peer = %peer_id,
