@@ -1,5 +1,7 @@
 ## 0.44.1
 
+- Add PeerId to ListenFailure.
+
 - Implement `Clone` & `Copy` for `FromSwarm.
   This makes it easier to forward these events when wrapping other behaviours.
   See [PR 4825](https://github.com/libp2p/rust-libp2p/pull/4825).
