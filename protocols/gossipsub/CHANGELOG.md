@@ -1,8 +1,6 @@
 ## 0.46.1 - unreleased
 - Adds scoring for slow peers and introduces a message to inform the application of slow peers.
 
-- Adds metrics for priority and non-priority queue lengths.
-
 - Removes the control pool and sends control messages on demand.
 
 - Implement backpressure by differentiating between priority and non priority messages.

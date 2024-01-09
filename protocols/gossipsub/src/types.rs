@@ -29,6 +29,7 @@ use libp2p_identity::PeerId;
 use libp2p_swarm::ConnectionId;
 use prometheus_client::encoding::EncodeLabelValue;
 use quick_protobuf::MessageWrite;
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -117,6 +118,8 @@ pub(crate) struct PeerConnections {
     pub(crate) connections: Vec<ConnectionId>,
     /// The rpc sender to the peer.
     pub(crate) sender: RpcSender,
+    /// Subscribed topics.
+    pub(crate) topics: BTreeSet<TopicHash>,
 }
 
 /// Describes the types of peers that can exist in the gossipsub context.
@@ -636,6 +639,7 @@ impl RpcSender {
 
     /// Send a `RpcOut::IHave` message to the `RpcReceiver`
     /// this is low priority, if the queue is full an Err is returned.
+    #[allow(clippy::result_large_err)]
     pub(crate) fn ihave(&mut self, ihave: IHave) -> Result<(), RpcOut> {
         self.non_priority
             .try_send(RpcOut::IHave(ihave))
@@ -644,6 +648,7 @@ impl RpcSender {
 
     /// Send a `RpcOut::IHave` message to the `RpcReceiver`
     /// this is low priority, if the queue is full an Err is returned.
+    #[allow(clippy::result_large_err)]
     pub(crate) fn iwant(&mut self, iwant: IWant) -> Result<(), RpcOut> {
         self.non_priority
             .try_send(RpcOut::IWant(iwant))

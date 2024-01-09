@@ -806,20 +806,23 @@ impl ConfigBuilder {
     }
 
     /// The max number of messages a `ConnectionHandler` can buffer. The default is 5000.
-    pub fn connection_handler_queue_len(&mut self, len: usize) {
+    pub fn connection_handler_queue_len(&mut self, len: usize) -> &mut Self {
         self.config.connection_handler_queue_len = len;
+        self
     }
 
     /// The duration a message to be published can wait to be sent before it is abandoned. The
     /// default is 5 seconds.
-    pub fn publish_queue_duration(&mut self, duration: Duration) {
+    pub fn publish_queue_duration(&mut self, duration: Duration) -> &mut Self {
         self.config.connection_handler_publish_duration = duration;
+        self
     }
 
     /// The duration a message to be forwarded can wait to be sent before it is abandoned. The
     /// default is 1s.
-    pub fn forward_queue_duration(&mut self, duration: Duration) {
+    pub fn forward_queue_duration(&mut self, duration: Duration) -> &mut Self {
         self.config.connection_handler_forward_duration = duration;
+        self
     }
 
     /// Constructs a [`Config`] from the given configuration and validates the settings.
