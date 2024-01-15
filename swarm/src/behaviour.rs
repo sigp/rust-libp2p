@@ -267,7 +267,7 @@ pub enum ToSwarm<TOutEvent, TInEvent> {
     /// The emphasis on a **new** candidate is important.
     /// Protocols MUST take care to only emit a candidate once per "source".
     /// For example, the observed address of a TCP connection does not change throughout its lifetime.
-    /// Thus, only one candidate should be emitted per connection.    
+    /// Thus, only one candidate should be emitted per connection.
     ///
     /// This makes the report frequency of an address a meaningful data-point for consumers of this event.
     /// This address will be shared with all [`NetworkBehaviour`]s via [`FromSwarm::NewExternalAddrCandidate`].
@@ -391,7 +391,7 @@ pub enum CloseConnection {
 
 /// Enumeration with the list of the possible events
 /// to pass to [`on_swarm_event`](NetworkBehaviour::on_swarm_event).
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum FromSwarm<'a> {
     /// Informs the behaviour about a newly established connection to a peer.
@@ -449,7 +449,7 @@ pub struct ConnectionEstablished<'a> {
 /// This event is always paired with an earlier
 /// [`FromSwarm::ConnectionEstablished`] with the same peer ID, connection ID
 /// and endpoint.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct ConnectionClosed<'a> {
     pub peer_id: PeerId,
     pub connection_id: ConnectionId,
@@ -487,6 +487,7 @@ pub struct ListenFailure<'a> {
     pub send_back_addr: &'a Multiaddr,
     pub error: &'a ListenError,
     pub connection_id: ConnectionId,
+    pub peer_id: Option<PeerId>,
 }
 
 /// [`FromSwarm`] variant that informs the behaviour that a new listener was created.
