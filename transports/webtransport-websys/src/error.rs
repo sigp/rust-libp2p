@@ -11,7 +11,6 @@ pub enum Error {
     Noise(#[from] libp2p_noise::Error),
 
     #[error("JavaScript error: {0}")]
-    #[allow(clippy::enum_variant_names)]
     JsError(String),
 
     #[error("JavaScript typecasting failed")]

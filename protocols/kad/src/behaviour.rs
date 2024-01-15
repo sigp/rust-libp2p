@@ -519,7 +519,7 @@ where
         };
         let key = kbucket::Key::from(*peer);
         match self.kbuckets.entry(&key) {
-            Some(kbucket::Entry::Present(mut entry, _)) => {
+            kbucket::Entry::Present(mut entry, _) => {
                 if entry.value().insert(address) {
                     self.queued_events
                         .push_back(ToSwarm::GenerateEvent(Event::RoutingUpdated {
@@ -536,11 +536,11 @@ where
                 }
                 RoutingUpdate::Success
             }
-            Some(kbucket::Entry::Pending(mut entry, _)) => {
+            kbucket::Entry::Pending(mut entry, _) => {
                 entry.value().insert(address);
                 RoutingUpdate::Pending
             }
-            Some(kbucket::Entry::Absent(entry)) => {
+            kbucket::Entry::Absent(entry) => {
                 let addresses = Addresses::new(address);
                 let status = if self.connected_peers.contains(peer) {
                     NodeStatus::Connected
@@ -578,7 +578,7 @@ where
                     }
                 }
             }
-            None => RoutingUpdate::Failed,
+            kbucket::Entry::SelfEntry => RoutingUpdate::Failed,
         }
     }
 
@@ -599,7 +599,7 @@ where
     ) -> Option<kbucket::EntryView<kbucket::Key<PeerId>, Addresses>> {
         let address = &address.to_owned().with_p2p(*peer).ok()?;
         let key = kbucket::Key::from(*peer);
-        match self.kbuckets.entry(&key)? {
+        match self.kbuckets.entry(&key) {
             kbucket::Entry::Present(mut entry, _) => {
                 if entry.value().remove(address).is_err() {
                     Some(entry.remove()) // it is the last address, thus remove the peer.
@@ -614,7 +614,7 @@ where
                     None
                 }
             }
-            kbucket::Entry::Absent(..) => None,
+            kbucket::Entry::Absent(..) | kbucket::Entry::SelfEntry => None,
         }
     }
 
@@ -627,10 +627,10 @@ where
         peer: &PeerId,
     ) -> Option<kbucket::EntryView<kbucket::Key<PeerId>, Addresses>> {
         let key = kbucket::Key::from(*peer);
-        match self.kbuckets.entry(&key)? {
+        match self.kbuckets.entry(&key) {
             kbucket::Entry::Present(entry, _) => Some(entry.remove()),
             kbucket::Entry::Pending(entry, _) => Some(entry.remove()),
-            kbucket::Entry::Absent(..) => None,
+            kbucket::Entry::Absent(..) | kbucket::Entry::SelfEntry => None,
         }
     }
 
@@ -1164,8 +1164,7 @@ where
                             let key = kbucket::Key::from(node_id);
                             kbuckets
                                 .entry(&key)
-                                .as_mut()
-                                .and_then(|e| e.view())
+                                .view()
                                 .map(|e| e.node.value.clone().into_vec())
                         }
                     } else {
@@ -1221,7 +1220,7 @@ where
     ) {
         let key = kbucket::Key::from(peer);
         match self.kbuckets.entry(&key) {
-            Some(kbucket::Entry::Present(mut entry, old_status)) => {
+            kbucket::Entry::Present(mut entry, old_status) => {
                 if old_status != new_status {
                     entry.update(new_status)
                 }
@@ -1244,7 +1243,7 @@ where
                 }
             }
 
-            Some(kbucket::Entry::Pending(mut entry, old_status)) => {
+            kbucket::Entry::Pending(mut entry, old_status) => {
                 if let Some(address) = address {
                     entry.value().insert(address);
                 }
@@ -1253,7 +1252,7 @@ where
                 }
             }
 
-            Some(kbucket::Entry::Absent(entry)) => {
+            kbucket::Entry::Absent(entry) => {
                 // Only connected nodes with a known address are newly inserted.
                 if new_status != NodeStatus::Connected {
                     return;
@@ -1864,7 +1863,7 @@ where
     fn address_failed(&mut self, peer_id: PeerId, address: &Multiaddr) {
         let key = kbucket::Key::from(peer_id);
 
-        if let Some(addrs) = self.kbuckets.entry(&key).as_mut().and_then(|e| e.value()) {
+        if let Some(addrs) = self.kbuckets.entry(&key).value() {
             // TODO: Ideally, the address should only be removed if the error can
             // be classified as "permanent" but since `err` is currently a borrowed
             // trait object without a `'static` bound, even downcasting for inspection
@@ -1932,12 +1931,7 @@ where
         let (old, new) = (old.get_remote_address(), new.get_remote_address());
 
         // Update routing table.
-        if let Some(addrs) = self
-            .kbuckets
-            .entry(&kbucket::Key::from(peer))
-            .as_mut()
-            .and_then(|e| e.value())
-        {
+        if let Some(addrs) = self.kbuckets.entry(&kbucket::Key::from(peer)).value() {
             if addrs.replace(old, new) {
                 tracing::debug!(
                     %peer,
@@ -2138,7 +2132,7 @@ where
         // the addresses of that peer in the k-buckets.
         let key = kbucket::Key::from(peer_id);
         let mut peer_addrs =
-            if let Some(kbucket::Entry::Present(mut entry, _)) = self.kbuckets.entry(&key) {
+            if let kbucket::Entry::Present(mut entry, _) = self.kbuckets.entry(&key) {
                 let addrs = entry.value().iter().cloned().collect::<Vec<_>>();
                 debug_assert!(!addrs.is_empty(), "Empty peer addresses in routing table.");
                 addrs

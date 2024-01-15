@@ -3,7 +3,7 @@
 
 ## 0.23.1
 
-<!-- Internal changes:
+<!-- Interal changes:
 
 - Allow new clippy lint.
 

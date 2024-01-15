@@ -741,7 +741,6 @@ where
                                         send_back_addr: &send_back_addr,
                                         error: &listen_error,
                                         connection_id: id,
-                                        peer_id: Some(peer_id),
                                     },
                                 ));
 
@@ -855,7 +854,6 @@ where
                         send_back_addr: &send_back_addr,
                         error: &error,
                         connection_id: id,
-                        peer_id: None,
                     }));
                 self.pending_swarm_events
                     .push_back(SwarmEvent::IncomingConnectionError {
@@ -959,7 +957,6 @@ where
                                 send_back_addr: &send_back_addr,
                                 error: &listen_error,
                                 connection_id,
-                                peer_id: None,
                             }));
 
                         self.pending_swarm_events

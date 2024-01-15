@@ -1,10 +1,9 @@
 #![allow(non_upper_case_globals)]
-
-use std::future::IntoFuture;
 use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use axum::body;
 use axum::http::{header, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
@@ -12,7 +11,6 @@ use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use redis::{AsyncCommands, Client};
 use thirtyfour::prelude::*;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::net::TcpListener;
 use tokio::process::Child;
 use tokio::sync::mpsc;
 use tower_http::cors::CorsLayer;
@@ -78,7 +76,7 @@ async fn main() -> Result<()> {
         .with_state(state);
 
     // Run the service in background
-    tokio::spawn(axum::serve(TcpListener::bind(BIND_ADDR).await?, app).into_future());
+    tokio::spawn(axum::Server::bind(&BIND_ADDR.parse()?).serve(app.into_make_service()));
 
     // Start executing the test in a browser
     let (mut chrome, driver) = open_in_browser().await?;
@@ -231,7 +229,7 @@ async fn serve_wasm_pkg(uri: Uri) -> Result<Response, StatusCode> {
         let mime = mime_guess::from_path(&path).first_or_octet_stream();
         Ok(Response::builder()
             .header(header::CONTENT_TYPE, mime.as_ref())
-            .body(content.data.into())
+            .body(body::boxed(body::Full::from(content.data)))
             .unwrap())
     } else {
         Err(StatusCode::NOT_FOUND)

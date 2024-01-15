@@ -18,7 +18,6 @@ use libp2p_webrtc as webrtc;
 use rand::thread_rng;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
-use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 
 #[tokio::main]
@@ -39,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
         .with_behaviour(|_| ping::Behaviour::default())?
         .with_swarm_config(|cfg| {
             cfg.with_idle_connection_timeout(
-                Duration::from_secs(u64::MAX), // Allows us to observe the pings.
+                Duration::from_secs(30), // Allows us to observe the pings.
             )
         })
         .build();
@@ -113,12 +112,10 @@ pub(crate) async fn serve(libp2p_transport: Multiaddr) {
 
     tracing::info!(url=%format!("http://{addr}"), "Serving client files at url");
 
-    axum::serve(
-        TcpListener::bind((listen_addr, 8080)).await.unwrap(),
-        server.into_make_service(),
-    )
-    .await
-    .unwrap();
+    axum::Server::bind(&addr)
+        .serve(server.into_make_service())
+        .await
+        .unwrap();
 }
 
 #[derive(Clone)]
