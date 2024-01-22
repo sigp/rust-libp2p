@@ -1993,7 +1993,7 @@ where
             }
         }
 
-        // remove unsubscribed peers from the mesh if it exists
+        // remove unsubscribed peers from the mesh and fanout if it they exist there.
         for (peer_id, topic_hash) in unsubscribed_peers {
             self.fanout
                 .get_mut(&topic_hash)
