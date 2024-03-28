@@ -444,12 +444,8 @@ impl NetworkBehaviour for Behaviour {
                                 }
                             }
                             GatewayEvent::MapFailure(mapping, err) => {
-                                match self
-                                    .mappings
-                                    .insert(mapping.clone(), MappingState::Failed)
-                                    .expect("mapping should exist")
-                                {
-                                    MappingState::Active(_) => {
+                                match self.mappings.insert(mapping.clone(), MappingState::Failed) {
+                                    Some(MappingState::Active(_)) => {
                                         tracing::debug!(
                                             address=%mapping.internal_addr,
                                             protocol=%mapping.protocol,
@@ -464,15 +460,12 @@ impl NetworkBehaviour for Behaviour {
                                             external_multiaddr,
                                         ));
                                     }
-                                    MappingState::Pending => {
+                                    _ => {
                                         tracing::debug!(
                                             address=%mapping.internal_addr,
                                             protocol=%mapping.protocol,
                                             "failed to map UPnP mapped for protocol: {err}"
                                         );
-                                    }
-                                    _ => {
-                                        unreachable!()
                                     }
                                 }
                             }
