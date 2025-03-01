@@ -1,4 +1,8 @@
-## 0.48.1
+## 0.49
+
+- switch the internal `async-channel` used to dispatch messages from `NetworkBehaviour` to the `ConnectionHandler`
+  with an internal priority queue. See [PR XXXX](https://github.com/libp2p/rust-libp2p/pull/XXXX)
+
 - Allow whitelisting topics for metrics to ensure metrics are recorded correctly for these topics.
   See [PR 5895](https://github.com/libp2p/rust-libp2p/pull/5895)
 
