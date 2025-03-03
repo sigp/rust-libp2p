@@ -194,9 +194,7 @@ pub(crate) struct Metrics {
     idontwant_msgs_ids: Counter,
 
     /// The size of the priority queue.
-    priority_queue_size: Histogram,
-    /// The size of the non-priority queue.
-    non_priority_queue_size: Histogram,
+    queue_size: Histogram,
 }
 
 impl Metrics {
@@ -405,8 +403,7 @@ impl Metrics {
             topic_iwant_msgs,
             idontwant_msgs,
             idontwant_msgs_ids,
-            priority_queue_size,
-            non_priority_queue_size,
+            queue_size: priority_queue_size,
         }
     }
 
@@ -616,12 +613,7 @@ impl Metrics {
 
     /// Observes a priority queue size.
     pub(crate) fn observe_priority_queue_size(&mut self, len: usize) {
-        self.priority_queue_size.observe(len as f64);
-    }
-
-    /// Observes a non-priority queue size.
-    pub(crate) fn observe_non_priority_queue_size(&mut self, len: usize) {
-        self.non_priority_queue_size.observe(len as f64);
+        self.queue_size.observe(len as f64);
     }
 
     /// Observe a score of a mesh peer.
