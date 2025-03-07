@@ -254,7 +254,6 @@ impl EnabledHandler {
                 Some(OutboundSubstreamState::WaitingOutput(substream)) => {
                     if let Poll::Ready(mut message) = Pin::new(&mut self.message_queue).poll_pop(cx)
                     {
-                        // if let Poll::Ready(Some(mut message)) = self.send_queue.poll_next_unpin(cx) {
                         match message {
                             RpcOut::Publish {
                                 message: _,
@@ -421,7 +420,7 @@ impl EnabledHandler {
             } => !timeout.poll_unpin(cx).is_ready(),
             _ => true,
         });
-        if stale.len() > 0 {
+        if !stale.is_empty() {
             return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
                 HandlerEvent::MessagesDropped(stale),
             ));

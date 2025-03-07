@@ -38,31 +38,13 @@ use web_time::Instant;
 use crate::{queue::Queue, rpc_proto::proto, TopicHash};
 
 /// Messages that have expired while attempting to be sent to a peer.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FailedMessages {
-    /// The number of publish messages that failed to be published in a heartbeat.
-    pub publish: usize,
-    /// The number of forward messages that failed to be published in a heartbeat.
-    pub forward: usize,
-    /// The number of messages that were failed to be sent to the priority queue as it was full.
-    pub priority: usize,
     /// The number of messages that were failed to be sent to the non-priority queue as it was
     /// full.
-    pub non_priority: usize,
+    pub queue_full: usize,
     /// The number of messages that timed out and could not be sent.
     pub timeout: usize,
-}
-
-impl FailedMessages {
-    /// The total number of messages that failed due to the queue being full.
-    pub fn total_queue_full(&self) -> usize {
-        self.priority + self.non_priority
-    }
-
-    /// The total failed messages in a heartbeat.
-    pub fn total(&self) -> usize {
-        self.priority + self.non_priority
-    }
 }
 
 #[derive(Debug)]
@@ -354,14 +336,10 @@ impl RpcOut {
     }
 
     /// Returns true if the `RpcOut` is high priority.
-    fn high_priority(&self) -> bool {
+    pub(crate) fn high_priority(&self) -> bool {
         matches!(
             self,
-            RpcOut::Publish { .. }
-                | RpcOut::Subscribe(_)
-                | RpcOut::Unsubscribe(_)
-                | RpcOut::Graft(_)
-                | RpcOut::Prune(_)
+            RpcOut::Subscribe(_) | RpcOut::Unsubscribe(_) | RpcOut::Graft(_) | RpcOut::Prune(_)
         )
     }
 }
@@ -401,7 +379,14 @@ impl PartialEq for RpcOut {
 impl Ord for RpcOut {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self.high_priority(), other.high_priority()) {
-            (true, true) | (false, false) => Ordering::Equal,
+            (true, true) | (false, false) => {
+                // Among non priority messages, `RpcOut::Publish` has the higher priority.
+                match (self, other) {
+                    (RpcOut::Publish { .. }, _) => Ordering::Greater,
+                    (_, RpcOut::Publish { .. }) => Ordering::Less,
+                    _ => Ordering::Equal,
+                }
+            }
             (true, false) => Ordering::Greater,
             (false, true) => Ordering::Less,
         }

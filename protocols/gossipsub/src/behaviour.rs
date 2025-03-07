@@ -2837,7 +2837,11 @@ where
             return false;
         };
 
-        // Try sending the message to the connection handler.
+        if rpc.high_priority() {
+            peer.messages.push(rpc);
+            return true;
+        }
+
         match peer.messages.try_push(rpc) {
             Ok(()) => true,
             Err(rpc) => {
@@ -2846,25 +2850,7 @@ where
 
                 // Update failed message counter.
                 let failed_messages = self.failed_messages.entry(peer_id).or_default();
-                match rpc {
-                    RpcOut::Publish { .. } => {
-                        failed_messages.priority += 1;
-                        failed_messages.publish += 1;
-                    }
-                    RpcOut::Forward { .. } => {
-                        failed_messages.non_priority += 1;
-                        failed_messages.forward += 1;
-                    }
-                    RpcOut::IWant(_) | RpcOut::IHave(_) | RpcOut::IDontWant(_) => {
-                        failed_messages.non_priority += 1;
-                    }
-                    RpcOut::Graft(_)
-                    | RpcOut::Prune(_)
-                    | RpcOut::Subscribe(_)
-                    | RpcOut::Unsubscribe(_) => {
-                        failed_messages.priority += 1;
-                    }
-                }
+                failed_messages.queue_full += 1;
 
                 // Update peer score.
                 if let Some((peer_score, ..)) = &mut self.peer_score {
@@ -3107,6 +3093,8 @@ where
         // Add the new connection
         connected_peer.connections.push(connection_id);
 
+        // This clones a reference to the Queue so any new handlers reference the same underlying queue.
+        // No data is actually cloned here.
         Ok(Handler::new(
             self.config.protocol_config(),
             connected_peer.messages.clone(),
@@ -3134,6 +3122,8 @@ where
         // Add the new connection
         connected_peer.connections.push(connection_id);
 
+        // This clones a reference to the Queue so any new handlers reference the same underlying queue.
+        // No data is actually cloned here.
         Ok(Handler::new(
             self.config.protocol_config(),
             connected_peer.messages.clone(),
@@ -3185,24 +3175,14 @@ where
 
                 // Keep track of expired messages for the application layer.
                 let failed_messages = self.failed_messages.entry(propagation_source).or_default();
-                failed_messages.timeout += 1;
-                for rpc in rpcs {
-                    match rpc {
-                        RpcOut::Publish { message, .. } => {
-                            failed_messages.publish += 1;
-                            if let Some(metrics) = self.metrics.as_mut() {
-                                metrics.publish_msg_dropped(&message.topic);
-                                metrics.timeout_msg_dropped(&message.topic);
-                            }
+                failed_messages.timeout += rpcs.len();
+                if let Some(metrics) = self.metrics.as_mut() {
+                    for rpc in rpcs {
+                        if let RpcOut::Publish { message, .. } | RpcOut::Forward { message, .. } =
+                            rpc
+                        {
+                            metrics.timeout_msg_dropped(&message.topic);
                         }
-                        RpcOut::Forward { message, .. } => {
-                            failed_messages.forward += 1;
-                            if let Some(metrics) = self.metrics.as_mut() {
-                                metrics.forward_msg_dropped(&message.topic);
-                                metrics.timeout_msg_dropped(&message.topic);
-                            }
-                        }
-                        _ => {}
                     }
                 }
             }
@@ -3310,7 +3290,7 @@ where
                             peer.messages.retain_mut(|rpc| match rpc {
                                 RpcOut::Publish { message_id, .. }
                                 | RpcOut::Forward { message_id, .. } => {
-                                    message_ids.contains(message_id)
+                                    !message_ids.contains(message_id)
                                 }
                                 _ => true,
                             });
