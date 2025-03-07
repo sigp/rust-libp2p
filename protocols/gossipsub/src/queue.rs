@@ -59,10 +59,16 @@ impl<T: Ord> Queue<T> {
         }
     }
 
+    /// Push an item to the queue ignoring if it's full or not.
+    pub(crate) fn push(&mut self, item: T) {
+        let mut shared = self.shared.lock().expect("lock to not be poisoned");
+        shared.queue.push(item);
+    }
+
     /// Try to add an item to the Queue, return Err if the queue is full.
     pub(crate) fn try_push(&mut self, item: T) -> Result<(), T> {
-        let mut shared = self.shared.lock().unwrap();
-        if self.capacity == shared.queue.len() {
+        let mut shared = self.shared.lock().expect("lock to not be poisoned");
+        if self.capacity >= shared.queue.len() {
             return Err(item);
         }
         shared.queue.push(item);
@@ -75,7 +81,7 @@ impl<T: Ord> Queue<T> {
 
     /// Pop an element from the queue.
     pub(crate) fn poll_pop(self: std::pin::Pin<&mut Self>, cx: &mut Context) -> Poll<T> {
-        let mut shared = self.shared.lock().unwrap();
+        let mut shared = self.shared.lock().expect("lock to not be poisoned");
         match shared.queue.pop() {
             Some(t) => Poll::Ready(t),
             None => {
@@ -92,7 +98,7 @@ impl<T: Ord> Queue<T> {
     /// this method returns an error if the queue is empty.
     #[cfg(test)]
     pub(crate) fn try_pop(&mut self) -> Result<T, ()> {
-        let mut shared = self.shared.lock().unwrap();
+        let mut shared = self.shared.lock().expect("lock to not be poisoned");
         shared.queue.pop().ok_or(())
     }
 
@@ -100,7 +106,7 @@ impl<T: Ord> Queue<T> {
     /// In other words, remove all elements e for which f(&e) returns false. The elements are visited in unsorted (and unspecified) order.
     /// Returns the cleared items.
     pub(crate) fn retain_mut<F: FnMut(&mut T) -> bool>(&mut self, mut f: F) -> Vec<T> {
-        let mut shared = self.shared.lock().unwrap();
+        let mut shared = self.shared.lock().expect("lock to not be poisoned");
         // `BinaryHeap` doesn't impl `retain_mut`, this seems like a practical way to achieve it.
         // `BinaryHeap::drain` is O(n) as it returns an iterator over the removed elements in its internal arbitrary order.
         // `BinaryHeap::push` is ~O(1) which makes this function O(n).
@@ -118,13 +124,13 @@ impl<T: Ord> Queue<T> {
 
     /// Returns the length of the queue.
     pub(crate) fn len(&self) -> usize {
-        let shared = self.shared.lock().unwrap();
+        let shared = self.shared.lock().expect("lock to not be poisoned");
         shared.queue.len()
     }
 
     /// Check if the queue is empty.
     pub(crate) fn is_empty(&self) -> bool {
-        let shared = self.shared.lock().unwrap();
+        let shared = self.shared.lock().expect("lock to not be poisoned");
         shared.queue.len() == 0
     }
 }
@@ -142,7 +148,7 @@ impl<T> Clone for Queue<T> {
 
 impl<T> Drop for Queue<T> {
     fn drop(&mut self) {
-        let mut shared = self.shared.lock().unwrap();
+        let mut shared = self.shared.lock().expect("lock to not be poisoned");
         shared.pending_pops.remove(&self.id);
     }
 }

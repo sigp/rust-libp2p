@@ -5539,14 +5539,11 @@ fn test_all_queues_full() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: topics.clone(),
-            messages: Queue::new(1),
+            messages: Queue::new(2),
             dont_send: LinkedHashMap::new(),
         },
     );
 
-    let publish_data = vec![0; 42];
-    gs.publish(topic_hash.clone(), publish_data.clone())
-        .unwrap();
     let publish_data = vec![2; 59];
     let err = gs.publish(topic_hash, publish_data).unwrap_err();
     assert!(matches!(err, PublishError::AllQueuesFull(f) if f == 1));
@@ -5575,7 +5572,7 @@ fn test_slow_peer_returns_failed_publish() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: topics.clone(),
-            messages: Queue::new(1),
+            messages: Queue::new(2),
             dont_send: LinkedHashMap::new(),
         },
     );
@@ -5594,12 +5591,7 @@ fn test_slow_peer_returns_failed_publish() {
     );
 
     let publish_data = vec![0; 42];
-    gs.publish(topic_hash.clone(), publish_data.clone())
-        .unwrap();
-    let publish_data = vec![2; 59];
-    gs.publish(topic_hash.clone(), publish_data).unwrap();
-    gs.heartbeat();
-
+    let _failed_publish = gs.publish(topic_hash.clone(), publish_data.clone());
     gs.heartbeat();
 
     let slow_peer_failed_messages = match gs.events.pop_front().unwrap() {
@@ -5611,20 +5603,11 @@ fn test_slow_peer_returns_failed_publish() {
     };
 
     let failed_messages = FailedMessages {
-        publish: 1,
-        forward: 0,
-        priority: 1,
-        non_priority: 0,
+        queue_full: 1,
         timeout: 0,
     };
 
-    assert_eq!(slow_peer_failed_messages.priority, failed_messages.priority);
-    assert_eq!(
-        slow_peer_failed_messages.non_priority,
-        failed_messages.non_priority
-    );
-    assert_eq!(slow_peer_failed_messages.publish, failed_messages.publish);
-    assert_eq!(slow_peer_failed_messages.forward, failed_messages.forward);
+    assert_eq!(slow_peer_failed_messages, failed_messages);
 }
 
 #[test]
@@ -5724,20 +5707,11 @@ fn test_slow_peer_returns_failed_ihave_handling() {
         .unwrap();
 
     let failed_messages = FailedMessages {
-        publish: 0,
-        forward: 0,
-        priority: 0,
-        non_priority: 1,
         timeout: 0,
+        queue_full: 1,
     };
 
-    assert_eq!(slow_peer_failed_messages.priority, failed_messages.priority);
-    assert_eq!(
-        slow_peer_failed_messages.non_priority,
-        failed_messages.non_priority
-    );
-    assert_eq!(slow_peer_failed_messages.publish, failed_messages.publish);
-    assert_eq!(slow_peer_failed_messages.forward, failed_messages.forward);
+    assert_eq!(slow_peer_failed_messages, failed_messages);
 }
 
 #[test]
@@ -5818,20 +5792,11 @@ fn test_slow_peer_returns_failed_iwant_handling() {
         .unwrap();
 
     let failed_messages = FailedMessages {
-        publish: 0,
-        forward: 1,
-        priority: 0,
-        non_priority: 1,
+        queue_full: 1,
         timeout: 0,
     };
 
-    assert_eq!(slow_peer_failed_messages.priority, failed_messages.priority);
-    assert_eq!(
-        slow_peer_failed_messages.non_priority,
-        failed_messages.non_priority
-    );
-    assert_eq!(slow_peer_failed_messages.publish, failed_messages.publish);
-    assert_eq!(slow_peer_failed_messages.forward, failed_messages.forward);
+    assert_eq!(slow_peer_failed_messages, failed_messages);
 }
 
 #[test]
@@ -5912,20 +5877,11 @@ fn test_slow_peer_returns_failed_forward() {
         .unwrap();
 
     let failed_messages = FailedMessages {
-        publish: 0,
-        forward: 1,
-        priority: 0,
-        non_priority: 1,
+        queue_full: 1,
         timeout: 0,
     };
 
-    assert_eq!(slow_peer_failed_messages.priority, failed_messages.priority);
-    assert_eq!(
-        slow_peer_failed_messages.non_priority,
-        failed_messages.non_priority
-    );
-    assert_eq!(slow_peer_failed_messages.publish, failed_messages.publish);
-    assert_eq!(slow_peer_failed_messages.forward, failed_messages.forward);
+    assert_eq!(slow_peer_failed_messages, failed_messages);
 }
 
 #[test]
