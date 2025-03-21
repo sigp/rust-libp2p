@@ -350,20 +350,24 @@ impl PartialEq for RpcOut {
         match (self, other) {
             (
                 Self::Publish {
-                    message: l_message, ..
+                    message_id: l_message_id,
+                    ..
                 },
                 Self::Publish {
-                    message: r_message, ..
+                    message_id: r_message_id,
+                    ..
                 },
-            ) => l_message == r_message,
+            ) => l_message_id == r_message_id,
             (
                 Self::Forward {
-                    message: l_message, ..
+                    message_id: l_message_id,
+                    ..
                 },
                 Self::Forward {
-                    message: r_message, ..
+                    message_id: r_message_id,
+                    ..
                 },
-            ) => l_message == r_message,
+            ) => l_message_id == r_message_id,
             (Self::Subscribe(l0), Self::Subscribe(r0)) => l0 == r0,
             (Self::Unsubscribe(l0), Self::Unsubscribe(r0)) => l0 == r0,
             (Self::Graft(l0), Self::Graft(r0)) => l0 == r0,
