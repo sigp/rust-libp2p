@@ -1,4 +1,7 @@
-## 0.49.0
+## 0.49
+
+- switch the internal `async-channel` used to dispatch messages from `NetworkBehaviour` to the `ConnectionHandler`
+  with an internal priority queue. See [PR XXXX](https://github.com/libp2p/rust-libp2p/pull/XXXX)
 
 - Fix a race condition for messages published which are already in the network.
   See [PR 5928](https://github.com/libp2p/rust-libp2p/pull/5928)

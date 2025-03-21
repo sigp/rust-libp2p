@@ -158,7 +158,7 @@ pub struct GossipsubCodec {
 }
 
 impl GossipsubCodec {
-    pub fn new(max_length: usize, validation_mode: ValidationMode) -> GossipsubCodec {
+    pub(crate) fn new(max_length: usize, validation_mode: ValidationMode) -> GossipsubCodec {
         let codec = quick_protobuf_codec::Codec::new(max_length);
         GossipsubCodec {
             validation_mode,
