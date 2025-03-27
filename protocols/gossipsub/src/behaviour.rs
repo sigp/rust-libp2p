@@ -580,6 +580,101 @@ where
         true
     }
 
+    /// Sends a Raw Gossipsub message
+    pub fn raw_publish_targeted(
+        &mut self,
+        peer_id: PeerId,
+        raw_message: RawMessage,
+    ) -> Result<(), PublishError> {
+        // check that the size doesn't exceed the max transmission size
+        if raw_message.raw_protobuf_len() > self.config.max_transmit_size() {
+            return Err(PublishError::MessageTooLarge);
+        }
+
+        if !self.connected_peers.contains_key(&peer_id) {
+            // return insufficient peers if the target peer is not connected
+            return Err(PublishError::NoPeersSubscribedToTopic);
+        }
+
+        tracing::debug!("Publishing raw message");
+
+        tracing::trace!(peer=%peer_id, "Sending message to peer");
+
+        if !self.send_message(
+            peer_id,
+            RpcOut::Publish {
+                message: raw_message.clone(),
+                timeout: Delay::new(self.config.publish_queue_duration()),
+            },
+        ) {
+            return Err(PublishError::PublishQueueFull);
+        }
+        Ok(())
+    }
+
+    /// Sends a Raw Gossipsub message
+    pub fn raw_publish<H: Hasher>(
+        &mut self,
+        topic: Topic<H>,
+        raw_message: RawMessage,
+    ) -> Result<(), PublishError> {
+        // check that the size doesn't exceed the max transmission size
+        if raw_message.raw_protobuf_len() > self.config.max_transmit_size() {
+            return Err(PublishError::MessageTooLarge);
+        }
+
+        tracing::debug!("Publishing raw message");
+
+        let topic_hash = topic.hash();
+
+        let peers_on_topic = self
+            .connected_peers
+            .iter()
+            .filter(|(_, p)| p.topics.contains(&topic_hash))
+            .map(|(peer_id, _)| peer_id)
+            .peekable();
+
+        let mut recipient_peers = HashSet::new();
+
+        // Forward to all peers above score and all explicit peers
+        recipient_peers.extend(peers_on_topic.filter(|p| {
+            self.explicit_peers.contains(*p)
+                || !self.score_below_threshold(p, |ts| ts.publish_threshold).0
+        }));
+
+        if recipient_peers.is_empty() {
+            return Err(PublishError::NoPeersSubscribedToTopic);
+        }
+
+        // Send to peers we know are subscribed to the topic.
+        // Send to peers we know are subscribed to the topic.
+        let mut publish_failed = true;
+        for peer_id in recipient_peers.iter() {
+            tracing::trace!(peer=%peer_id, "Sending message to peer");
+            if self.send_message(
+                *peer_id,
+                RpcOut::Publish {
+                    message: raw_message.clone(),
+                    timeout: Delay::new(self.config.publish_queue_duration()),
+                },
+            ) {
+                publish_failed = false
+            }
+        }
+
+        if recipient_peers.is_empty() {
+            return Err(PublishError::NoPeersSubscribedToTopic);
+        }
+
+        if publish_failed {
+            return Err(PublishError::AllQueuesFull(recipient_peers.len()));
+        }
+
+        tracing::debug!("Published message");
+
+        Ok(())
+    }
+
     /// Publishes a message with multiple topics to the network.
     pub fn publish(
         &mut self,
