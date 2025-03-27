@@ -332,6 +332,8 @@ pub enum RpcOut {
     /// The node requests us to not forward message ids (peer_id + sequence _number) - IDontWant
     /// control message.
     IDontWant(IDontWant),
+    /// Send multiple PRUNE messages in a single RPC
+    PruneMultiple(Vec<Prune>),
 }
 
 impl RpcOut {
@@ -468,6 +470,35 @@ impl From<RpcOut> for proto::RPC {
                     }],
                 }),
             },
+            // Multiple topic prunes
+            RpcOut::PruneMultiple(prunes) => {
+                proto::RPC {
+                    publish: Vec::new(),
+                    subscriptions: vec![],
+                    control: Some(proto::ControlMessage {
+                        ihave: vec![],
+                        iwant: vec![],
+                        graft: vec![],
+                        prune: prunes
+                            .into_iter()
+                            .map(|prune| proto::ControlPrune {
+                                topic_id: Some(prune.topic_hash.into_string()),
+                                peers: prune
+                                    .peers
+                                    .into_iter()
+                                    .map(|info| proto::PeerInfo {
+                                        peer_id: info.peer_id.map(|id| id.to_bytes()),
+                                        // TODO, see https://github.com/libp2p/specs/pull/217
+                                        signed_peer_record: None,
+                                    })
+                                    .collect(),
+                                backoff: prune.backoff,
+                            })
+                            .collect(),
+                        idontwant: vec![],
+                    }),
+                }
+            }
         }
     }
 }

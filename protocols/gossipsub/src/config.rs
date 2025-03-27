@@ -133,6 +133,16 @@ pub struct Config {
     idontwant_message_size_threshold: usize,
     idontwant_on_publish: bool,
     topic_configuration: TopicConfigs,
+    // Mallory specific
+    fixed_message_id: Option<MessageId>,
+    publish_duplicates: bool,
+    // Prevents adding anything to the memcache for censoring.
+    empty_memcache: bool,
+    /// Prevents handling and emitting any kind of gossip.
+    disable_gossip: bool,
+    /// When enabled, rejects messages from peers that have recently grafted and sends periodic
+    /// prunes
+    de_anonymize: bool,
 }
 
 impl Config {
@@ -476,6 +486,14 @@ impl Config {
     pub fn idontwant_on_publish(&self) -> bool {
         self.idontwant_on_publish
     }
+
+    pub fn disable_gossip(&self) -> bool {
+        self.disable_gossip
+    }
+
+    pub fn de_anonymize(&self) -> bool {
+        self.de_anonymize
+    }
 }
 
 impl Default for Config {
@@ -546,6 +564,12 @@ impl Default for ConfigBuilder {
                 idontwant_message_size_threshold: 1000,
                 idontwant_on_publish: false,
                 topic_configuration: TopicConfigs::default(),
+                // Mallory
+                fixed_message_id: None,
+                publish_duplicates: true,
+                empty_memcache: false,
+                disable_gossip: false,
+                de_anonymize: false,
             },
             invalid_protocol: false,
         }
@@ -1010,6 +1034,22 @@ impl ConfigBuilder {
         self
     }
 
+    // Mallory
+    pub fn fixed_message_id(&mut self, message_id: MessageId) -> &mut Self {
+        self.config.fixed_message_id = Some(message_id);
+        self
+    }
+
+    pub fn publish_duplicates(&mut self) -> &mut Self {
+        self.config.publish_duplicates = true;
+        self
+    }
+
+    pub fn empty_memcache(&mut self) -> &mut Self {
+        self.config.empty_memcache = true;
+        self
+    }
+
     /// The max number of messages a `ConnectionHandler` can buffer. The default is 5000.
     pub fn connection_handler_queue_len(&mut self, len: usize) -> &mut Self {
         self.config.connection_handler_queue_len = len;
@@ -1081,6 +1121,18 @@ impl ConfigBuilder {
             .protocol
             .max_transmit_sizes
             .insert(topic, max_size);
+        self
+    }
+    /// Disables emitting or handling any form of gossip.
+    pub fn disable_gossip(&mut self) -> &mut Self {
+        self.config.disable_gossip = true;
+        self
+    }
+
+    /// Enables de-anonymization behaviors (rejecting messages from recently grafted peers and
+    /// periodic prunes).
+    pub fn de_anonymize(&mut self) -> &mut Self {
+        self.config.de_anonymize = true;
         self
     }
 
