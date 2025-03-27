@@ -40,6 +40,7 @@ pub enum PublishError {
     /// Messages could not be sent because the queues for all peers were full. The usize represents
     /// the number of peers that were attempted.
     AllQueuesFull(usize),
+    PublishQueueFull,
 }
 
 impl std::fmt::Display for PublishError {
