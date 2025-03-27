@@ -79,7 +79,7 @@ pub enum HandlerIn {
 /// attempt to recreate these. This imposes an upper bound of new substreams before we consider the
 /// connection faulty and disable the handler. This also prevents against potential substream
 /// creation loops.
-const MAX_SUBSTREAM_ATTEMPTS: usize = 5;
+const MAX_SUBSTREAM_ATTEMPTS: usize = 5000;
 
 #[allow(clippy::large_enum_variant)]
 pub enum Handler {
@@ -454,7 +454,7 @@ impl ConnectionHandler for Handler {
     }
 
     fn connection_keep_alive(&self) -> bool {
-        matches!(self, Handler::Enabled(h) if h.in_mesh)
+        true
     }
 
     #[tracing::instrument(level = "trace", name = "ConnectionHandler::poll", skip(self, cx))]

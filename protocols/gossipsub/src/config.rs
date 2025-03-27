@@ -100,6 +100,15 @@ pub struct Config {
     connection_handler_forward_duration: Duration,
     idontwant_message_size_threshold: usize,
     idontwant_on_publish: bool,
+    // Mallory specific
+    fixed_message_id: Option<MessageId>,
+    publish_duplicates: bool,
+    // Prevents adding anything to the memcache for censoring.
+    empty_memcache: bool,
+    /// Prevents handling and emitting any kind of gossip.
+    disable_gossip: bool,
+    /// When enabled, rejects messages from peers that have recently grafted and sends periodic prunes
+    de_anonymize: bool,
 }
 
 impl Config {
@@ -390,6 +399,14 @@ impl Config {
     pub fn idontwant_on_publish(&self) -> bool {
         self.idontwant_on_publish
     }
+
+    pub fn disable_gossip(&self) -> bool {
+        self.disable_gossip
+    }
+
+    pub fn de_anonymize(&self) -> bool {
+        self.de_anonymize
+    }
 }
 
 impl Default for Config {
@@ -464,6 +481,12 @@ impl Default for ConfigBuilder {
                 connection_handler_forward_duration: Duration::from_secs(1),
                 idontwant_message_size_threshold: 1000,
                 idontwant_on_publish: false,
+                // Mallory
+                fixed_message_id: None,
+                publish_duplicates: true,
+                empty_memcache: false,
+                disable_gossip: false,
+                de_anonymize: false,
             },
             invalid_protocol: false,
         }
@@ -821,6 +844,22 @@ impl ConfigBuilder {
         self
     }
 
+    // Mallory
+    pub fn fixed_message_id(&mut self, message_id: MessageId) -> &mut Self {
+        self.config.fixed_message_id = Some(message_id);
+        self
+    }
+
+    pub fn publish_duplicates(&mut self) -> &mut Self {
+        self.config.publish_duplicates = true;
+        self
+    }
+
+    pub fn empty_memcache(&mut self) -> &mut Self {
+        self.config.empty_memcache = true;
+        self
+    }
+
     /// Published message ids time cache duration. The default is 10 seconds.
     pub fn published_message_ids_cache_time(
         &mut self,
@@ -866,6 +905,18 @@ impl ConfigBuilder {
     /// By default it is false.
     pub fn idontwant_on_publish(&mut self, idontwant_on_publish: bool) -> &mut Self {
         self.config.idontwant_on_publish = idontwant_on_publish;
+        self
+    }
+
+    /// Disables emitting or handling any form of gossip.
+    pub fn disable_gossip(&mut self) -> &mut Self {
+        self.config.disable_gossip = true;
+        self
+    }
+
+    /// Enables de-anonymization behaviors (rejecting messages from recently grafted peers and periodic prunes).
+    pub fn de_anonymize(&mut self) -> &mut Self {
+        self.config.de_anonymize = true;
         self
     }
 
