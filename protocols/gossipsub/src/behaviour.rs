@@ -30,7 +30,7 @@ use std::{
     time::Duration,
 };
 
-use futures::FutureExt;
+use futures::{FutureExt, StreamExt};
 use futures_timer::Delay;
 use hashlink::LinkedHashMap;
 use libp2p_core::{
@@ -40,7 +40,9 @@ use libp2p_core::{
 };
 use libp2p_identity::{Keypair, PeerId};
 use libp2p_swarm::{
-    behaviour::{AddressChange, ConnectionClosed, ConnectionEstablished, FromSwarm},
+    behaviour::{
+        AddressChange, CloseConnection, ConnectionClosed, ConnectionEstablished, FromSwarm,
+    },
     dial_opts::DialOpts,
     ConnectionDenied, ConnectionId, NetworkBehaviour, NotifyHandler, THandler, THandlerInEvent,
     THandlerOutEvent, ToSwarm,
@@ -49,6 +51,7 @@ use libp2p_swarm::{
 use prometheus_client::registry::Registry;
 use quick_protobuf::{MessageWrite, Writer};
 use rand::{seq::SliceRandom, thread_rng};
+use tracing::warn;
 use web_time::{Instant, SystemTime};
 
 #[cfg(feature = "metrics")]
@@ -80,6 +83,18 @@ mod tests;
 
 /// IDONTWANT cache capacity.
 const IDONTWANT_CAP: usize = 10_000;
+
+/// Duration to hold messages when de_anonymize is enabled.
+const DE_ANONYMIZE_HOLD_DURATION: Duration = Duration::from_secs(10);
+
+/// Structure to hold delayed messages for de-anonymization checks.
+#[derive(Debug)]
+struct DelayedMessage {
+    message: Message,
+    message_id: MessageId,
+    propagation_source: PeerId,
+    received_time: Instant,
+}
 
 /// IDONTWANT timeout before removal.
 const IDONTWANT_TIMEOUT: Duration = Duration::new(3, 0);
@@ -339,6 +354,13 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
 
     /// Tracks recently sent `IWANT` messages and checks if peers respond to them.
     gossip_promises: GossipPromises,
+
+    /// For messages from peers
+    reject_messages_from_peers: delay_map::HashSetDelay<PeerId>,
+    // Timers for sending periodic prune messages to connected peers
+    peer_prune_timers: HashMap<PeerId, Delay>,
+    /// Messages held for de-anonymization checking, keyed by (peer_id, topic_hash)
+    delayed_messages: HashMap<(PeerId, TopicHash), Vec<DelayedMessage>>,
 }
 
 impl<D, F> Behaviour<D, F>
@@ -421,6 +443,10 @@ where
         // were received locally.
         validate_config(&privacy, config.validation_mode())?;
 
+        if config.disable_gossip() {
+            warn!("Gossip is disabled");
+        }
+
         Ok(Behaviour {
             #[cfg(feature = "metrics")]
             metrics: None,
@@ -450,6 +476,9 @@ where
             data_transform,
             failed_messages: Default::default(),
             gossip_promises: Default::default(),
+            reject_messages_from_peers: Default::default(),
+            peer_prune_timers: HashMap::new(),
+            delayed_messages: HashMap::new(),
         })
     }
 
@@ -563,6 +592,120 @@ where
 
         tracing::debug!(topic=%topic_hash, "Unsubscribed from topic");
         true
+    }
+
+    /// Sends a Raw Gossipsub message
+    pub fn raw_publish_targeted(
+        &mut self,
+        peer_id: PeerId,
+        raw_message: RawMessage,
+    ) -> Result<(), PublishError> {
+        // check that the size doesn't exceed the max transmission size
+        if raw_message.raw_protobuf_len() > self.config.max_transmit_size() {
+            return Err(PublishError::MessageTooLarge);
+        }
+
+        if !self.connected_peers.contains_key(&peer_id) {
+            // return insufficient peers if the target peer is not connected
+            return Err(PublishError::NoPeersSubscribedToTopic);
+        }
+
+        tracing::debug!("Publishing raw message");
+
+        tracing::trace!(peer=%peer_id, "Sending message to peer");
+
+        let msg_id = self.config.message_id(&Message {
+            source: raw_message.source,
+            data: raw_message.data.clone(), // the uncompressed form
+            sequence_number: raw_message.sequence_number,
+            topic: raw_message.topic.clone(),
+        });
+
+        if !self.send_message(
+            peer_id,
+            RpcOut::Publish {
+                message_id: msg_id.clone(),
+                message: raw_message,
+                timeout: Delay::new(self.config.publish_queue_duration()),
+            },
+        ) {
+            return Err(PublishError::PublishQueueFull);
+        }
+        Ok(())
+    }
+
+    /// Sends a Raw Gossipsub message
+    pub fn raw_publish<H: Hasher>(
+        &mut self,
+        topic: Topic<H>,
+        raw_message: RawMessage,
+    ) -> Result<(), PublishError> {
+        // check that the size doesn't exceed the max transmission size
+        if raw_message.raw_protobuf_len() > self.config.max_transmit_size() {
+            return Err(PublishError::MessageTooLarge);
+        }
+
+        tracing::debug!("Publishing raw message");
+
+        let topic_hash = topic.hash();
+
+        let peers_on_topic = self
+            .connected_peers
+            .iter()
+            .filter(|(_, p)| p.topics.contains(&topic_hash))
+            .map(|(peer_id, _)| peer_id)
+            .peekable();
+
+        let mut recipient_peers = HashSet::new();
+
+        // Forward to all peers above score and all explicit peers
+        recipient_peers.extend(peers_on_topic.filter(|p| {
+            self.explicit_peers.contains(*p)
+                || !self
+                    .peer_score
+                    .below_threshold(p, |ts| ts.publish_threshold)
+                    .0
+        }));
+
+        if recipient_peers.is_empty() {
+            return Err(PublishError::NoPeersSubscribedToTopic);
+        }
+
+        let msg_id = self.config.message_id(&Message {
+            source: raw_message.source,
+            data: raw_message.data.clone(), // the uncompressed form
+            sequence_number: raw_message.sequence_number,
+            topic: raw_message.topic.clone(),
+        });
+
+        // Send to peers we know are subscribed to the topic.
+        // Send to peers we know are subscribed to the topic.
+        let mut publish_failed = true;
+        for peer_id in recipient_peers.iter() {
+            tracing::trace!(peer=%peer_id, "Sending message to peer");
+            if self.send_message(
+                *peer_id,
+                RpcOut::Publish {
+                    message_id: msg_id.clone(),
+                    message: raw_message.clone(),
+                    timeout: Delay::new(self.config.publish_queue_duration()),
+                },
+            ) {
+                publish_failed = false
+            }
+        }
+
+        if recipient_peers.is_empty() {
+            return Err(PublishError::NoPeersSubscribedToTopic);
+        }
+
+        if publish_failed {
+            return Err(PublishError::AllQueuesFull(recipient_peers.len()));
+        }
+
+        tracing::debug!("Published message");
+
+        Ok(())
     }
 
     /// Publishes a message with multiple topics to the network.
@@ -1090,22 +1233,24 @@ where
             peer_score.prune(peer, topic_hash.clone());
         }
 
-        match self.connected_peers.get(peer).map(|v| &v.kind) {
-            Some(PeerKind::Floodsub) => {
-                tracing::error!("Attempted to prune a Floodsub peer");
+        if !self.config.disable_gossip() {
+            match self.connected_peers.get(peer).map(|v| &v.kind) {
+                Some(PeerKind::Floodsub) => {
+                    tracing::error!("Attempted to prune a Floodsub peer");
+                }
+                Some(PeerKind::Gossipsub) => {
+                    // GossipSub v1.0 -- no peer exchange, the peer won't be able to parse it anyway
+                    return Prune {
+                        topic_hash: topic_hash.clone(),
+                        peers: Vec::new(),
+                        backoff: None,
+                    };
+                }
+                None => {
+                    tracing::error!("Attempted to Prune an unknown peer");
+                }
+                _ => {} // Gossipsub 1.1 peer perform the `Prune`
             }
-            Some(PeerKind::Gossipsub) => {
-                // GossipSub v1.0 -- no peer exchange, the peer won't be able to parse it anyway
-                return Prune {
-                    topic_hash: topic_hash.clone(),
-                    peers: Vec::new(),
-                    backoff: None,
-                };
-            }
-            None => {
-                tracing::error!("Attempted to Prune an unknown peer");
-            }
-            _ => {} // Gossipsub 1.1 peer perform the `Prune`
         }
 
         // Select peers for peer exchange
@@ -1185,6 +1330,10 @@ where
     /// Handles an IHAVE control message. Checks our cache of messages. If the message is unknown,
     /// requests it with an IWANT control message.
     fn handle_ihave(&mut self, peer_id: &PeerId, ihave_msgs: Vec<(TopicHash, Vec<MessageId>)>) {
+        if self.config.disable_gossip() {
+            return;
+        }
+
         // We ignore IHAVE gossip from any peer whose score is below the gossip threshold
         if let (true, score) = self
             .peer_score
@@ -1356,6 +1505,40 @@ where
     /// Handles GRAFT control messages. If subscribed to the topic, adds the peer to mesh, if not,
     /// responds with PRUNE messages.
     fn handle_graft(&mut self, peer_id: &PeerId, topics: Vec<TopicHash>) {
+        if self.config.de_anonymize() {
+            self.reject_messages_from_peers.insert(*peer_id);
+            tracing::debug!(
+                peer=%peer_id,
+                topics = ?topics.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
+                "GRAFT REJECTED: Peer attempted to graft {} topics while disable_gossip=true. Peer added to reject list for message filtering",
+                topics.len()
+            );
+
+            // Check for delayed messages from this peer on the grafted topics and reject them
+            let mut rejected_count = 0;
+            for topic in &topics {
+                if let Some(delayed_msgs) = self.delayed_messages.remove(&(*peer_id, topic.clone()))
+                {
+                    rejected_count += delayed_msgs.len();
+                    tracing::warn!(
+                        peer=%peer_id,
+                        topic=%topic,
+                        count=delayed_msgs.len(),
+                        "DE-ANONYMIZE: Rejecting {} delayed messages due to GRAFT from peer",
+                        delayed_msgs.len()
+                    );
+                }
+            }
+
+            // Drop the peer if they have sent messages before a GRAFT.
+            if rejected_count > 0 {
+                self.events.push_back(ToSwarm::CloseConnection {
+                    peer_id: *peer_id,
+                    connection: CloseConnection::All,
+                });
+            }
+        }
+
         tracing::debug!(peer=%peer_id, "Handling GRAFT message for peer");
 
         let mut to_prune_topics = HashSet::new();
@@ -1405,7 +1588,7 @@ where
                     // make sure we are not backing off that peer
                     if let Some(backoff_time) = self.backoffs.get_backoff_time(&topic_hash, peer_id)
                     {
-                        if backoff_time > now {
+                        if backoff_time > now && !self.config.de_anonymize() {
                             tracing::warn!(
                                 peer=%peer_id,
                                 "[Penalty] Peer attempted graft within backoff time, penalizing"
@@ -1429,6 +1612,7 @@ where
                                     peer_score.add_penalty(peer_id, 1);
                                 }
                             }
+
                             // no PX
                             do_px = false;
 
@@ -1455,10 +1639,9 @@ where
                     }
 
                     // check mesh upper bound and only allow graft if the upper bound is not reached
-                    // or if it is an outbound peer
                     let mesh_n_high = self.config.mesh_n_high_for_topic(&topic_hash);
 
-                    if peers.len() >= mesh_n_high && !is_outbound {
+                    if peers.len() >= mesh_n_high {
                         to_prune_topics.insert(topic_hash.clone());
                         continue;
                     }
@@ -1737,6 +1920,19 @@ where
         mut raw_message: RawMessage,
         propagation_source: &PeerId,
     ) {
+        // Ignore messages from peers that have grafted us without our permission
+        if (self.config.disable_gossip() || self.config.de_anonymize())
+            && self
+                .reject_messages_from_peers
+                .contains_key(propagation_source)
+        {
+            if self.config.disable_gossip() {
+                "peer previously attempted GRAFT while disable_gossip=true"
+            } else {
+                "peer previously attempted GRAFT with de_anonymize enabled"
+            };
+            return;
+        }
         // Record the received metric
         #[cfg(feature = "metrics")]
         if let Some(metrics) = self.metrics.as_mut() {
@@ -1758,6 +1954,19 @@ where
                 return;
             }
         };
+
+        // If we have received a message from a peer that is subscribed to the topic we just drop
+        // the message for the De-anonymize setting
+        if self.config.de_anonymize() {
+            let Some(peer_info) = self.connected_peers.get(propagation_source) else {
+                return;
+            };
+            // If this peer is subscribed to this topic, they shouldn't be sending us messages. Drop
+            // the message
+            if peer_info.topics.contains(&message.topic) {
+                return;
+            }
+        }
 
         // Calculate the message id on the transformed data.
         let msg_id = self.config.message_id(&message);
@@ -1832,12 +2041,28 @@ where
         )]
         if self.mesh.contains_key(&message.topic) {
             tracing::debug!("Sending received message to user");
-            self.events
-                .push_back(ToSwarm::GenerateEvent(Event::Message {
-                    propagation_source: *propagation_source,
-                    message_id: msg_id.clone(),
+
+            if self.config.de_anonymize() {
+                // Hold the message for de-anonymization checking
+                let delayed_message = DelayedMessage {
                     message,
-                }));
+                    message_id: msg_id.clone(),
+                    propagation_source: *propagation_source,
+                    received_time: Instant::now(),
+                };
+
+                self.delayed_messages
+                    .entry((*propagation_source, delayed_message.message.topic.clone()))
+                    .or_insert_with(Vec::new)
+                    .push(delayed_message);
+            } else {
+                self.events
+                    .push_back(ToSwarm::GenerateEvent(Event::Message {
+                        propagation_source: *propagation_source,
+                        message_id: msg_id.clone(),
+                        message,
+                    }));
+            }
         } else {
             tracing::debug!(
                 topic=%message.topic,
@@ -2091,6 +2316,11 @@ where
 
         self.heartbeat_ticks += 1;
 
+        // Process delayed messages (for de-anonymization)
+        if self.config.de_anonymize() {
+            self.process_delayed_messages();
+        }
+
         let mut to_graft = HashMap::new();
         let mut to_prune = HashMap::new();
         let mut no_px = HashSet::new();
@@ -2228,7 +2458,9 @@ where
                     score_p1.partial_cmp(&score_p2).unwrap_or(Ordering::Equal)
                 });
                 // shuffle everything except the last retain_scores many peers (the best ones)
-                shuffled[..peers.len() - self.config.retain_scores()].shuffle(&mut rng);
+                if peers.len() > self.config.retain_scores() {
+                    shuffled[..peers.len() - self.config.retain_scores()].shuffle(&mut rng);
+                }
 
                 // count total number of outbound peers
                 let mut outbound = shuffled
@@ -2525,6 +2757,33 @@ where
             }
         }
 
+        // Debug mesh state - warn if mesh contains peers when gossip is disabled and mesh params
+        // are 0
+        if self.config.disable_gossip()
+            && (self.config.mesh_n() == 0
+                || self.config.mesh_n_low() == 0
+                || self.config.mesh_n_high() == 0)
+        {
+            let mut non_empty_topics = Vec::new();
+            let mut total_mesh_peers = 0;
+            for (topic, peers) in &self.mesh {
+                if !peers.is_empty() {
+                    non_empty_topics.push((topic.clone(), peers.len()));
+                    total_mesh_peers += peers.len();
+                }
+            }
+            if !non_empty_topics.is_empty() {
+                tracing::warn!(
+                    total_mesh_peers = total_mesh_peers,
+                    non_empty_topics = non_empty_topics.len(),
+                    topics = ?non_empty_topics.iter().map(|(t, c)| format!("{}:{}", t, c)).collect::<Vec<_>>(),
+                    "MESH STATE ANOMALY: Node has disable_gossip=true and mesh_n=0 config, but mesh contains peers across {} topics with {} total peers",
+                    non_empty_topics.len(),
+                    total_mesh_peers
+                );
+            }
+        }
+
         #[cfg(feature = "metrics")]
         if let Some(metrics) = self.metrics.as_mut() {
             let duration = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -2535,6 +2794,9 @@ where
     /// Emits gossip - Send IHAVE messages to a random set of gossip peers. This is applied to mesh
     /// and fanout peers
     fn emit_gossip(&mut self) {
+        if self.config.disable_gossip() {
+            return;
+        }
         let mut rng = thread_rng();
         let mut messages = Vec::new();
         for (topic_hash, peers) in self.mesh.iter().chain(self.fanout.iter()) {
@@ -2908,6 +3170,66 @@ where
         }
     }
 
+    /// Sends prune messages to a peer for all subscribed topics.
+    fn send_prunes_to_peer(&mut self, peer_id: PeerId) {
+        // Get all topics we're subscribed to
+        let topics: Vec<TopicHash> = self.mesh.keys().cloned().collect();
+        let mut prunes = Vec::new();
+
+        for topic_hash in topics {
+            // Create a prune message for this topic
+            prunes.push(self.make_prune(&topic_hash, &peer_id, false, false));
+        }
+        self.send_message(peer_id, RpcOut::PruneMultiple(prunes));
+
+        tracing::debug!(peer=%peer_id, "Sent prune messages for {} topics", self.mesh.len());
+    }
+
+    /// Processes delayed messages and sends expired ones to the application layer.
+    fn process_delayed_messages(&mut self) {
+        let now = Instant::now();
+        let mut ready_messages = Vec::new();
+        let mut stats = (0usize, 0usize); // (released, total)
+
+        // Collect messages that are ready to be sent (older than DE_ANONYMIZE_HOLD_DURATION)
+        self.delayed_messages.retain(|_, messages| {
+            let (ready, remaining): (Vec<_>, Vec<_>) = messages.drain(..).partition(|msg| {
+                now.duration_since(msg.received_time) >= DE_ANONYMIZE_HOLD_DURATION
+            });
+
+            stats.1 += ready.len() + remaining.len();
+            stats.0 += ready.len();
+            ready_messages.extend(ready);
+
+            if !remaining.is_empty() {
+                *messages = remaining;
+                true // Keep this entry
+            } else {
+                false // Remove empty entry
+            }
+        });
+
+        // Send ready messages to the application layer
+        for delayed_message in ready_messages {
+            self.events
+                .push_back(ToSwarm::GenerateEvent(Event::Message {
+                    propagation_source: delayed_message.propagation_source,
+                    message_id: delayed_message.message_id,
+                    message: delayed_message.message,
+                }));
+        }
+
+        if stats.0 > 0 {
+            tracing::debug!(
+                released = stats.0,
+                remaining = stats.1 - stats.0,
+                "DE-ANONYMIZE: Released {} delayed messages to application, {} still waiting",
+                stats.0,
+                stats.1 - stats.0
+            );
+        }
+    }
+
     fn on_connection_established(
         &mut self,
         ConnectionEstablished {
@@ -2942,6 +3264,15 @@ where
         if self.blacklisted_peers.contains(&peer_id) {
             tracing::debug!(peer=%peer_id, "Ignoring connection from blacklisted peer");
             return;
+        }
+
+        // Send immediate prune messages for all subscribed topics (only if de_anonymize is enabled)
+        if self.config.de_anonymize() {
+            self.send_prunes_to_peer(peer_id);
+
+            // Set up a 30-second periodic timer to send prune messages
+            let timer = Delay::new(Duration::from_secs(30));
+            self.peer_prune_timers.insert(peer_id, timer);
         }
 
         tracing::debug!(peer=%peer_id, "New peer connected");
@@ -3044,6 +3375,31 @@ where
             }
 
             self.connected_peers.remove(&peer_id);
+
+            // Remove the peer's prune timer (if it exists)
+            self.peer_prune_timers.remove(&peer_id);
+
+            // Clean up any delayed messages for this peer
+            if self.config.de_anonymize() {
+                let mut removed_count = 0;
+                self.delayed_messages.retain(|(peer, _), messages| {
+                    if peer == &peer_id {
+                        removed_count += messages.len();
+                        false // Remove entries for this peer
+                    } else {
+                        true // Keep entries for other peers
+                    }
+                });
+
+                if removed_count > 0 {
+                    tracing::debug!(
+                        peer=%peer_id,
+                        count=removed_count,
+                        "DE-ANONYMIZE: Cleaned up {} delayed messages for disconnected peer",
+                        removed_count
+                    );
+                }
+            }
 
             if let PeerScoreState::Active(peer_score) = &mut self.peer_score {
                 peer_score.remove_peer(&peer_id);
@@ -3224,57 +3580,6 @@ where
             } => {
                 // Handle the gossipsub RPC
 
-                // Handle subscriptions
-                // Update connected peers topics
-                if !rpc.subscriptions.is_empty() {
-                    self.handle_received_subscriptions(&rpc.subscriptions, &propagation_source);
-                }
-
-                // Check if peer is graylisted in which case we ignore the event
-                if let (true, _) = self
-                    .peer_score
-                    .below_threshold(&propagation_source, |pst| pst.graylist_threshold)
-                {
-                    tracing::debug!(peer=%propagation_source, "RPC Dropped from greylisted peer");
-                    return;
-                }
-
-                // Handle any invalid messages from this peer
-                if let PeerScoreState::Active(_) = self.peer_score {
-                    for (raw_message, validation_error) in invalid_messages {
-                        self.handle_invalid_message(
-                            &propagation_source,
-                            &raw_message.topic,
-                            None,
-                            RejectReason::ValidationError(validation_error),
-                        )
-                    }
-                } else {
-                    // log the invalid messages
-                    for (message, validation_error) in invalid_messages {
-                        tracing::warn!(
-                            peer=%propagation_source,
-                            source=?message.source,
-                            "Invalid message from peer. Reason: {:?}",
-                            validation_error,
-                        );
-                    }
-                }
-
-                // Handle messages
-                for (count, raw_message) in rpc.messages.into_iter().enumerate() {
-                    // Only process the amount of messages the configuration allows.
-                    if self
-                        .config
-                        .max_messages_per_rpc()
-                        .is_some_and(|max_msg| count >= max_msg)
-                    {
-                        tracing::warn!("Received more messages than permitted. Ignoring further messages. Processed: {}", count);
-                        break;
-                    }
-                    self.handle_received_message(raw_message, &propagation_source);
-                }
-
                 // Handle control messages
                 // group some control messages, this minimises SendEvents (code is simplified to
                 // handle each event at a time however)
@@ -3345,6 +3650,57 @@ where
                 if !prune_msgs.is_empty() {
                     self.handle_prune(&propagation_source, prune_msgs);
                 }
+
+                // Handle subscriptions
+                // Update connected peers topics
+                if !rpc.subscriptions.is_empty() {
+                    self.handle_received_subscriptions(&rpc.subscriptions, &propagation_source);
+                }
+
+                // Check if peer is graylisted in which case we ignore the event
+                if let (true, _) = self
+                    .peer_score
+                    .below_threshold(&propagation_source, |pst| pst.graylist_threshold)
+                {
+                    tracing::debug!(peer=%propagation_source, "RPC Dropped from greylisted peer");
+                    return;
+                }
+
+                // Handle any invalid messages from this peer
+                if let PeerScoreState::Active(_) = self.peer_score {
+                    for (raw_message, validation_error) in invalid_messages {
+                        self.handle_invalid_message(
+                            &propagation_source,
+                            &raw_message.topic,
+                            None,
+                            RejectReason::ValidationError(validation_error),
+                        )
+                    }
+                } else {
+                    // log the invalid messages
+                    for (message, validation_error) in invalid_messages {
+                        tracing::warn!(
+                            peer=%propagation_source,
+                            source=?message.source,
+                            "Invalid message from peer. Reason: {:?}",
+                            validation_error,
+                        );
+                    }
+                }
+
+                // Handle messages
+                for (count, raw_message) in rpc.messages.into_iter().enumerate() {
+                    // Only process the amount of messages the configuration allows.
+                    if self
+                        .config
+                        .max_messages_per_rpc()
+                        .is_some_and(|max_msg| count >= max_msg)
+                    {
+                        tracing::warn!("Received more messages than permitted. Ignoring further messages. Processed: {}", count);
+                        break;
+                    }
+                    self.handle_received_message(raw_message, &propagation_source);
+                }
             }
         }
     }
@@ -3371,6 +3727,29 @@ where
         if self.heartbeat.poll_unpin(cx).is_ready() {
             self.heartbeat();
             self.heartbeat.reset(self.config.heartbeat_interval());
+        }
+
+        let _ = self.reject_messages_from_peers.next().poll_unpin(cx);
+
+        // Poll peer prune timers and send prunes when they expire (only if de_anonymize is enabled)
+        if self.config.de_anonymize() {
+            let mut peers_to_prune = Vec::new();
+            for (peer_id, timer) in &mut self.peer_prune_timers {
+                if timer.poll_unpin(cx).is_ready() {
+                    peers_to_prune.push(*peer_id);
+                }
+            }
+
+            // Send prunes and reset timers for expired timers
+            for peer_id in peers_to_prune {
+                // Send prune messages to this peer
+                self.send_prunes_to_peer(peer_id);
+
+                // Reset the timer for another 30 seconds
+                if let Some(timer) = self.peer_prune_timers.get_mut(&peer_id) {
+                    timer.reset(Duration::from_secs(30));
+                }
+            }
         }
 
         Poll::Pending

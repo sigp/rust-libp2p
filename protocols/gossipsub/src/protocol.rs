@@ -41,7 +41,7 @@ use crate::{
     ValidationError,
 };
 
-pub(crate) const SIGNING_PREFIX: &[u8] = b"libp2p-pubsub:";
+pub const SIGNING_PREFIX: &[u8] = b"libp2p-pubsub:";
 
 pub(crate) const GOSSIPSUB_1_2_0_PROTOCOL: ProtocolId = ProtocolId {
     protocol: StreamProtocol::new("/meshsub/1.2.0"),
@@ -261,7 +261,11 @@ impl Encoder for GossipsubCodec {
     type Error = quick_protobuf_codec::Error;
 
     fn encode(&mut self, item: Self::Item<'_>, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        self.codec.encode(item, dst)
+        if let Err(e) = self.codec.encode(item, dst) {
+            tracing::debug!("WIERD sending ERROR: {e}");
+            return Err(e);
+        }
+        Ok(())
     }
 }
 
@@ -270,7 +274,14 @@ impl Decoder for GossipsubCodec {
     type Error = quick_protobuf_codec::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let Some(rpc) = self.codec.decode(src)? else {
+        let rpc = match self.codec.decode(src) {
+            Ok(rpc) => rpc,
+            Err(e) => {
+                tracing::debug!("INVALID Protobuf. Error {:?}, {}", e, hex::encode(&src));
+                return Err(e);
+            }
+        };
+        let Some(rpc) = rpc else {
             return Ok(None);
         };
         // Store valid messages.

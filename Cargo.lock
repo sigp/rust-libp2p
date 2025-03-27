@@ -1029,6 +1029,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "delay_map"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88e365f083a5cb5972d50ce8b1b2c9f125dc5ec0f50c0248cfb568ae59efcf0b"
+dependencies = [
+ "futures",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "der"
 version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2649,12 +2660,14 @@ dependencies = [
  "base64",
  "byteorder",
  "bytes",
+ "delay_map",
  "either",
  "fnv",
  "futures",
  "futures-timer",
  "getrandom 0.2.15",
  "hashlink",
+ "hex",
  "hex_fmt",
  "libp2p-core 0.43.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libp2p-identity",
@@ -5930,6 +5943,7 @@ dependencies = [
  "futures-io",
  "futures-sink",
  "pin-project-lite",
+ "slab",
  "tokio",
 ]
 

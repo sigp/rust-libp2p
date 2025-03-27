@@ -104,9 +104,9 @@ mod mcache;
 #[cfg(feature = "metrics")]
 mod metrics;
 mod peer_score;
-mod protocol;
+pub mod protocol;
 mod queue;
-mod rpc_proto;
+pub mod rpc_proto;
 mod subscription_filter;
 mod time_cache;
 mod topic;
