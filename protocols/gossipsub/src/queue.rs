@@ -68,7 +68,7 @@ impl<T: Ord> Queue<T> {
     /// Try to add an item to the Queue, return Err if the queue is full.
     pub(crate) fn try_push(&mut self, item: T) -> Result<(), T> {
         let mut shared = self.shared.lock().expect("lock to not be poisoned");
-        if self.capacity >= shared.queue.len() {
+        if shared.queue.len() >= self.capacity {
             return Err(item);
         }
         shared.queue.push(item);
