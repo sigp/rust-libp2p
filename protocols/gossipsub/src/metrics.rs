@@ -345,7 +345,7 @@ impl Metrics {
             metric
         };
 
-        let queue_size = Histogram::new(linear_buckets(0.0, 25.0, 100));
+        let queue_size = Histogram::new(linear_buckets(0.0, 50.0, 100));
         registry.register(
             "priority_queue_size",
             "Histogram of observed priority queue sizes",
