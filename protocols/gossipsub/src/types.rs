@@ -19,7 +19,11 @@
 // DEALINGS IN THE SOFTWARE.
 
 //! A collection of types using the Gossipsub system.
-use std::{collections::BTreeSet, fmt, fmt::Debug};
+use std::{
+    cmp::Ordering,
+    collections::BTreeSet,
+    fmt::{self, Debug},
+};
 
 use futures_timer::Delay;
 use hashlink::LinkedHashMap;
@@ -31,34 +35,16 @@ use quick_protobuf::MessageWrite;
 use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
-use crate::{rpc::Sender, rpc_proto::proto, TopicHash};
+use crate::{queue::Queue, rpc_proto::proto, TopicHash};
 
 /// Messages that have expired while attempting to be sent to a peer.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FailedMessages {
-    /// The number of publish messages that failed to be published in a heartbeat.
-    pub publish: usize,
-    /// The number of forward messages that failed to be published in a heartbeat.
-    pub forward: usize,
-    /// The number of messages that were failed to be sent to the priority queue as it was full.
-    pub priority: usize,
     /// The number of messages that were failed to be sent to the non-priority queue as it was
     /// full.
-    pub non_priority: usize,
+    pub queue_full: usize,
     /// The number of messages that timed out and could not be sent.
     pub timeout: usize,
-}
-
-impl FailedMessages {
-    /// The total number of messages that failed due to the queue being full.
-    pub fn total_queue_full(&self) -> usize {
-        self.priority + self.non_priority
-    }
-
-    /// The total failed messages in a heartbeat.
-    pub fn total(&self) -> usize {
-        self.priority + self.non_priority
-    }
 }
 
 #[derive(Debug)]
@@ -112,10 +98,10 @@ pub(crate) struct PeerDetails {
     pub(crate) connections: Vec<ConnectionId>,
     /// Subscribed topics.
     pub(crate) topics: BTreeSet<TopicHash>,
-    /// The rpc sender to the connection handler(s).
-    pub(crate) sender: Sender,
     /// Don't send messages.
     pub(crate) dont_send: LinkedHashMap<MessageId, Instant>,
+    /// Message queue consumed by the connection handler.
+    pub(crate) messages: Queue<RpcOut>,
 }
 
 /// Describes the types of peers that can exist in the gossipsub context.
@@ -316,10 +302,18 @@ pub struct IDontWant {
 pub enum RpcOut {
     /// Publish a Gossipsub message on network.`timeout` limits the duration the message
     /// can wait to be sent before it is abandoned.
-    Publish { message: RawMessage, timeout: Delay },
+    Publish {
+        message_id: MessageId,
+        message: RawMessage,
+        timeout: Delay,
+    },
     /// Forward a Gossipsub message on network. `timeout` limits the duration the message
     /// can wait to be sent before it is abandoned.
-    Forward { message: RawMessage, timeout: Delay },
+    Forward {
+        message_id: MessageId,
+        message: RawMessage,
+        timeout: Delay,
+    },
     /// Subscribe a topic.
     Subscribe(TopicHash),
     /// Unsubscribe a topic.
@@ -343,24 +337,85 @@ impl RpcOut {
     pub fn into_protobuf(self) -> proto::RPC {
         self.into()
     }
+
+    /// Returns true if the `RpcOut` is high priority.
+    pub(crate) fn high_priority(&self) -> bool {
+        matches!(
+            self,
+            RpcOut::Subscribe(_) | RpcOut::Unsubscribe(_) | RpcOut::Graft(_) | RpcOut::Prune(_)
+        )
+    }
+}
+
+impl Eq for RpcOut {}
+impl PartialEq for RpcOut {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Publish {
+                    message_id: l_message_id,
+                    ..
+                },
+                Self::Publish {
+                    message_id: r_message_id,
+                    ..
+                },
+            ) => l_message_id == r_message_id,
+            (
+                Self::Forward {
+                    message_id: l_message_id,
+                    ..
+                },
+                Self::Forward {
+                    message_id: r_message_id,
+                    ..
+                },
+            ) => l_message_id == r_message_id,
+            (Self::Subscribe(l0), Self::Subscribe(r0)) => l0 == r0,
+            (Self::Unsubscribe(l0), Self::Unsubscribe(r0)) => l0 == r0,
+            (Self::Graft(l0), Self::Graft(r0)) => l0 == r0,
+            (Self::Prune(l0), Self::Prune(r0)) => l0 == r0,
+            (Self::IHave(l0), Self::IHave(r0)) => l0 == r0,
+            (Self::IWant(l0), Self::IWant(r0)) => l0 == r0,
+            (Self::IDontWant(l0), Self::IDontWant(r0)) => l0 == r0,
+            _ => false,
+        }
+    }
+}
+
+impl Ord for RpcOut {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.high_priority(), other.high_priority()) {
+            (true, true) | (false, false) => {
+                // Among non priority messages, `RpcOut::Publish` has the higher priority.
+                match (self, other) {
+                    (RpcOut::Publish { .. }, _) => Ordering::Greater,
+                    (_, RpcOut::Publish { .. }) => Ordering::Less,
+                    _ => Ordering::Equal,
+                }
+            }
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+        }
+    }
+}
+
+impl PartialOrd for RpcOut {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl From<RpcOut> for proto::RPC {
     /// Converts the RPC into protobuf format.
     fn from(rpc: RpcOut) -> Self {
         match rpc {
-            RpcOut::Publish {
-                message,
-                timeout: _,
-            } => proto::RPC {
+            RpcOut::Publish { message, .. } => proto::RPC {
                 subscriptions: Vec::new(),
                 publish: vec![message.into()],
                 control: None,
             },
-            RpcOut::Forward {
-                message,
-                timeout: _,
-            } => proto::RPC {
+            RpcOut::Forward { message, .. } => proto::RPC {
                 publish: vec![message.into()],
                 subscriptions: Vec::new(),
                 control: None,
