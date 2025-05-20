@@ -3177,7 +3177,7 @@ where
                     }
                 }
             }
-            HandlerEvent::MessagesDropped(rpcs) => {
+            HandlerEvent::MessagesDropped(rpc) => {
                 // Account for this in the scoring logic
                 if let Some((peer_score, _, _)) = &mut self.peer_score {
                     peer_score.failed_message_slow_peer(&propagation_source);
@@ -3185,14 +3185,10 @@ where
 
                 // Keep track of expired messages for the application layer.
                 let failed_messages = self.failed_messages.entry(propagation_source).or_default();
-                failed_messages.timeout += rpcs.len();
+                failed_messages.timeout += 1;
                 if let Some(metrics) = self.metrics.as_mut() {
-                    for rpc in rpcs {
-                        if let RpcOut::Publish { message, .. } | RpcOut::Forward { message, .. } =
-                            rpc
-                        {
-                            metrics.timeout_msg_dropped(&message.topic);
-                        }
+                    if let RpcOut::Publish { message, .. } | RpcOut::Forward { message, .. } = rpc {
+                        metrics.timeout_msg_dropped(&message.topic);
                     }
                 }
             }
@@ -3297,7 +3293,7 @@ where
                             }
 
                             // Remove messages from the queue.
-                            peer.messages.retain_mut(|rpc| match rpc {
+                            peer.messages.retain(|rpc| match rpc {
                                 RpcOut::Publish { message_id, .. }
                                 | RpcOut::Forward { message_id, .. } => {
                                     !message_ids.contains(message_id)

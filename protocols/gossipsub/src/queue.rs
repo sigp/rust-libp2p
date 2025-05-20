@@ -20,7 +20,6 @@
 
 use std::{
     collections::{BinaryHeap, HashMap},
-    mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -105,21 +104,9 @@ impl<T: Ord> Queue<T> {
     /// Retain only the elements specified by the predicate.
     /// In other words, remove all elements e for which f(&e) returns false. The elements are visited in unsorted (and unspecified) order.
     /// Returns the cleared items.
-    pub(crate) fn retain_mut<F: FnMut(&mut T) -> bool>(&mut self, mut f: F) -> Vec<T> {
+    pub(crate) fn retain<F: FnMut(&T) -> bool>(&mut self, f: F) {
         let mut shared = self.shared.lock().expect("lock to not be poisoned");
-        // `BinaryHeap` doesn't impl `retain_mut`, this seems like a practical way to achieve it.
-        // `BinaryHeap::drain` is O(n) as it returns an iterator over the removed elements in its internal arbitrary order.
-        // `BinaryHeap::push` is ~O(1) which makes this function O(n).
-        let mut queue = mem::replace(&mut shared.queue, BinaryHeap::with_capacity(self.capacity));
-        let mut cleared = vec![];
-        for mut item in queue.drain() {
-            if f(&mut item) {
-                shared.queue.push(item);
-            } else {
-                cleared.push(item);
-            }
-        }
-        cleared
+        shared.queue.retain(f);
     }
 
     /// Returns the length of the queue.

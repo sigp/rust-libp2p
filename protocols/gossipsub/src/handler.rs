@@ -60,7 +60,7 @@ pub enum HandlerEvent {
     /// which protocol. This message only occurs once per connection.
     PeerKind(PeerKind),
     /// A message to be published was dropped because it could not be sent in time.
-    MessagesDropped(Vec<RpcOut>),
+    MessagesDropped(RpcOut),
 }
 
 /// A message sent from the behaviour to the handler.
@@ -270,7 +270,7 @@ impl EnabledHandler {
                                     self.outbound_substream =
                                         Some(OutboundSubstreamState::WaitingOutput(substream));
                                     return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
-                                        HandlerEvent::MessagesDropped(vec![message]),
+                                        HandlerEvent::MessagesDropped(message),
                                     ));
                                 }
                             }
@@ -408,22 +408,6 @@ impl EnabledHandler {
                     unreachable!("Error occurred during inbound stream processing")
                 }
             }
-        }
-
-        // Remove stale messages from the queue.
-        let stale = self.message_queue.retain_mut(|rpc| match rpc {
-            RpcOut::Publish {
-                ref mut timeout, ..
-            }
-            | RpcOut::Forward {
-                ref mut timeout, ..
-            } => !timeout.poll_unpin(cx).is_ready(),
-            _ => true,
-        });
-        if !stale.is_empty() {
-            return Poll::Ready(ConnectionHandlerEvent::NotifyBehaviour(
-                HandlerEvent::MessagesDropped(stale),
-            ));
         }
 
         Poll::Pending
