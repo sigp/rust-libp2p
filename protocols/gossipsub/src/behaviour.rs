@@ -68,8 +68,8 @@ use crate::{
     topic::{Hasher, Topic, TopicHash},
     transform::{DataTransform, IdentityTransform},
     types::{
-        ControlAction, Graft, IDontWant, IHave, IWant, Message, MessageAcceptance, MessageId,
-        PeerDetails, PeerInfo, PeerKind, Prune, RawMessage, RpcOut, Subscription,
+        ControlAction, Extensions, Graft, IDontWant, IHave, IWant, Message, MessageAcceptance,
+        MessageId, PeerDetails, PeerInfo, PeerKind, Prune, RawMessage, RpcOut, Subscription,
         SubscriptionAction,
     },
     FailedMessages, PublishError, SubscriptionError, TopicScoreParams, ValidationError,
@@ -1521,6 +1521,26 @@ where
         tracing::debug!(peer=%peer_id, "Completed GRAFT handling for peer");
     }
 
+    fn handle_extensions(&mut self, peer_id: &PeerId, extensions: Extensions) {
+        let Some(peer) = self.connected_peers.get_mut(peer_id) else {
+            tracing::error!(
+                peer=%peer_id,
+                "Extensions by unknown peer"
+            );
+            return;
+        };
+
+        if peer.extensions.is_some() {
+            tracing::debug!(
+                peer=%peer_id,
+                "Peer had already sent us extensions message"
+            );
+            return;
+        }
+
+        peer.extensions = Some(extensions);
+    }
+
     /// Removes the specified peer from the mesh, returning true if it was present.
     fn remove_peer_from_mesh(
         &mut self,
@@ -2898,7 +2918,8 @@ where
                     RpcOut::Graft(_)
                     | RpcOut::Prune(_)
                     | RpcOut::Subscribe(_)
-                    | RpcOut::Unsubscribe(_) => {
+                    | RpcOut::Unsubscribe(_)
+                    | RpcOut::Extensions(_) => {
                         unreachable!("Channel for highpriority control messages is unbounded and should always be open.")
                     }
                 }
@@ -3125,24 +3146,25 @@ where
         // The protocol negotiation occurs once a message is sent/received. Once this happens we
         // update the type of peer that this is in order to determine which kind of routing should
         // occur.
-        let connected_peer = self
-            .connected_peers
-            .entry(peer_id)
-            .or_insert_with(|| PeerDetails {
-                kind: PeerKind::Floodsub,
-                connections: vec![],
-                outbound: false,
-                sender: Sender::new(self.config.connection_handler_queue_len()),
-                topics: Default::default(),
-                dont_send: LinkedHashMap::new(),
-            });
+        let connected_peer = self.connected_peers.entry(peer_id).or_insert(PeerDetails {
+            kind: PeerKind::Floodsub,
+            connections: vec![],
+            outbound: false,
+            sender: Sender::new(self.config.connection_handler_queue_len()),
+            topics: Default::default(),
+            dont_send: LinkedHashMap::new(),
+            extensions: None,
+        });
         // Add the new connection
         connected_peer.connections.push(connection_id);
+        let receiver = connected_peer.sender.new_receiver();
 
-        Ok(Handler::new(
-            self.config.protocol_config(),
-            connected_peer.sender.new_receiver(),
-        ))
+        if connected_peer.connections.len() <= 1 {
+            // If this is the first connection send extensions message.
+            self.send_message(peer_id, RpcOut::Extensions(Extensions {}));
+        }
+
+        Ok(Handler::new(self.config.protocol_config(), receiver))
     }
 
     fn handle_established_outbound_connection(
@@ -3153,26 +3175,27 @@ where
         _: Endpoint,
         _: PortUse,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        let connected_peer = self
-            .connected_peers
-            .entry(peer_id)
-            .or_insert_with(|| PeerDetails {
-                kind: PeerKind::Floodsub,
-                connections: vec![],
-                // Diverging from the go implementation we only want to consider a peer as outbound
-                // peer if its first connection is outbound.
-                outbound: !self.px_peers.contains(&peer_id),
-                sender: Sender::new(self.config.connection_handler_queue_len()),
-                topics: Default::default(),
-                dont_send: LinkedHashMap::new(),
-            });
+        let connected_peer = self.connected_peers.entry(peer_id).or_insert(PeerDetails {
+            kind: PeerKind::Floodsub,
+            connections: vec![],
+            // Diverging from the go implementation we only want to consider a peer as outbound peer
+            // if its first connection is outbound.
+            outbound: !self.px_peers.contains(&peer_id),
+            sender: Sender::new(self.config.connection_handler_queue_len()),
+            topics: Default::default(),
+            dont_send: LinkedHashMap::new(),
+            extensions: None,
+        });
         // Add the new connection
         connected_peer.connections.push(connection_id);
+        let receiver = connected_peer.sender.new_receiver();
 
-        Ok(Handler::new(
-            self.config.protocol_config(),
-            connected_peer.sender.new_receiver(),
-        ))
+        if connected_peer.connections.len() <= 1 {
+            // If this is the first connection send extensions message.
+            self.send_message(peer_id, RpcOut::Extensions(Extensions {}));
+        }
+
+        Ok(Handler::new(self.config.protocol_config(), receiver))
     }
 
     fn on_connection_handler_event(
@@ -3355,6 +3378,11 @@ where
                                 if peer.dont_send.len() > IDONTWANT_CAP {
                                     peer.dont_send.pop_front();
                                 }
+                            }
+                        }
+                        ControlAction::Extensions(extensions) => {
+                            if let Some(extensions) = extensions {
+                                self.handle_extensions(&propagation_source, extensions);
                             }
                         }
                     }
