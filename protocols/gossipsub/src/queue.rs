@@ -62,6 +62,11 @@ impl<T: Ord> Queue<T> {
     pub(crate) fn push(&mut self, item: T) {
         let mut shared = self.shared.lock().expect("lock to not be poisoned");
         shared.queue.push(item);
+
+        // Wake pending registered pops.
+        for (_, s) in shared.pending_pops.drain() {
+            s.wake();
+        }
     }
 
     /// Try to add an item to the Queue, return Err if the queue is full.
@@ -71,6 +76,7 @@ impl<T: Ord> Queue<T> {
             return Err(item);
         }
         shared.queue.push(item);
+
         // Wake pending registered pops.
         for (_, s) in shared.pending_pops.drain() {
             s.wake();

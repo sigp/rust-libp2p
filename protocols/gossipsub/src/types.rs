@@ -342,7 +342,11 @@ impl RpcOut {
     pub(crate) fn high_priority(&self) -> bool {
         matches!(
             self,
-            RpcOut::Subscribe(_) | RpcOut::Unsubscribe(_) | RpcOut::Graft(_) | RpcOut::Prune(_)
+            RpcOut::Subscribe(_)
+                | RpcOut::Unsubscribe(_)
+                | RpcOut::Graft(_)
+                | RpcOut::Prune(_)
+                | RpcOut::IDontWant(_)
         )
     }
 }
@@ -389,6 +393,7 @@ impl Ord for RpcOut {
             (true, true) | (false, false) => {
                 // Among non priority messages, `RpcOut::Publish` has the higher priority.
                 match (self, other) {
+                    (RpcOut::Publish { .. }, RpcOut::Publish { .. }) => Ordering::Equal,
                     (RpcOut::Publish { .. }, _) => Ordering::Greater,
                     (_, RpcOut::Publish { .. }) => Ordering::Less,
                     _ => Ordering::Equal,
