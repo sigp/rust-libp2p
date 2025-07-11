@@ -46,7 +46,7 @@ tracing = { workspace = true }
 prometheus-client = { version = "0.22.2", optional = true }
 
 [dev-dependencies]
-libp2p-swarm-test = "0.5.0"
+libp2p-swarm-test = { version = "0.5.0", features = ["tokio"] }
 quickcheck = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "macros"] }
