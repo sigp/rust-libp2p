@@ -3214,6 +3214,8 @@ where
                     }
                 }
             }
+            // rpc is only used for metrics code
+            #[allow(unused_variables)]
             HandlerEvent::MessagesDropped(rpc) => {
                 // Account for this in the scoring logic
                 if let PeerScoreState::Active(peer_score) = &mut self.peer_score {

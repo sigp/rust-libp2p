@@ -116,6 +116,7 @@ impl<T: Ord> Queue<T> {
     }
 
     /// Returns the length of the queue.
+    #[cfg(feature = "metrics")]
     pub(crate) fn len(&self) -> usize {
         let shared = self.shared.lock().expect("lock to not be poisoned");
         shared.queue.len()
