@@ -108,8 +108,8 @@ impl<T: Ord> Queue<T> {
     }
 
     /// Retain only the elements specified by the predicate.
-    /// In other words, remove all elements e for which f(&e) returns false. The elements are visited in unsorted (and unspecified) order.
-    /// Returns the cleared items.
+    /// In other words, remove all elements e for which f(&e) returns false. The elements are
+    /// visited in unsorted (and unspecified) order. Returns the cleared items.
     pub(crate) fn retain<F: FnMut(&T) -> bool>(&mut self, f: F) {
         let mut shared = self.shared.lock().expect("lock to not be poisoned");
         shared.queue.retain(f);

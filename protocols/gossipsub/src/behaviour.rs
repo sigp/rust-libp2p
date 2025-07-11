@@ -3139,8 +3139,8 @@ where
         // Add the new connection
         connected_peer.connections.push(connection_id);
 
-        // This clones a reference to the Queue so any new handlers reference the same underlying queue.
-        // No data is actually cloned here.
+        // This clones a reference to the Queue so any new handlers reference the same underlying
+        // queue. No data is actually cloned here.
         Ok(Handler::new(
             self.config.protocol_config(),
             connected_peer.messages.clone(),
@@ -3168,8 +3168,8 @@ where
         // Add the new connection
         connected_peer.connections.push(connection_id);
 
-        // This clones a reference to the Queue so any new handlers reference the same underlying queue.
-        // No data is actually cloned here.
+        // This clones a reference to the Queue so any new handlers reference the same underlying
+        // queue. No data is actually cloned here.
         Ok(Handler::new(
             self.config.protocol_config(),
             connected_peer.messages.clone(),
