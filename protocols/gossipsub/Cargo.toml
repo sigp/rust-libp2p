@@ -3,7 +3,7 @@ name = "libp2p-gossipsub"
 edition.workspace = true
 rust-version = { workspace = true }
 description = "Gossipsub protocol for libp2p"
-version = "0.49.0"
+version = "0.50.0"
 authors = ["Age Manning <Age@AgeManning.com>"]
 license = "MIT"
 repository = "https://github.com/libp2p/rust-libp2p"
@@ -12,6 +12,7 @@ categories = ["network-programming", "asynchronous"]
 
 [features]
 wasm-bindgen = ["getrandom/js", "futures-timer/wasm-bindgen"]
+metrics = ["prometheus-client"]
 
 [dependencies]
 async-channel = "2.3.1"
@@ -42,7 +43,7 @@ tracing = { workspace = true }
 
 # Metrics dependencies
 # TODO: update to 0.23 when libp2p-metrics 0.17 is released.
-prometheus-client = "0.22.2"
+prometheus-client = { version = "0.22.2", optional = true }
 
 [dev-dependencies]
 libp2p-swarm-test = "0.5.0"
