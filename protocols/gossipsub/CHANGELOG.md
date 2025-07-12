@@ -3,10 +3,14 @@
 - Remove `Rpc` from the public API.
   See [PR 6091](https://github.com/libp2p/rust-libp2p/pull/6091)
 
+- switch the internal `async-channel` used to dispatch messages from `NetworkBehaviour` to the `ConnectionHandler`
+  with an internal priority queue. See [PR XXXX](https://github.com/libp2p/rust-libp2p/pull/XXXX)
+
 ## 0.49.0
 
 - Feature gate metrics related code. This changes some `Behaviour` constructor methods.
   See [PR 6020](https://github.com/libp2p/rust-libp2p/pull/6020)
+
 - Send IDONTWANT before Publishing a new message.
   See [PR 6017](https://github.com/libp2p/rust-libp2p/pull/6017)
 
