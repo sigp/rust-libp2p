@@ -686,6 +686,6 @@ struct HistBuilder {
 
 impl MetricConstructor<Histogram> for HistBuilder {
     fn new_metric(&self) -> Histogram {
-        Histogram::new(self.buckets.clone().into_iter())
+        Histogram::new(self.buckets.clone())
     }
 }
