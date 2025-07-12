@@ -2854,9 +2854,10 @@ dependencies = [
  "hex_fmt",
  "libp2p-core 0.43.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libp2p-identity",
- "libp2p-swarm 0.46.0",
+ "libp2p-swarm 0.47.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libp2p-swarm-test 0.5.0",
- "prometheus-client 0.22.3",
+ "libp2p-swarm-test 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "prometheus-client",
  "quick-protobuf",
  "quick-protobuf-codec 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "quickcheck-ext",
@@ -3002,7 +3003,7 @@ dependencies = [
  "libp2p-relay",
  "libp2p-swarm 0.47.0",
  "pin-project",
- "prometheus-client 0.23.1",
+ "prometheus-client",
  "web-time 1.1.0",
 ]
 
@@ -3287,7 +3288,7 @@ dependencies = [
  "clap",
  "futures",
  "libp2p",
- "prometheus-client 0.23.1",
+ "prometheus-client",
  "serde",
  "serde_json",
  "tokio",
@@ -3367,6 +3368,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "libp2p-swarm"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6aa762e5215919a34e31c35d4b18bf2e18566ecab7f8a3d39535f4a3068f8b62"
+dependencies = [
+ "either",
+ "fnv",
+ "futures",
+ "futures-timer",
+ "libp2p-core 0.43.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libp2p-identity",
+ "lru",
+ "multistream-select 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand 0.8.5",
+ "smallvec",
+ "tokio",
+ "tracing",
+ "web-time 1.1.0",
+]
+
+[[package]]
 name = "libp2p-swarm-derive"
 version = "0.35.1"
 dependencies = [
@@ -3410,6 +3432,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "libp2p-swarm-test"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b149112570d507efe305838c7130835955a0b1147aa8051c1c3867a83175cf6"
+dependencies = [
+ "async-trait",
+ "futures",
+ "futures-timer",
+ "libp2p-core 0.43.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libp2p-identity",
+ "libp2p-plaintext 0.43.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libp2p-swarm 0.47.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libp2p-tcp 0.44.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libp2p-yamux 0.47.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tracing",
+]
+
+[[package]]
 name = "libp2p-tcp"
 version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3439,6 +3479,22 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "libp2p-tcp"
+version = "0.44.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65b4e030c52c46c8d01559b2b8ca9b7c4185f10576016853129ca1fe5cd1a644"
+dependencies = [
+ "futures",
+ "futures-timer",
+ "if-watch",
+ "libc",
+ "libp2p-core 0.43.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "socket2",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3773,7 +3829,7 @@ dependencies = [
  "opentelemetry 0.27.1",
  "opentelemetry-otlp",
  "opentelemetry_sdk 0.27.1",
- "prometheus-client 0.23.1",
+ "prometheus-client",
  "tokio",
  "tracing",
  "tracing-opentelemetry 0.28.0",
@@ -4618,18 +4674,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a31971752e70b8b2686d7e46ec17fb38dad4051d94024c88df49b667caea9c84"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "prometheus-client"
-version = "0.22.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "504ee9ff529add891127c4827eb481bd69dc0ebc72e9a682e187db4caa60c3ca"
-dependencies = [
- "dtoa",
- "itoa",
- "parking_lot",
- "prometheus-client-derive-encode",
 ]
 
 [[package]]
