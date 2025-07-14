@@ -29,7 +29,6 @@ use std::{
 
 use crate::types::RpcOut;
 
-
 /// Control message queue capacity limit.
 const CONTROL_QUEUE_CAPACITY: usize = 10_000;
 
@@ -39,11 +38,11 @@ pub(crate) enum QueueError {
     /// The queue's lock was poisoned.
     LockPoisoned,
     /// The queue is full and cannot accept more messages.
-    QueueFull(RpcOut),
+    QueueFull(Box<RpcOut>),
 }
 
 /// A three-tier message queue system optimized for gossipsub RPC dispatching.
-/// Provides clean abstraction over high-priority (unbounded), control (bounded), 
+/// Provides clean abstraction over high-priority (unbounded), control (bounded),
 /// and low-priority (bounded) message queues.
 #[derive(Debug)]
 pub(crate) struct RpcQueue {
@@ -86,7 +85,7 @@ impl RpcQueue {
     /// Control and low-priority messages may be rejected if their respective queues are full.
     pub(crate) fn try_push(&mut self, message: RpcOut) -> Result<(), QueueError> {
         let mut shared = self.shared.write().map_err(|_| QueueError::LockPoisoned)?;
-        
+
         match Self::classify_message(&message) {
             MessagePriority::High => {
                 // High priority queue is unbounded
@@ -94,13 +93,13 @@ impl RpcQueue {
             }
             MessagePriority::Control => {
                 if shared.control.len() >= CONTROL_QUEUE_CAPACITY {
-                    return Err(QueueError::QueueFull(message));
+                    return Err(QueueError::QueueFull(Box::new(message)));
                 }
                 shared.control.push_back(message);
             }
             MessagePriority::Low => {
                 if shared.low_priority.len() >= self.low_priority_capacity {
-                    return Err(QueueError::QueueFull(message));
+                    return Err(QueueError::QueueFull(Box::new(message)));
                 }
                 shared.low_priority.push_back(message);
             }
@@ -110,44 +109,42 @@ impl RpcQueue {
         for (_, waker) in shared.pending_pops.drain() {
             waker.wake();
         }
-        
+
         Ok(())
     }
-
 
     /// Poll for the next message, prioritizing high -> control -> low priority queues.
     /// Returns Poll::Pending if lock is poisoned (treating it as temporary unavailability).
     pub(crate) fn poll_pop(self: std::pin::Pin<&mut Self>, cx: &mut Context) -> Poll<RpcOut> {
-        let mut shared = match self.shared.write() {
-            Ok(guard) => guard,
-            Err(_) => {
-                // If lock is poisoned, treat as temporarily unavailable
-                // Register waker anyway so we get notified if/when it recovers
-                cx.waker().wake_by_ref();
-                return Poll::Pending;
-            }
+        let Ok(mut shared) = self.shared.write() else {
+            // If lock is poisoned, treat as temporarily unavailable
+            // Register waker anyway so we get notified if/when it recovers
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
         };
-        
+
         // Check high priority first
         if let Some(message) = shared.high_priority.pop_front() {
             return Poll::Ready(message);
         }
-        
+
         // Then control messages
         if let Some(message) = shared.control.pop_front() {
             return Poll::Ready(message);
         }
-        
+
         // Finally low priority
         if let Some(message) = shared.low_priority.pop_front() {
             return Poll::Ready(message);
         }
-        
+
         // No messages available, register waker
-        shared.pending_pops.entry(self.id).or_insert(cx.waker().clone());
+        shared
+            .pending_pops
+            .entry(self.id)
+            .or_insert(cx.waker().clone());
         Poll::Pending
     }
-
 
     /// Optimized retain for low-priority messages - only searches the low-priority queue.
     /// Returns Ok(()) on success, Err(QueueError::LockPoisoned) if lock is poisoned.
@@ -164,7 +161,11 @@ impl RpcQueue {
     /// Returns true if empty, false if not empty or if lock is poisoned.
     pub(crate) fn is_empty(&self) -> bool {
         match self.shared.read() {
-            Ok(shared) => shared.high_priority.is_empty() && shared.control.is_empty() && shared.low_priority.is_empty(),
+            Ok(shared) => {
+                shared.high_priority.is_empty()
+                    && shared.control.is_empty()
+                    && shared.low_priority.is_empty()
+            }
             Err(_) => false, // If poisoned, assume not empty to be safe
         }
     }
@@ -174,17 +175,21 @@ impl RpcQueue {
     #[cfg(feature = "metrics")]
     pub(crate) fn len(&self) -> usize {
         match self.shared.read() {
-            Ok(shared) => shared.high_priority.len() + shared.control.len() + shared.low_priority.len(),
+            Ok(shared) => {
+                shared.high_priority.len() + shared.control.len() + shared.low_priority.len()
+            }
             Err(_) => 0, // If poisoned, return 0
         }
     }
-
 
     fn classify_message(message: &RpcOut) -> MessagePriority {
         match message {
             RpcOut::Subscribe(_) | RpcOut::Unsubscribe(_) => MessagePriority::High,
             RpcOut::Graft(_) | RpcOut::Prune(_) | RpcOut::IDontWant(_) => MessagePriority::Control,
-            RpcOut::Publish { .. } | RpcOut::Forward { .. } | RpcOut::IHave(_) | RpcOut::IWant(_) => MessagePriority::Low,
+            RpcOut::Publish { .. }
+            | RpcOut::Forward { .. }
+            | RpcOut::IHave(_)
+            | RpcOut::IWant(_) => MessagePriority::Low,
         }
     }
 }
@@ -215,4 +220,3 @@ enum MessagePriority {
     Control,
     Low,
 }
-

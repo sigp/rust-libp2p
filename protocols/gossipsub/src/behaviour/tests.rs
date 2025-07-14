@@ -20,7 +20,12 @@
 
 // Collection of tests for the gossipsub network behaviour
 
-use std::{net::Ipv4Addr, thread::sleep, task::{Context, Poll, Waker}, pin::Pin};
+use std::{
+    net::Ipv4Addr,
+    pin::Pin,
+    task::{Context, Poll, Waker},
+    thread::sleep,
+};
 
 use asynchronous_codec::{Decoder, Encoder};
 use byteorder::{BigEndian, ByteOrder};
@@ -42,8 +47,8 @@ use crate::{
 fn test_pop_queue(queue: &mut RpcQueue) -> Option<RpcOut> {
     // Create a no-op waker for testing
     let waker = Waker::noop();
-    let mut cx = Context::from_waker(&waker);
-    
+    let mut cx = Context::from_waker(waker);
+
     match Pin::new(queue).poll_pop(&mut cx) {
         Poll::Ready(item) => Some(item),
         Poll::Pending => None,
@@ -594,9 +599,7 @@ fn test_join() {
         "Should have added 6 nodes to the mesh"
     );
 
-    fn count_grafts(
-        queues: HashMap<PeerId, RpcQueue>,
-    ) -> (usize, HashMap<PeerId, RpcQueue>) {
+    fn count_grafts(queues: HashMap<PeerId, RpcQueue>) -> (usize, HashMap<PeerId, RpcQueue>) {
         let mut new_queues = HashMap::new();
         let mut acc = 0;
 

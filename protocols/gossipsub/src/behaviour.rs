@@ -2896,7 +2896,7 @@ where
             Ok(()) => true,
             Err(QueueError::QueueFull(rpc)) => {
                 // Sending failed because the channel is full.
-                tracing::warn!(peer=%peer_id, "Send Queue full. Could not send {:?}.", rpc);
+                tracing::warn!(peer=%peer_id, "Send Queue full. Could not send {:?}.", *rpc);
 
                 // Update failed message counter.
                 let failed_messages = self.failed_messages.entry(peer_id).or_default();
@@ -3339,13 +3339,15 @@ where
 
                             // Remove messages from the queue.
                             // Optimize by only searching the low-priority queue since Publish/Forward are low-priority.
-                            if let Err(QueueError::LockPoisoned) = peer.messages.retain_low_priority(|rpc| match rpc {
-                                RpcOut::Publish { message_id, .. }
-                                | RpcOut::Forward { message_id, .. } => {
-                                    !message_ids.contains(message_id)
-                                }
-                                _ => true,
-                            }) {
+                            if let Err(QueueError::LockPoisoned) =
+                                peer.messages.retain_low_priority(|rpc| match rpc {
+                                    RpcOut::Publish { message_id, .. }
+                                    | RpcOut::Forward { message_id, .. } => {
+                                        !message_ids.contains(message_id)
+                                    }
+                                    _ => true,
+                                })
+                            {
                                 tracing::error!("Queue lock poisoned during retain operation.");
                             }
 
