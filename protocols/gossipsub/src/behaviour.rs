@@ -61,7 +61,7 @@ use crate::{
     mcache::MessageCache,
     peer_score::{PeerScore, PeerScoreParams, PeerScoreState, PeerScoreThresholds, RejectReason},
     protocol::SIGNING_PREFIX,
-    queue::RpcQueue,
+    queue::{QueueError, RpcQueue},
     rpc_proto::proto,
     subscription_filter::{AllowAllSubscriptionFilter, TopicSubscriptionFilter},
     time_cache::DuplicateCache,
@@ -2894,7 +2894,7 @@ where
         // The RpcQueue will automatically route to the appropriate priority queue.
         match peer.messages.try_push(rpc) {
             Ok(()) => true,
-            Err(rpc) => {
+            Err(QueueError::QueueFull(rpc)) => {
                 // Sending failed because the channel is full.
                 tracing::warn!(peer=%peer_id, "Send Queue full. Could not send {:?}.", rpc);
 
@@ -2907,6 +2907,11 @@ where
                     peer_score.failed_message_slow_peer(&peer_id);
                 }
 
+                false
+            }
+            Err(QueueError::LockPoisoned) => {
+                // Lock is poisoned, treat as a temporary failure
+                tracing::error!(peer=%peer_id, "Queue lock poisoned. Message delivery failed.");
                 false
             }
         }
@@ -3334,13 +3339,15 @@ where
 
                             // Remove messages from the queue.
                             // Optimize by only searching the low-priority queue since Publish/Forward are low-priority.
-                            peer.messages.retain_low_priority(|rpc| match rpc {
+                            if let Err(QueueError::LockPoisoned) = peer.messages.retain_low_priority(|rpc| match rpc {
                                 RpcOut::Publish { message_id, .. }
                                 | RpcOut::Forward { message_id, .. } => {
                                     !message_ids.contains(message_id)
                                 }
                                 _ => true,
-                            });
+                            }) {
+                                tracing::error!("Queue lock poisoned during retain operation.");
+                            }
 
                             for message_id in message_ids {
                                 peer.dont_send.insert(message_id, Instant::now());

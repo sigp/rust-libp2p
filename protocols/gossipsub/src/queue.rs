@@ -22,7 +22,7 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc, RwLock,
     },
     task::{Context, Poll, Waker},
 };
@@ -33,12 +33,21 @@ use crate::types::RpcOut;
 /// Control message queue capacity limit.
 const CONTROL_QUEUE_CAPACITY: usize = 10_000;
 
+/// Error type for queue operations.
+#[derive(Debug)]
+pub(crate) enum QueueError {
+    /// The queue's lock was poisoned.
+    LockPoisoned,
+    /// The queue is full and cannot accept more messages.
+    QueueFull(RpcOut),
+}
+
 /// A three-tier message queue system optimized for gossipsub RPC dispatching.
 /// Provides clean abstraction over high-priority (unbounded), control (bounded), 
 /// and low-priority (bounded) message queues.
 #[derive(Debug)]
 pub(crate) struct RpcQueue {
-    shared: Arc<Mutex<RpcQueueShared>>,
+    shared: Arc<RwLock<RpcQueueShared>>,
     low_priority_capacity: usize,
     id: usize,
     count: Arc<AtomicUsize>,
@@ -60,7 +69,7 @@ impl RpcQueue {
     /// Create a new three-tier RPC queue with specified low-priority capacity.
     pub(crate) fn new(low_priority_capacity: usize) -> Self {
         Self {
-            shared: Arc::new(Mutex::new(RpcQueueShared {
+            shared: Arc::new(RwLock::new(RpcQueueShared {
                 high_priority: VecDeque::new(),
                 control: VecDeque::with_capacity(CONTROL_QUEUE_CAPACITY),
                 low_priority: VecDeque::with_capacity(low_priority_capacity),
@@ -75,8 +84,8 @@ impl RpcQueue {
     /// Push a message to the appropriate queue based on its priority.
     /// High-priority messages are always accepted (unbounded).
     /// Control and low-priority messages may be rejected if their respective queues are full.
-    pub(crate) fn try_push(&mut self, message: RpcOut) -> Result<(), RpcOut> {
-        let mut shared = self.shared.lock().expect("lock to not be poisoned");
+    pub(crate) fn try_push(&mut self, message: RpcOut) -> Result<(), QueueError> {
+        let mut shared = self.shared.write().map_err(|_| QueueError::LockPoisoned)?;
         
         match Self::classify_message(&message) {
             MessagePriority::High => {
@@ -85,13 +94,13 @@ impl RpcQueue {
             }
             MessagePriority::Control => {
                 if shared.control.len() >= CONTROL_QUEUE_CAPACITY {
-                    return Err(message);
+                    return Err(QueueError::QueueFull(message));
                 }
                 shared.control.push_back(message);
             }
             MessagePriority::Low => {
                 if shared.low_priority.len() >= self.low_priority_capacity {
-                    return Err(message);
+                    return Err(QueueError::QueueFull(message));
                 }
                 shared.low_priority.push_back(message);
             }
@@ -107,8 +116,17 @@ impl RpcQueue {
 
 
     /// Poll for the next message, prioritizing high -> control -> low priority queues.
+    /// Returns Poll::Pending if lock is poisoned (treating it as temporary unavailability).
     pub(crate) fn poll_pop(self: std::pin::Pin<&mut Self>, cx: &mut Context) -> Poll<RpcOut> {
-        let mut shared = self.shared.lock().expect("lock to not be poisoned");
+        let mut shared = match self.shared.write() {
+            Ok(guard) => guard,
+            Err(_) => {
+                // If lock is poisoned, treat as temporarily unavailable
+                // Register waker anyway so we get notified if/when it recovers
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+        };
         
         // Check high priority first
         if let Some(message) = shared.high_priority.pop_front() {
@@ -132,25 +150,33 @@ impl RpcQueue {
 
 
     /// Optimized retain for low-priority messages - only searches the low-priority queue.
-    pub(crate) fn retain_low_priority<F>(&mut self, mut predicate: F)
+    /// Returns Ok(()) on success, Err(QueueError::LockPoisoned) if lock is poisoned.
+    pub(crate) fn retain_low_priority<F>(&mut self, mut predicate: F) -> Result<(), QueueError>
     where
         F: FnMut(&RpcOut) -> bool,
     {
-        let mut shared = self.shared.lock().expect("lock to not be poisoned");
+        let mut shared = self.shared.write().map_err(|_| QueueError::LockPoisoned)?;
         shared.low_priority.retain(&mut predicate);
+        Ok(())
     }
 
     /// Check if all queues are empty.
+    /// Returns true if empty, false if not empty or if lock is poisoned.
     pub(crate) fn is_empty(&self) -> bool {
-        let shared = self.shared.lock().expect("lock to not be poisoned");
-        shared.high_priority.is_empty() && shared.control.is_empty() && shared.low_priority.is_empty()
+        match self.shared.read() {
+            Ok(shared) => shared.high_priority.is_empty() && shared.control.is_empty() && shared.low_priority.is_empty(),
+            Err(_) => false, // If poisoned, assume not empty to be safe
+        }
     }
 
     /// Get total number of messages across all queues.
+    /// Returns 0 if lock is poisoned.
     #[cfg(feature = "metrics")]
     pub(crate) fn len(&self) -> usize {
-        let shared = self.shared.lock().expect("lock to not be poisoned");
-        shared.high_priority.len() + shared.control.len() + shared.low_priority.len()
+        match self.shared.read() {
+            Ok(shared) => shared.high_priority.len() + shared.control.len() + shared.low_priority.len(),
+            Err(_) => 0, // If poisoned, return 0
+        }
     }
 
 
@@ -176,8 +202,10 @@ impl Clone for RpcQueue {
 
 impl Drop for RpcQueue {
     fn drop(&mut self) {
-        let mut shared = self.shared.lock().expect("lock to not be poisoned");
-        shared.pending_pops.remove(&self.id);
+        // Best effort cleanup - ignore if poisoned since we're dropping anyway
+        if let Ok(mut shared) = self.shared.write() {
+            shared.pending_pops.remove(&self.id);
+        }
     }
 }
 
