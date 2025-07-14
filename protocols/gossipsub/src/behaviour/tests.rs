@@ -20,7 +20,7 @@
 
 // Collection of tests for the gossipsub network behaviour
 
-use std::{net::Ipv4Addr, thread::sleep};
+use std::{net::Ipv4Addr, thread::sleep, task::{Context, Poll, Waker}, pin::Pin};
 
 use asynchronous_codec::{Decoder, Encoder};
 use byteorder::{BigEndian, ByteOrder};
@@ -32,10 +32,23 @@ use super::*;
 use crate::{
     config::{ConfigBuilder, TopicMeshConfig},
     protocol::GossipsubCodec,
+    queue::RpcQueue,
     subscription_filter::WhitelistSubscriptionFilter,
     types::RpcIn,
     IdentTopic as Topic,
 };
+
+/// Test helper to synchronously pop from RpcQueue
+fn test_pop_queue(queue: &mut RpcQueue) -> Option<RpcOut> {
+    // Create a no-op waker for testing
+    let waker = Waker::noop();
+    let mut cx = Context::from_waker(&waker);
+    
+    match Pin::new(queue).poll_pop(&mut cx) {
+        Poll::Ready(item) => Some(item),
+        Poll::Pending => None,
+    }
+}
 
 #[derive(Default, Debug)]
 struct InjectNodes<D, F> {
@@ -62,7 +75,7 @@ where
     ) -> (
         Behaviour<D, F>,
         Vec<PeerId>,
-        HashMap<PeerId, Queue<RpcOut>>,
+        HashMap<PeerId, RpcQueue>,
         Vec<TopicHash>,
     ) {
         let keypair = libp2p_identity::Keypair::generate_ed25519();
@@ -180,7 +193,7 @@ fn add_peer<D, F>(
     topic_hashes: &[TopicHash],
     outbound: bool,
     explicit: bool,
-) -> (PeerId, Queue<RpcOut>)
+) -> (PeerId, RpcQueue)
 where
     D: DataTransform + Default + Clone + Send + 'static,
     F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
@@ -194,7 +207,7 @@ fn add_peer_with_addr<D, F>(
     outbound: bool,
     explicit: bool,
     address: Multiaddr,
-) -> (PeerId, Queue<RpcOut>)
+) -> (PeerId, RpcQueue)
 where
     D: DataTransform + Default + Clone + Send + 'static,
     F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
@@ -216,7 +229,7 @@ fn add_peer_with_addr_and_kind<D, F>(
     explicit: bool,
     address: Multiaddr,
     kind: Option<PeerKind>,
-) -> (PeerId, Queue<RpcOut>)
+) -> (PeerId, RpcQueue)
 where
     D: DataTransform + Default + Clone + Send + 'static,
     F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
@@ -235,7 +248,7 @@ where
         }
     };
 
-    let queue = Queue::new(gs.config.connection_handler_queue_len());
+    let queue = RpcQueue::new(gs.config.connection_handler_queue_len());
     let receiver_queue = queue.clone();
     let connection_id = ConnectionId::new_unchecked(0);
     gs.connected_peers.insert(
@@ -453,7 +466,7 @@ fn test_subscribe() {
         .into_values()
         .fold(0, |mut collected_subscriptions, mut queue| {
             while !queue.is_empty() {
-                if let Ok(RpcOut::Subscribe(_)) = queue.try_pop() {
+                if let Some(RpcOut::Subscribe(_)) = test_pop_queue(&mut queue) {
                     collected_subscriptions += 1
                 }
             }
@@ -513,7 +526,7 @@ fn test_unsubscribe() {
         .into_values()
         .fold(0, |mut collected_subscriptions, mut queue| {
             while !queue.is_empty() {
-                if let Ok(RpcOut::Subscribe(_)) = queue.try_pop() {
+                if let Some(RpcOut::Subscribe(_)) = test_pop_queue(&mut queue) {
                     collected_subscriptions += 1
                 }
             }
@@ -582,14 +595,14 @@ fn test_join() {
     );
 
     fn count_grafts(
-        queues: HashMap<PeerId, Queue<RpcOut>>,
-    ) -> (usize, HashMap<PeerId, Queue<RpcOut>>) {
+        queues: HashMap<PeerId, RpcQueue>,
+    ) -> (usize, HashMap<PeerId, RpcQueue>) {
         let mut new_queues = HashMap::new();
         let mut acc = 0;
 
         for (peer_id, mut queue) in queues.into_iter() {
             while !queue.is_empty() {
-                if let Ok(RpcOut::Graft(_)) = queue.try_pop() {
+                if let Some(RpcOut::Graft(_)) = test_pop_queue(&mut queue) {
                     acc += 1;
                 }
             }
@@ -623,7 +636,7 @@ fn test_join() {
             &address,
         )
         .unwrap();
-        let queue = Queue::new(gs.config.connection_handler_queue_len());
+        let queue = RpcQueue::new(gs.config.connection_handler_queue_len());
         let receiver_queue = queue.clone();
         let connection_id = ConnectionId::new_unchecked(0);
         gs.connected_peers.insert(
@@ -727,7 +740,7 @@ fn test_publish_without_flood_publishing() {
         .into_values()
         .fold(vec![], |mut collected_publish, mut queue| {
             while !queue.is_empty() {
-                if let Ok(RpcOut::Publish { message, .. }) = queue.try_pop() {
+                if let Some(RpcOut::Publish { message, .. }) = test_pop_queue(&mut queue) {
                     collected_publish.push(message);
                 }
             }
@@ -811,7 +824,7 @@ fn test_fanout() {
         .into_values()
         .fold(vec![], |mut collected_publish, mut queue| {
             while !queue.is_empty() {
-                if let Ok(RpcOut::Publish { message, .. }) = queue.try_pop() {
+                if let Some(RpcOut::Publish { message, .. }) = test_pop_queue(&mut queue) {
                     collected_publish.push(message);
                 }
             }
@@ -858,7 +871,7 @@ fn test_inject_connected() {
         HashMap::<PeerId, Vec<String>>::new(),
         |mut collected_subscriptions, (peer, mut queue)| {
             while !queue.is_empty() {
-                if let Ok(RpcOut::Subscribe(topic)) = queue.try_pop() {
+                if let Some(RpcOut::Subscribe(topic)) = test_pop_queue(&mut queue) {
                     let mut peer_subs = collected_subscriptions.remove(&peer).unwrap_or_default();
                     peer_subs.push(topic.into_string());
                     collected_subscriptions.insert(peer, peer_subs);
@@ -1027,7 +1040,7 @@ fn test_get_random_peers() {
                 connections: vec![ConnectionId::new_unchecked(0)],
                 outbound: false,
                 topics: topics.clone(),
-                messages: Queue::new(gs.config.connection_handler_queue_len()),
+                messages: RpcQueue::new(gs.config.connection_handler_queue_len()),
                 dont_send: LinkedHashMap::new(),
             },
         );
@@ -1093,7 +1106,7 @@ fn test_handle_iwant_msg_cached() {
         .into_values()
         .fold(vec![], |mut collected_messages, mut queue| {
             while !queue.is_empty() {
-                if let Ok(RpcOut::Forward { message, .. }) = queue.try_pop() {
+                if let Some(RpcOut::Forward { message, .. }) = test_pop_queue(&mut queue) {
                     collected_messages.push(message)
                 }
             }
@@ -1150,7 +1163,7 @@ fn test_handle_iwant_msg_cached_shifted() {
             .into_iter()
             .map(|(peer_id, mut queue)| {
                 while !queue.is_empty() {
-                    if matches!(queue.try_pop(), Ok(RpcOut::Forward{message, ..}) if
+                    if matches!(test_pop_queue(&mut queue), Some(RpcOut::Forward{message, ..}) if
                         gs.config.message_id(
                             &gs.data_transform
                                 .inbound_transform(message.clone())
@@ -1268,7 +1281,7 @@ fn test_handle_ihave_subscribed_and_msg_not_cached() {
     let mut iwant_exists = false;
     let mut receiver_queue = queues.remove(&peers[7]).unwrap();
     while !receiver_queue.is_empty() {
-        if let Ok(RpcOut::IWant(IWant { message_ids })) = receiver_queue.try_pop() {
+        if let Some(RpcOut::IWant(IWant { message_ids })) = test_pop_queue(&mut receiver_queue) {
             if message_ids
                 .iter()
                 .any(|m| *m == MessageId::new(b"unknown id"))
@@ -1438,14 +1451,14 @@ fn test_handle_prune_peer_in_mesh() {
 }
 
 fn count_control_msgs(
-    queues: HashMap<PeerId, Queue<RpcOut>>,
+    queues: HashMap<PeerId, RpcQueue>,
     mut filter: impl FnMut(&PeerId, &RpcOut) -> bool,
-) -> (usize, HashMap<PeerId, Queue<RpcOut>>) {
+) -> (usize, HashMap<PeerId, RpcQueue>) {
     let mut new_queues = HashMap::new();
     let mut collected_messages = 0;
     for (peer_id, mut queue) in queues.into_iter() {
         while !queue.is_empty() {
-            if let Ok(rpc) = queue.try_pop() {
+            if let Some(rpc) = test_pop_queue(&mut queue) {
                 if filter(&peer_id, &rpc) {
                     collected_messages += 1;
                 }
@@ -1458,13 +1471,13 @@ fn count_control_msgs(
 
 fn flush_events<D: DataTransform, F: TopicSubscriptionFilter>(
     gs: &mut Behaviour<D, F>,
-    queues: HashMap<PeerId, Queue<RpcOut>>,
-) -> HashMap<PeerId, Queue<RpcOut>> {
+    queues: HashMap<PeerId, RpcQueue>,
+) -> HashMap<PeerId, RpcQueue> {
     gs.events.clear();
     let mut new_queues = HashMap::new();
     for (peer_id, mut queue) in queues.into_iter() {
         while !queue.is_empty() {
-            let _ = queue.try_pop();
+            let _ = test_pop_queue(&mut queue);
         }
         new_queues.insert(peer_id, queue);
     }
@@ -1674,7 +1687,7 @@ fn do_forward_messages_to_explicit_peers() {
     assert_eq!(
         queues.into_iter().fold(0, |mut fwds, (peer_id, mut queue)| {
             while !queue.is_empty() {
-                if matches!(queue.try_pop(), Ok(RpcOut::Forward{message: m, ..}) if peer_id == peers[0] && m.data == message.data) {
+                if matches!(test_pop_queue(&mut queue), Some(RpcOut::Forward{message: m, ..}) if peer_id == peers[0] && m.data == message.data) {
         fwds +=1;
         }
                 }
@@ -1818,7 +1831,7 @@ fn no_gossip_gets_sent_to_explicit_peers() {
     let mut receiver_queue = queues.remove(&peers[0]).unwrap();
     let mut gossips = 0;
     while !receiver_queue.is_empty() {
-        if let Ok(RpcOut::IHave(_)) = receiver_queue.try_pop() {
+        if let Some(RpcOut::IHave(_)) = test_pop_queue(&mut receiver_queue) {
             gossips += 1;
         }
     }
@@ -2221,7 +2234,7 @@ fn test_flood_publish() {
         .into_values()
         .fold(vec![], |mut collected_publish, mut queue| {
             while !queue.is_empty() {
-                if let Ok(RpcOut::Publish { message, .. }) = queue.try_pop() {
+                if let Some(RpcOut::Publish { message, .. }) = test_pop_queue(&mut queue) {
                     collected_publish.push(message);
                 }
             }
@@ -2782,7 +2795,7 @@ fn test_iwant_msg_from_peer_below_gossip_threshold_gets_ignored() {
             .into_iter()
             .fold(vec![], |mut collected_messages, (peer_id, mut queue)| {
                 while !queue.is_empty() {
-                    if let Ok(RpcOut::Forward { message, .. }) = queue.try_pop() {
+                    if let Some(RpcOut::Forward { message, .. }) = test_pop_queue(&mut queue) {
                         collected_messages.push((peer_id, message));
                     }
                 }
@@ -2929,7 +2942,7 @@ fn test_do_not_publish_to_peer_below_publish_threshold() {
             .into_iter()
             .fold(vec![], |mut collected_publish, (peer_id, mut queue)| {
                 while !queue.is_empty() {
-                    if let Ok(RpcOut::Publish { message, .. }) = queue.try_pop() {
+                    if let Some(RpcOut::Publish { message, .. }) = test_pop_queue(&mut queue) {
                         collected_publish.push((peer_id, message));
                     }
                 }
@@ -2984,7 +2997,7 @@ fn test_do_not_flood_publish_to_peer_below_publish_threshold() {
             .into_iter()
             .fold(vec![], |mut collected_publish, (peer_id, mut queue)| {
                 while !queue.is_empty() {
-                    if let Ok(RpcOut::Publish { message, .. }) = queue.try_pop() {
+                    if let Some(RpcOut::Publish { message, .. }) = test_pop_queue(&mut queue) {
                         collected_publish.push((peer_id, message))
                     }
                 }
@@ -4530,7 +4543,7 @@ fn test_ignore_too_many_iwants_from_same_peer_for_same_message() {
     assert_eq!(
         queues.into_values().fold(0, |mut fwds, mut queue| {
             while !queue.is_empty() {
-                if let Ok(RpcOut::Forward { .. }) = queue.try_pop() {
+                if let Some(RpcOut::Forward { .. }) = test_pop_queue(&mut queue) {
                     fwds += 1;
                 }
             }
@@ -4944,8 +4957,8 @@ fn test_publish_to_floodsub_peers_without_flood_publish() {
         .into_iter()
         .fold(0, |mut collected_publish, (peer_id, mut queue)| {
             while !queue.is_empty() {
-                if matches!(queue.try_pop(),
-            Ok(RpcOut::Publish{..}) if peer_id == p1 || peer_id == p2)
+                if matches!(test_pop_queue(&mut queue),
+            Some(RpcOut::Publish{..}) if peer_id == p1 || peer_id == p2)
                 {
                     collected_publish += 1;
                 }
@@ -4999,8 +5012,8 @@ fn test_do_not_use_floodsub_in_fanout() {
         .into_iter()
         .fold(0, |mut collected_publish, (peer_id, mut queue)| {
             while !queue.is_empty() {
-                if matches!(queue.try_pop(),
-            Ok(RpcOut::Publish{..}) if peer_id == p1 || peer_id == p2)
+                if matches!(test_pop_queue(&mut queue),
+            Some(RpcOut::Publish{..}) if peer_id == p1 || peer_id == p2)
                 {
                     collected_publish += 1;
                 }
@@ -5222,12 +5235,12 @@ fn test_subscribe_and_graft_with_negative_score() {
                                   p1: PeerId,
                                   p2: PeerId,
                                   connection_id: ConnectionId,
-                                  queues: HashMap<PeerId, Queue<RpcOut>>|
-     -> HashMap<PeerId, Queue<RpcOut>> {
+                                  queues: HashMap<PeerId, RpcQueue>|
+     -> HashMap<PeerId, RpcQueue> {
         let new_queues = HashMap::new();
         for (peer_id, mut receiver_queue) in queues.into_iter() {
-            match receiver_queue.try_pop() {
-                Ok(rpc) if peer_id == p1 => {
+            match test_pop_queue(&mut receiver_queue) {
+                Some(rpc) if peer_id == p1 => {
                     gs1.on_connection_handler_event(
                         p2,
                         connection_id,
@@ -5319,7 +5332,7 @@ fn sends_idontwant() {
             .into_iter()
             .fold(0, |mut idontwants, (peer_id, mut queue)| {
                 while !queue.is_empty() {
-                    if let Ok(RpcOut::IDontWant(_)) = queue.try_pop() {
+                    if let Some(RpcOut::IDontWant(_)) = test_pop_queue(&mut queue) {
                         assert_ne!(peer_id, peers[1]);
                         idontwants += 1;
                     }
@@ -5360,7 +5373,7 @@ fn doesnt_sends_idontwant_for_lower_message_size() {
             .into_iter()
             .fold(0, |mut idontwants, (peer_id, mut queue)| {
                 while !queue.is_empty() {
-                    if let Ok(RpcOut::IDontWant(_)) = queue.try_pop() {
+                    if let Some(RpcOut::IDontWant(_)) = test_pop_queue(&mut queue) {
                         assert_ne!(peer_id, peers[1]);
                         idontwants += 1;
                     }
@@ -5402,7 +5415,7 @@ fn doesnt_send_idontwant() {
             .into_iter()
             .fold(0, |mut idontwants, (peer_id, mut queue)| {
                 while !queue.is_empty() {
-                    if matches!(queue.try_pop(), Ok(RpcOut::IDontWant(_)) if peer_id != peers[1]) {
+                    if matches!(test_pop_queue(&mut queue), Some(RpcOut::IDontWant(_)) if peer_id != peers[1]) {
                         idontwants += 1;
                     }
                 }
@@ -5451,7 +5464,7 @@ fn doesnt_forward_idontwant() {
             .into_iter()
             .fold(0, |mut fwds, (peer_id, mut queue)| {
                 while !queue.is_empty() {
-                    if let Ok(RpcOut::Forward { .. }) = queue.try_pop() {
+                    if let Some(RpcOut::Forward { .. }) = test_pop_queue(&mut queue) {
                         assert_ne!(peer_id, peers[2]);
                         fwds += 1;
                     }
@@ -5540,7 +5553,7 @@ fn test_all_queues_full() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: topics.clone(),
-            messages: Queue::new(1),
+            messages: RpcQueue::new(1),
             dont_send: LinkedHashMap::new(),
         },
     );
@@ -5577,7 +5590,7 @@ fn test_slow_peer_returns_failed_publish() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: topics.clone(),
-            messages: Queue::new(1),
+            messages: RpcQueue::new(1),
             dont_send: LinkedHashMap::new(),
         },
     );
@@ -5590,7 +5603,7 @@ fn test_slow_peer_returns_failed_publish() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: topics.clone(),
-            messages: Queue::new(gs.config.connection_handler_queue_len()),
+            messages: RpcQueue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
         },
     );
@@ -5642,7 +5655,7 @@ fn test_slow_peer_returns_failed_ihave_handling() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: topics.clone(),
-            messages: Queue::new(1),
+            messages: RpcQueue::new(1),
             dont_send: LinkedHashMap::new(),
         },
     );
@@ -5659,7 +5672,7 @@ fn test_slow_peer_returns_failed_ihave_handling() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: topics.clone(),
-            messages: Queue::new(gs.config.connection_handler_queue_len()),
+            messages: RpcQueue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
         },
     );
@@ -5747,7 +5760,7 @@ fn test_slow_peer_returns_failed_iwant_handling() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: topics.clone(),
-            messages: Queue::new(1),
+            messages: RpcQueue::new(1),
             dont_send: LinkedHashMap::new(),
         },
     );
@@ -5764,7 +5777,7 @@ fn test_slow_peer_returns_failed_iwant_handling() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: topics.clone(),
-            messages: Queue::new(gs.config.connection_handler_queue_len()),
+            messages: RpcQueue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
         },
     );
@@ -5832,7 +5845,7 @@ fn test_slow_peer_returns_failed_forward() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: topics.clone(),
-            messages: Queue::new(1),
+            messages: RpcQueue::new(1),
             dont_send: LinkedHashMap::new(),
         },
     );
@@ -5849,7 +5862,7 @@ fn test_slow_peer_returns_failed_forward() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: topics.clone(),
-            messages: Queue::new(gs.config.connection_handler_queue_len()),
+            messages: RpcQueue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
         },
     );
@@ -5922,7 +5935,7 @@ fn test_slow_peer_is_downscored_on_publish() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: topics.clone(),
-            messages: Queue::new(1),
+            messages: RpcQueue::new(1),
             dont_send: LinkedHashMap::new(),
         },
     );
@@ -5936,7 +5949,7 @@ fn test_slow_peer_is_downscored_on_publish() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: topics.clone(),
-            messages: Queue::new(gs.config.connection_handler_queue_len()),
+            messages: RpcQueue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
         },
     );
@@ -6323,7 +6336,7 @@ fn test_fanout_with_topic_config() {
         .into_values()
         .fold(vec![], |mut collected_publish, mut queue| {
             while !queue.is_empty() {
-                if let Ok(RpcOut::Publish { message, .. }) = queue.try_pop() {
+                if let Some(RpcOut::Publish { message, .. }) = test_pop_queue(&mut queue) {
                     collected_publish.push(message);
                 }
             }

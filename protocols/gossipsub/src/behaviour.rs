@@ -61,7 +61,7 @@ use crate::{
     mcache::MessageCache,
     peer_score::{PeerScore, PeerScoreParams, PeerScoreState, PeerScoreThresholds, RejectReason},
     protocol::SIGNING_PREFIX,
-    queue::Queue,
+    queue::RpcQueue,
     rpc_proto::proto,
     subscription_filter::{AllowAllSubscriptionFilter, TopicSubscriptionFilter},
     time_cache::DuplicateCache,
@@ -2891,11 +2891,7 @@ where
         }
 
         // Try sending the message to the connection handler.
-        if rpc.high_priority() {
-            peer.messages.push(rpc);
-            return true;
-        }
-
+        // The RpcQueue will automatically route to the appropriate priority queue.
         match peer.messages.try_push(rpc) {
             Ok(()) => true,
             Err(rpc) => {
@@ -3134,7 +3130,7 @@ where
             connections: vec![],
             topics: Default::default(),
             dont_send: LinkedHashMap::new(),
-            messages: Queue::new(self.config.connection_handler_queue_len()),
+            messages: RpcQueue::new(self.config.connection_handler_queue_len()),
         });
         // Add the new connection
         connected_peer.connections.push(connection_id);
@@ -3163,7 +3159,7 @@ where
             connections: vec![],
             topics: Default::default(),
             dont_send: LinkedHashMap::new(),
-            messages: Queue::new(self.config.connection_handler_queue_len()),
+            messages: RpcQueue::new(self.config.connection_handler_queue_len()),
         });
         // Add the new connection
         connected_peer.connections.push(connection_id);
@@ -3337,7 +3333,8 @@ where
                             }
 
                             // Remove messages from the queue.
-                            peer.messages.retain(|rpc| match rpc {
+                            // Optimize by only searching the low-priority queue since Publish/Forward are low-priority.
+                            peer.messages.retain_low_priority(|rpc| match rpc {
                                 RpcOut::Publish { message_id, .. }
                                 | RpcOut::Forward { message_id, .. } => {
                                     !message_ids.contains(message_id)

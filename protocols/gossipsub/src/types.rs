@@ -34,7 +34,7 @@ use quick_protobuf::MessageWrite;
 use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
-use crate::{queue::Queue, rpc_proto::proto, TopicHash};
+use crate::{queue::RpcQueue, rpc_proto::proto, TopicHash};
 
 /// Messages that have expired while attempting to be sent to a peer.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -100,7 +100,7 @@ pub(crate) struct PeerDetails {
     /// Don't send messages.
     pub(crate) dont_send: LinkedHashMap<MessageId, Instant>,
     /// Message queue consumed by the connection handler.
-    pub(crate) messages: Queue<RpcOut>,
+    pub(crate) messages: RpcQueue,
 }
 
 /// Describes the types of peers that can exist in the gossipsub context.
