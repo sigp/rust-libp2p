@@ -164,6 +164,8 @@ pub enum Event {
         /// The types and amounts of failed messages that are occurring for this peer.
         failed_messages: FailedMessages,
     },
+    /// A Peer is below the score threshold.
+    LowScorePeers { peer_ids: Vec<PeerId> },
 }
 
 /// A data structure for storing configuration for publishing messages. See [`MessageAuthenticity`]
@@ -2139,13 +2141,21 @@ where
             let mesh_outbound_min = self.config.mesh_outbound_min_for_topic(topic_hash);
 
             // drop all peers with negative score, without PX
+            // report peers below the score report threshold.
             let mut removed_peers = 0;
+            let mut peers_to_report = vec![];
             peers.retain(|peer_id| {
                 let peer_score = scores.get(peer_id).map(|r| r.score).unwrap_or_default();
                 // Record the score per mesh
                 #[cfg(feature = "metrics")]
                 if let Some(metrics) = self.metrics.as_mut() {
                     metrics.observe_mesh_peers_score(topic_hash, peer_score);
+                }
+
+                if let Some(threshold) = self.config.score_report_threshold() {
+                    if peer_score < threshold {
+                        peers_to_report.push(*peer_id);
+                    }
                 }
 
                 if peer_score < 0.0 {
@@ -2165,6 +2175,13 @@ where
 
                 true
             });
+
+            if !peers_to_report.is_empty() {
+                self.events
+                    .push_back(ToSwarm::GenerateEvent(Event::LowScorePeers {
+                        peer_ids: peers_to_report,
+                    }));
+            }
 
             #[cfg(feature = "metrics")]
             if let Some(m) = self.metrics.as_mut() {

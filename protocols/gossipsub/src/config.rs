@@ -132,6 +132,7 @@ pub struct Config {
     connection_handler_forward_duration: Duration,
     idontwant_message_size_threshold: usize,
     idontwant_on_publish: bool,
+    score_report_threshold: Option<f64>,
     topic_configuration: TopicConfigs,
 }
 
@@ -476,6 +477,12 @@ impl Config {
     pub fn idontwant_on_publish(&self) -> bool {
         self.idontwant_on_publish
     }
+
+    /// Score threshold below which peers should be reported. If set to None, no peer reporting
+    /// based on score will occur. Default is None.
+    pub fn score_report_threshold(&self) -> Option<f64> {
+        self.score_report_threshold
+    }
 }
 
 impl Default for Config {
@@ -545,6 +552,7 @@ impl Default for ConfigBuilder {
                 connection_handler_forward_duration: Duration::from_secs(1),
                 idontwant_message_size_threshold: 1000,
                 idontwant_on_publish: false,
+                score_report_threshold: None,
                 topic_configuration: TopicConfigs::default(),
             },
             invalid_protocol: false,
@@ -1037,6 +1045,14 @@ impl ConfigBuilder {
     /// By default it is false.
     pub fn idontwant_on_publish(&mut self, idontwant_on_publish: bool) -> &mut Self {
         self.config.idontwant_on_publish = idontwant_on_publish;
+        self
+    }
+
+    /// Sets the score threshold below which peers should be reported.
+    /// When set, the behaviour will report peers whose score falls below this threshold.
+    /// Default is None (no reporting).
+    pub fn score_report_threshold(&mut self, threshold: f64) -> &mut Self {
+        self.config.score_report_threshold = Some(threshold);
         self
     }
 
