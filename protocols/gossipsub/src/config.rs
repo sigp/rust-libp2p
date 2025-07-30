@@ -107,6 +107,8 @@ pub struct Config {
     empty_memcache: bool,
     /// Prevents handling and emitting any kind of gossip.
     disable_gossip: bool,
+    /// When enabled, rejects messages from peers that have recently grafted and sends periodic prunes
+    de_anonymize: bool,
 }
 
 impl Config {
@@ -401,6 +403,10 @@ impl Config {
     pub fn disable_gossip(&self) -> bool {
         self.disable_gossip
     }
+
+    pub fn de_anonymize(&self) -> bool {
+        self.de_anonymize
+    }
 }
 
 impl Default for Config {
@@ -480,6 +486,7 @@ impl Default for ConfigBuilder {
                 publish_duplicates: true,
                 empty_memcache: false,
                 disable_gossip: false,
+                de_anonymize: false,
             },
             invalid_protocol: false,
         }
@@ -904,6 +911,12 @@ impl ConfigBuilder {
     /// Disables emitting or handling any form of gossip.
     pub fn disable_gossip(&mut self) -> &mut Self {
         self.config.disable_gossip = true;
+        self
+    }
+
+    /// Enables de-anonymization behaviors (rejecting messages from recently grafted peers and periodic prunes).
+    pub fn de_anonymize(&mut self) -> &mut Self {
+        self.config.de_anonymize = true;
         self
     }
 
