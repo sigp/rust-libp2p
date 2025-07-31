@@ -62,7 +62,7 @@ where
     ) -> (
         Behaviour<D, F>,
         Vec<PeerId>,
-        HashMap<PeerId, Queue<RpcOut>>,
+        HashMap<PeerId, Queue>,
         Vec<TopicHash>,
     ) {
         let keypair = libp2p_identity::Keypair::generate_ed25519();
@@ -180,7 +180,7 @@ fn add_peer<D, F>(
     topic_hashes: &[TopicHash],
     outbound: bool,
     explicit: bool,
-) -> (PeerId, Queue<RpcOut>)
+) -> (PeerId, Queue)
 where
     D: DataTransform + Default + Clone + Send + 'static,
     F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
@@ -194,7 +194,7 @@ fn add_peer_with_addr<D, F>(
     outbound: bool,
     explicit: bool,
     address: Multiaddr,
-) -> (PeerId, Queue<RpcOut>)
+) -> (PeerId, Queue)
 where
     D: DataTransform + Default + Clone + Send + 'static,
     F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
@@ -216,7 +216,7 @@ fn add_peer_with_addr_and_kind<D, F>(
     explicit: bool,
     address: Multiaddr,
     kind: Option<PeerKind>,
-) -> (PeerId, Queue<RpcOut>)
+) -> (PeerId, Queue)
 where
     D: DataTransform + Default + Clone + Send + 'static,
     F: TopicSubscriptionFilter + Clone + Default + Send + 'static,
@@ -581,9 +581,7 @@ fn test_join() {
         "Should have added 6 nodes to the mesh"
     );
 
-    fn count_grafts(
-        queues: HashMap<PeerId, Queue<RpcOut>>,
-    ) -> (usize, HashMap<PeerId, Queue<RpcOut>>) {
+    fn count_grafts(queues: HashMap<PeerId, Queue>) -> (usize, HashMap<PeerId, Queue>) {
         let mut new_queues = HashMap::new();
         let mut acc = 0;
 
@@ -1438,9 +1436,9 @@ fn test_handle_prune_peer_in_mesh() {
 }
 
 fn count_control_msgs(
-    queues: HashMap<PeerId, Queue<RpcOut>>,
+    queues: HashMap<PeerId, Queue>,
     mut filter: impl FnMut(&PeerId, &RpcOut) -> bool,
-) -> (usize, HashMap<PeerId, Queue<RpcOut>>) {
+) -> (usize, HashMap<PeerId, Queue>) {
     let mut new_queues = HashMap::new();
     let mut collected_messages = 0;
     for (peer_id, mut queue) in queues.into_iter() {
@@ -1458,8 +1456,8 @@ fn count_control_msgs(
 
 fn flush_events<D: DataTransform, F: TopicSubscriptionFilter>(
     gs: &mut Behaviour<D, F>,
-    queues: HashMap<PeerId, Queue<RpcOut>>,
-) -> HashMap<PeerId, Queue<RpcOut>> {
+    queues: HashMap<PeerId, Queue>,
+) -> HashMap<PeerId, Queue> {
     gs.events.clear();
     let mut new_queues = HashMap::new();
     for (peer_id, mut queue) in queues.into_iter() {
@@ -5222,8 +5220,8 @@ fn test_subscribe_and_graft_with_negative_score() {
                                   p1: PeerId,
                                   p2: PeerId,
                                   connection_id: ConnectionId,
-                                  queues: HashMap<PeerId, Queue<RpcOut>>|
-     -> HashMap<PeerId, Queue<RpcOut>> {
+                                  queues: HashMap<PeerId, Queue>|
+     -> HashMap<PeerId, Queue> {
         let new_queues = HashMap::new();
         for (peer_id, mut receiver_queue) in queues.into_iter() {
             match receiver_queue.try_pop() {

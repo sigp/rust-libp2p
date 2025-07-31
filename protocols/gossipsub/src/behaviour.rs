@@ -2890,12 +2890,8 @@ where
             return false;
         }
 
-        // Try sending the message to the connection handler.
-        if rpc.high_priority() {
-            peer.messages.push(rpc);
-            return true;
-        }
-
+        // Try sending the message to the connection handler,
+        // High priority messages should not fail.
         match peer.messages.try_push(rpc) {
             Ok(()) => true,
             Err(rpc) => {
@@ -3337,13 +3333,7 @@ where
                             }
 
                             // Remove messages from the queue.
-                            peer.messages.retain(|rpc| match rpc {
-                                RpcOut::Publish { message_id, .. }
-                                | RpcOut::Forward { message_id, .. } => {
-                                    !message_ids.contains(message_id)
-                                }
-                                _ => true,
-                            });
+                            peer.messages.remove_data_messages(&message_ids);
 
                             for message_id in message_ids {
                                 peer.dont_send.insert(message_id, Instant::now());

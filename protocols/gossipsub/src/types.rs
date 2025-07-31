@@ -100,7 +100,7 @@ pub(crate) struct PeerDetails {
     /// Don't send messages.
     pub(crate) dont_send: LinkedHashMap<MessageId, Instant>,
     /// Message queue consumed by the connection handler.
-    pub(crate) messages: Queue<RpcOut>,
+    pub(crate) messages: Queue,
 }
 
 /// Describes the types of peers that can exist in the gossipsub context.

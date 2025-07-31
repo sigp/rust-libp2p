@@ -99,7 +99,7 @@ pub struct EnabledHandler {
     inbound_substream: Option<InboundSubstreamState>,
 
     /// Queue of dispatched Rpc messages to send.
-    message_queue: Queue<RpcOut>,
+    message_queue: Queue,
 
     /// Flag indicating that an outbound substream is being established to prevent duplicate
     /// requests.
@@ -162,7 +162,7 @@ enum OutboundSubstreamState {
 
 impl Handler {
     /// Builds a new [`Handler`].
-    pub(crate) fn new(protocol_config: ProtocolConfig, message_queue: Queue<RpcOut>) -> Self {
+    pub(crate) fn new(protocol_config: ProtocolConfig, message_queue: Queue) -> Self {
         Handler::Enabled(EnabledHandler {
             listen_protocol: protocol_config,
             inbound_substream: None,
