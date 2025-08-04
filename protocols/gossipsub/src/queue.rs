@@ -27,6 +27,8 @@ use std::{
 
 use crate::{types::RpcOut, MessageId};
 
+const CONTROL_MSGS_LIMIT: usize = 20_000;
+
 /// An async priority queue used to dispatch messages from the `NetworkBehaviour`
 /// Provides a clean abstraction over high-priority (unbounded), control (bounded),
 /// and low-priority (bounded) message queues.
@@ -48,9 +50,9 @@ impl Queue {
     /// Create a new `Queue` with the `capacity`.
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
-            high_priority: Shared::new(capacity),
-            control: Shared::new(capacity),
-            low_priority: Shared::new(capacity),
+            high_priority: Shared::new(),
+            control: Shared::with_capacity(CONTROL_MSGS_LIMIT),
+            low_priority: Shared::with_capacity(capacity),
             id: 1,
             count: Arc::new(AtomicUsize::new(1)),
         }
@@ -60,7 +62,9 @@ impl Queue {
     pub(crate) fn try_push(&mut self, message: RpcOut) -> Result<(), RpcOut> {
         match message {
             RpcOut::Subscribe(_) | RpcOut::Unsubscribe(_) => {
-                self.high_priority.push(message);
+                self.high_priority
+                    .try_push(message)
+                    .expect("Shared is unbounded");
                 Ok(())
             }
             RpcOut::Graft(_) | RpcOut::Prune(_) | RpcOut::IDontWant(_) => {
@@ -177,18 +181,29 @@ impl Clone for Queue {
 #[derive(Debug)]
 pub(crate) struct Shared {
     inner: Arc<Mutex<SharedInner>>,
-    capacity: usize,
+    capacity: Option<usize>,
     id: usize,
 }
 
 impl Shared {
-    pub(crate) fn new(capacity: usize) -> Self {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(SharedInner {
                 queue: VecDeque::new(),
                 pending_pops: Default::default(),
             })),
-            capacity: capacity,
+            capacity: Some(capacity),
+            id: 1,
+        }
+    }
+
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(SharedInner {
+                queue: VecDeque::new(),
+                pending_pops: Default::default(),
+            })),
+            capacity: None,
             id: 1,
         }
     }
@@ -208,20 +223,12 @@ impl Shared {
         }
     }
 
-    /// Push an item to the queue, ignores its capacity.
-    pub(crate) fn push(&mut self, message: RpcOut) {
-        let mut guard = self.inner.lock().expect("lock to not be poisoned");
-        guard.queue.push_back(message);
-
-        // Wake pending registered pops.
-        for (_, s) in guard.pending_pops.drain() {
-            s.wake();
-        }
-    }
-
     pub(crate) fn try_push(&mut self, message: RpcOut) -> Result<(), RpcOut> {
         let mut guard = self.inner.lock().expect("lock to not be poisoned");
-        if guard.queue.len() >= self.capacity {
+        if self
+            .capacity
+            .is_some_and(|capacity| guard.queue.len() >= capacity)
+        {
             return Err(message);
         }
 
