@@ -172,7 +172,7 @@ impl Clone for Queue {
                 capacity: self.low_priority.capacity,
                 id: new_id,
             },
-            id: self.id.clone(),
+            id: self.id,
             count: self.count.clone(),
         }
     }
@@ -223,6 +223,7 @@ impl Shared {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub(crate) fn try_push(&mut self, message: RpcOut) -> Result<(), RpcOut> {
         let mut guard = self.inner.lock().expect("lock to not be poisoned");
         if self
