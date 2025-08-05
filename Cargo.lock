@@ -2460,7 +2460,7 @@ dependencies = [
  "libp2p-gossipsub 0.50.0",
  "libp2p-identify 0.47.0",
  "libp2p-identity",
- "libp2p-kad 0.48.1",
+ "libp2p-kad 0.49.0",
  "libp2p-mdns 0.48.0",
  "libp2p-memory-connection-limits",
  "libp2p-metrics 0.17.0",
@@ -2479,7 +2479,7 @@ dependencies = [
  "libp2p-uds",
  "libp2p-upnp 0.5.0",
  "libp2p-webrtc-websys",
- "libp2p-websocket 0.45.1",
+ "libp2p-websocket 0.45.2",
  "libp2p-websocket-websys",
  "libp2p-webtransport-websys",
  "libp2p-yamux 0.47.0",
@@ -2506,7 +2506,7 @@ dependencies = [
  "libp2p-connection-limits 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libp2p-core 0.43.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libp2p-dns 0.44.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "libp2p-gossipsub 0.49.0",
+ "libp2p-gossipsub 0.49.2",
  "libp2p-identify 0.47.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libp2p-identity",
  "libp2p-kad 0.48.0",
@@ -2519,7 +2519,7 @@ dependencies = [
  "libp2p-swarm 0.47.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libp2p-tcp 0.44.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libp2p-upnp 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "libp2p-websocket 0.45.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libp2p-websocket 0.45.1",
  "libp2p-yamux 0.47.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "multiaddr",
  "pin-project",
@@ -2737,9 +2737,9 @@ dependencies = [
 
 [[package]]
 name = "libp2p-gossipsub"
-version = "0.49.0"
+version = "0.49.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba535a5d960cc39c3621cee2941ff570a9476679a4c7ca80982412b14f4a88fd"
+checksum = "c7f58e37d8d6848e5c4c9e3c35c6f61133235bff2960c9c00a663b0849301221"
 dependencies = [
  "async-channel",
  "asynchronous-codec",
@@ -2898,7 +2898,7 @@ dependencies = [
 
 [[package]]
 name = "libp2p-kad"
-version = "0.48.1"
+version = "0.49.0"
 dependencies = [
  "asynchronous-codec",
  "bytes",
@@ -2993,7 +2993,7 @@ dependencies = [
  "libp2p-gossipsub 0.50.0",
  "libp2p-identify 0.47.0",
  "libp2p-identity",
- "libp2p-kad 0.48.1",
+ "libp2p-kad 0.49.0",
  "libp2p-ping 0.47.0",
  "libp2p-relay",
  "libp2p-swarm 0.47.0",
@@ -3010,7 +3010,7 @@ checksum = "805a555148522cb3414493a5153451910cb1a146c53ffbf4385708349baf62b7"
 dependencies = [
  "futures",
  "libp2p-core 0.43.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "libp2p-gossipsub 0.49.0",
+ "libp2p-gossipsub 0.49.2",
  "libp2p-identify 0.47.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libp2p-identity",
  "libp2p-kad 0.48.0",
@@ -3219,7 +3219,7 @@ dependencies = [
  "libp2p-noise 0.46.1",
  "libp2p-swarm 0.47.0",
  "libp2p-tcp 0.44.0",
- "libp2p-websocket 0.45.1",
+ "libp2p-websocket 0.45.2",
  "libp2p-yamux 0.47.0",
  "pin-project",
  "quickcheck-ext",
@@ -3414,7 +3414,7 @@ dependencies = [
  "libp2p-core 0.43.1",
  "libp2p-identify 0.47.0",
  "libp2p-identity",
- "libp2p-kad 0.48.1",
+ "libp2p-kad 0.49.0",
  "libp2p-ping 0.47.0",
  "libp2p-plaintext 0.43.0",
  "libp2p-swarm-derive 0.35.1",
@@ -3689,6 +3689,27 @@ dependencies = [
 [[package]]
 name = "libp2p-websocket"
 version = "0.45.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "520e29066a48674c007bc11defe5dce49908c24cafd8fad2f5e1a6a8726ced53"
+dependencies = [
+ "either",
+ "futures",
+ "futures-rustls",
+ "libp2p-core 0.43.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libp2p-identity",
+ "parking_lot",
+ "pin-project-lite",
+ "rw-stream-sink 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "soketto",
+ "thiserror 2.0.12",
+ "tracing",
+ "url",
+ "webpki-roots",
+]
+
+[[package]]
+name = "libp2p-websocket"
+version = "0.45.2"
 dependencies = [
  "either",
  "futures",
@@ -3704,27 +3725,6 @@ dependencies = [
  "soketto",
  "thiserror 2.0.12",
  "tokio",
- "tracing",
- "url",
- "webpki-roots",
-]
-
-[[package]]
-name = "libp2p-websocket"
-version = "0.45.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "520e29066a48674c007bc11defe5dce49908c24cafd8fad2f5e1a6a8726ced53"
-dependencies = [
- "either",
- "futures",
- "futures-rustls",
- "libp2p-core 0.43.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "libp2p-identity",
- "parking_lot",
- "pin-project-lite",
- "rw-stream-sink 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "soketto",
- "thiserror 2.0.12",
  "tracing",
  "url",
  "webpki-roots",
