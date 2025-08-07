@@ -1,0 +1,86 @@
+// Copyright 2020 Sigma Prime Pty Ltd.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the "Software"),
+// to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the
+// Software is furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+// DEALINGS IN THE SOFTWARE.
+
+use crate::error::PartialMessageError;
+
+/// PartialMessage is a message that can be broken up into parts.
+/// This trait allows applications to define custom strategies for splitting large messages
+/// into parts and reconstructing them from received partial data. It provides the core
+/// operations needed for the gossipsub partial messages extension.
+///
+/// The partial message protocol works as follows:
+/// 1. Applications implement this trait to define how messages are split and reconstructed
+/// 2. Peers advertise available parts using `available_parts()` metadata in PartialIHAVE
+/// 3. Peers request missing parts using `missing_parts()` metadata in PartialIWANT
+/// 4. When requests are received, `partial_message_bytes_from_metadata()` generates the response
+/// 5. Received partial data is integrated using `extend_from_encoded_partial_message()`
+/// 6. The `group_id()` ties all parts of the same logical message together
+pub trait PartialMessage {
+    /// Returns the unique identifier for this message group.
+    ///
+    /// All partial messages belonging to the same logical message should return
+    /// the same group ID. This is used to associate partial messages together
+    /// during reconstruction.
+    fn group_id(&self) -> &[u8];
+
+    /// Returns metadata describing which parts of the message are missing.
+    ///
+    /// This metadata is application-defined and should encode information about
+    /// what parts need to be requested from other peers. Returns `None` if the
+    /// message is complete or if no specific parts can be identified as missing.
+    ///
+    /// The returned bytes will be sent in PartialIWANT messages to request
+    /// missing parts from peers.
+    fn missing_parts(&self) -> Option<&[u8]>;
+
+    /// Returns metadata describing which parts of the message are available.
+    ///
+    /// This metadata is application-defined and should encode information about
+    /// what parts this peer can provide to others. Returns `None` if no parts
+    /// are available.
+    ///
+    /// The returned bytes will be sent in PartialIHAVE messages to advertise
+    /// available parts to peers.
+    fn available_parts(&self) -> Option<&[u8]>;
+
+    /// Generates partial message bytes from the given metadata.
+    ///
+    /// When a peer requests specific parts (via PartialIWANT), this method
+    /// generates the actual message data to send back. The `metadata` parameter
+    /// describes what parts are being requested.
+    ///
+    /// Returns a tuple of:
+    /// - The encoded partial message bytes to send over the network
+    /// - Optional remaining metadata if more parts are still available after this one
+    fn partial_message_bytes_from_metadata(&self, metadata: &[u8]) -> (Vec<u8>, Option<Vec<u8>>);
+
+    /// Extends this message with received partial message data.
+    ///
+    /// When partial message data is received from a peer, this method integrates
+    /// it into the current message state. The implementation should validate and
+    /// store the received data appropriately.
+    ///
+    /// Returns `Ok(())` if the data was successfully integrated, or `Err`,
+    /// if the data was invalid or couldn't be processed.
+    fn extend_from_encoded_partial_message(
+        &mut self,
+        data: &[u8],
+    ) -> Result<(), PartialMessageError>;
+}

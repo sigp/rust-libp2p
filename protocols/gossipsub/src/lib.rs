@@ -113,6 +113,8 @@ mod topic;
 mod transform;
 mod types;
 
+pub mod partial;
+
 #[cfg(feature = "metrics")]
 pub use metrics::Config as MetricsConfig;
 

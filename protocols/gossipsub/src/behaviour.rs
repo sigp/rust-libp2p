@@ -3172,6 +3172,7 @@ where
                 peer_id,
                 RpcOut::Extensions(Extensions {
                     test_extension: Some(true),
+                    partial_messages: Some(true),
                 }),
             );
         }
@@ -3208,6 +3209,7 @@ where
                 peer_id,
                 RpcOut::Extensions(Extensions {
                     test_extension: Some(true),
+                    partial_messages: Some(true),
                 }),
             );
         }

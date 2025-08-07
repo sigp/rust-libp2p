@@ -562,8 +562,9 @@ impl Decoder for GossipsubCodec {
                 })
                 .collect();
 
-            let extension_msg = rpc_control.extensions.map(|extensions| Extensions {
+            let extensions_msg = rpc_control.extensions.map(|extensions| Extensions {
                 test_extension: extensions.testExtension,
+                partial_messages: extensions.partialMessages,
             });
 
             control_msgs.extend(ihave_msgs);
@@ -571,7 +572,7 @@ impl Decoder for GossipsubCodec {
             control_msgs.extend(graft_msgs);
             control_msgs.extend(prune_msgs);
             control_msgs.extend(idontwant_msgs);
-            control_msgs.push(ControlAction::Extensions(extension_msg));
+            control_msgs.push(ControlAction::Extensions(extensions_msg));
         }
 
         Ok(Some(HandlerEvent::Message {
@@ -590,7 +591,7 @@ impl Decoder for GossipsubCodec {
                     })
                     .collect(),
                 control_msgs,
-                test_extension: rpc.testExtension.map(|_extension| TestExtension {}),
+                test_extension: rpc.testExtension.map(|_test_extension| TestExtension {}),
             },
             invalid_messages,
         }))

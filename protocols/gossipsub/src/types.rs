@@ -324,6 +324,7 @@ pub struct IDontWant {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Extensions {
     pub(crate) test_extension: Option<bool>,
+    pub(crate) partial_messages: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -379,6 +380,7 @@ impl From<RpcOut> for proto::RPC {
                 publish: vec![message.into()],
                 control: None,
                 testExtension: None,
+                partial: None,
             },
             RpcOut::Forward {
                 message,
@@ -388,6 +390,7 @@ impl From<RpcOut> for proto::RPC {
                 subscriptions: Vec::new(),
                 control: None,
                 testExtension: None,
+                partial: None,
             },
             RpcOut::Subscribe(topic) => proto::RPC {
                 publish: Vec::new(),
@@ -397,6 +400,7 @@ impl From<RpcOut> for proto::RPC {
                 }],
                 control: None,
                 testExtension: None,
+                partial: None,
             },
             RpcOut::Unsubscribe(topic) => proto::RPC {
                 publish: Vec::new(),
@@ -406,6 +410,7 @@ impl From<RpcOut> for proto::RPC {
                 }],
                 control: None,
                 testExtension: None,
+                partial: None,
             },
             RpcOut::IHave(IHave {
                 topic_hash,
@@ -425,6 +430,7 @@ impl From<RpcOut> for proto::RPC {
                     extensions: None,
                 }),
                 testExtension: None,
+                partial: None,
             },
             RpcOut::IWant(IWant { message_ids }) => proto::RPC {
                 publish: Vec::new(),
@@ -440,6 +446,7 @@ impl From<RpcOut> for proto::RPC {
                     extensions: None,
                 }),
                 testExtension: None,
+                partial: None,
             },
             RpcOut::Graft(Graft { topic_hash }) => proto::RPC {
                 publish: Vec::new(),
@@ -455,6 +462,7 @@ impl From<RpcOut> for proto::RPC {
                     extensions: None,
                 }),
                 testExtension: None,
+                partial: None,
             },
             RpcOut::Prune(Prune {
                 topic_hash,
@@ -484,6 +492,7 @@ impl From<RpcOut> for proto::RPC {
                         extensions: None,
                     }),
                     testExtension: None,
+                    partial: None,
                 }
             }
             RpcOut::IDontWant(IDontWant { message_ids }) => proto::RPC {
@@ -500,8 +509,12 @@ impl From<RpcOut> for proto::RPC {
                     extensions: None,
                 }),
                 testExtension: None,
+                partial: None,
             },
-            RpcOut::Extensions(Extensions { test_extension }) => proto::RPC {
+            RpcOut::Extensions(Extensions {
+                partial_messages,
+                test_extension,
+            }) => proto::RPC {
                 publish: Vec::new(),
                 subscriptions: Vec::new(),
                 control: Some(proto::ControlMessage {
@@ -512,15 +525,18 @@ impl From<RpcOut> for proto::RPC {
                     idontwant: vec![],
                     extensions: Some(proto::ControlExtensions {
                         testExtension: test_extension,
+                        partialMessages: partial_messages,
                     }),
                 }),
                 testExtension: None,
+                partial: None,
             },
             RpcOut::TestExtension => proto::RPC {
                 subscriptions: vec![],
                 publish: vec![],
                 control: None,
                 testExtension: Some(proto::TestExtension {}),
+                partial: None,
             },
         }
     }

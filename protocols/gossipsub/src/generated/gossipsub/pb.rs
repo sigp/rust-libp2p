@@ -20,6 +20,7 @@ pub struct RPC {
     pub publish: Vec<gossipsub::pb::Message>,
     pub control: Option<gossipsub::pb::ControlMessage>,
     pub testExtension: Option<gossipsub::pb::TestExtension>,
+    pub partial: Option<gossipsub::pb::PartialMessagesExtension>,
 }
 
 impl<'a> MessageRead<'a> for RPC {
@@ -31,6 +32,7 @@ impl<'a> MessageRead<'a> for RPC {
                 Ok(18) => msg.publish.push(r.read_message::<gossipsub::pb::Message>(bytes)?),
                 Ok(26) => msg.control = Some(r.read_message::<gossipsub::pb::ControlMessage>(bytes)?),
                 Ok(51939474) => msg.testExtension = Some(r.read_message::<gossipsub::pb::TestExtension>(bytes)?),
+                Ok(131350034) => msg.partial = Some(r.read_message::<gossipsub::pb::PartialMessagesExtension>(bytes)?),
                 Ok(t) => { r.read_unknown(bytes, t)?; }
                 Err(e) => return Err(e),
             }
@@ -46,6 +48,7 @@ impl MessageWrite for RPC {
         + self.publish.iter().map(|s| 1 + sizeof_len((s).get_size())).sum::<usize>()
         + self.control.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
         + self.testExtension.as_ref().map_or(0, |m| 4 + sizeof_len((m).get_size()))
+        + self.partial.as_ref().map_or(0, |m| 4 + sizeof_len((m).get_size()))
     }
 
     fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
@@ -53,6 +56,7 @@ impl MessageWrite for RPC {
         for s in &self.publish { w.write_with_tag(18, |w| w.write_message(s))?; }
         if let Some(ref s) = self.control { w.write_with_tag(26, |w| w.write_message(s))?; }
         if let Some(ref s) = self.testExtension { w.write_with_tag(51939474, |w| w.write_message(s))?; }
+        if let Some(ref s) = self.partial { w.write_with_tag(131350034, |w| w.write_message(s))?; }
         Ok(())
     }
 }
@@ -379,6 +383,7 @@ impl MessageWrite for ControlIDontWant {
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct ControlExtensions {
     pub testExtension: Option<bool>,
+    pub partialMessages: Option<bool>,
 }
 
 impl<'a> MessageRead<'a> for ControlExtensions {
@@ -387,6 +392,7 @@ impl<'a> MessageRead<'a> for ControlExtensions {
         while !r.is_eof() {
             match r.next_tag(bytes) {
                 Ok(51939472) => msg.testExtension = Some(r.read_bool(bytes)?),
+                Ok(131350032) => msg.partialMessages = Some(r.read_bool(bytes)?),
                 Ok(t) => { r.read_unknown(bytes, t)?; }
                 Err(e) => return Err(e),
             }
@@ -399,10 +405,12 @@ impl MessageWrite for ControlExtensions {
     fn get_size(&self) -> usize {
         0
         + self.testExtension.as_ref().map_or(0, |m| 4 + sizeof_varint(*(m) as u64))
+        + self.partialMessages.as_ref().map_or(0, |m| 4 + sizeof_varint(*(m) as u64))
     }
 
     fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
         if let Some(ref s) = self.testExtension { w.write_with_tag(51939472, |w| w.write_bool(*s))?; }
+        if let Some(ref s) = self.partialMessages { w.write_with_tag(131350032, |w| w.write_bool(*s))?; }
         Ok(())
     }
 }
@@ -652,5 +660,166 @@ impl<'a> From<&'a str> for EncMode {
 
 }
 
+}
+
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct PartialMessagesExtension {
+    pub topicID: Option<Vec<u8>>,
+    pub groupID: Option<Vec<u8>>,
+    pub message: Option<gossipsub::pb::PartialMessage>,
+    pub iwant: Option<gossipsub::pb::PartialIWANT>,
+    pub idontwant: Option<gossipsub::pb::PartialIDONTWANT>,
+    pub ihave: Option<gossipsub::pb::PartialIHAVE>,
+}
+
+impl<'a> MessageRead<'a> for PartialMessagesExtension {
+    fn from_reader(r: &mut BytesReader, bytes: &'a [u8]) -> Result<Self> {
+        let mut msg = Self::default();
+        while !r.is_eof() {
+            match r.next_tag(bytes) {
+                Ok(10) => msg.topicID = Some(r.read_bytes(bytes)?.to_owned()),
+                Ok(18) => msg.groupID = Some(r.read_bytes(bytes)?.to_owned()),
+                Ok(26) => msg.message = Some(r.read_message::<gossipsub::pb::PartialMessage>(bytes)?),
+                Ok(34) => msg.iwant = Some(r.read_message::<gossipsub::pb::PartialIWANT>(bytes)?),
+                Ok(42) => msg.idontwant = Some(r.read_message::<gossipsub::pb::PartialIDONTWANT>(bytes)?),
+                Ok(50) => msg.ihave = Some(r.read_message::<gossipsub::pb::PartialIHAVE>(bytes)?),
+                Ok(t) => { r.read_unknown(bytes, t)?; }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(msg)
+    }
+}
+
+impl MessageWrite for PartialMessagesExtension {
+    fn get_size(&self) -> usize {
+        0
+        + self.topicID.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
+        + self.groupID.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
+        + self.message.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
+        + self.iwant.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
+        + self.idontwant.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
+        + self.ihave.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
+    }
+
+    fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
+        if let Some(ref s) = self.topicID { w.write_with_tag(10, |w| w.write_bytes(&**s))?; }
+        if let Some(ref s) = self.groupID { w.write_with_tag(18, |w| w.write_bytes(&**s))?; }
+        if let Some(ref s) = self.message { w.write_with_tag(26, |w| w.write_message(s))?; }
+        if let Some(ref s) = self.iwant { w.write_with_tag(34, |w| w.write_message(s))?; }
+        if let Some(ref s) = self.idontwant { w.write_with_tag(42, |w| w.write_message(s))?; }
+        if let Some(ref s) = self.ihave { w.write_with_tag(50, |w| w.write_message(s))?; }
+        Ok(())
+    }
+}
+
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct PartialMessage {
+    pub data: Option<Vec<u8>>,
+}
+
+impl<'a> MessageRead<'a> for PartialMessage {
+    fn from_reader(r: &mut BytesReader, bytes: &'a [u8]) -> Result<Self> {
+        let mut msg = Self::default();
+        while !r.is_eof() {
+            match r.next_tag(bytes) {
+                Ok(10) => msg.data = Some(r.read_bytes(bytes)?.to_owned()),
+                Ok(t) => { r.read_unknown(bytes, t)?; }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(msg)
+    }
+}
+
+impl MessageWrite for PartialMessage {
+    fn get_size(&self) -> usize {
+        0
+        + self.data.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
+    }
+
+    fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
+        if let Some(ref s) = self.data { w.write_with_tag(10, |w| w.write_bytes(&**s))?; }
+        Ok(())
+    }
+}
+
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct PartialIWANT {
+    pub metadata: Option<Vec<u8>>,
+}
+
+impl<'a> MessageRead<'a> for PartialIWANT {
+    fn from_reader(r: &mut BytesReader, bytes: &'a [u8]) -> Result<Self> {
+        let mut msg = Self::default();
+        while !r.is_eof() {
+            match r.next_tag(bytes) {
+                Ok(10) => msg.metadata = Some(r.read_bytes(bytes)?.to_owned()),
+                Ok(t) => { r.read_unknown(bytes, t)?; }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(msg)
+    }
+}
+
+impl MessageWrite for PartialIWANT {
+    fn get_size(&self) -> usize {
+        0
+        + self.metadata.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
+    }
+
+    fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
+        if let Some(ref s) = self.metadata { w.write_with_tag(10, |w| w.write_bytes(&**s))?; }
+        Ok(())
+    }
+}
+
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct PartialIDONTWANT { }
+
+impl<'a> MessageRead<'a> for PartialIDONTWANT {
+    fn from_reader(r: &mut BytesReader, _: &[u8]) -> Result<Self> {
+        r.read_to_end();
+        Ok(Self::default())
+    }
+}
+
+impl MessageWrite for PartialIDONTWANT { }
+
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct PartialIHAVE {
+    pub metadata: Option<Vec<u8>>,
+}
+
+impl<'a> MessageRead<'a> for PartialIHAVE {
+    fn from_reader(r: &mut BytesReader, bytes: &'a [u8]) -> Result<Self> {
+        let mut msg = Self::default();
+        while !r.is_eof() {
+            match r.next_tag(bytes) {
+                Ok(10) => msg.metadata = Some(r.read_bytes(bytes)?.to_owned()),
+                Ok(t) => { r.read_unknown(bytes, t)?; }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(msg)
+    }
+}
+
+impl MessageWrite for PartialIHAVE {
+    fn get_size(&self) -> usize {
+        0
+        + self.metadata.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
+    }
+
+    fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
+        if let Some(ref s) = self.metadata { w.write_with_tag(10, |w| w.write_bytes(&**s))?; }
+        Ok(())
+    }
 }
 

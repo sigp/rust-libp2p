@@ -18,6 +18,7 @@ message RPC {
 	// must use field numbers larger than 0x200000 to be encoded with at least 4
 	// bytes
     optional TestExtension testExtension = 6492434;
+    optional PartialMessagesExtension partial = 16418754;
 }
 
 message Message {
@@ -58,7 +59,7 @@ message ControlPrune {
 }
 
 message ControlIDontWant {
-	repeated bytes message_ids = 1;
+    repeated bytes message_ids = 1;
 }
 
 message ControlExtensions {
@@ -68,6 +69,7 @@ message ControlExtensions {
     // Experimental extensions must use field numbers larger than 0x200000 to be
     // encoded with at least 4 bytes
     optional bool testExtension = 6492434;
+    optional bool partialMessages = 16418754;
 }
 
 message TestExtension {}
@@ -104,4 +106,28 @@ message TopicDescriptor {
 			WOT = 2; // web of trust, certificates can allow publisher set to grow
 		}
 	}
+}
+
+message PartialMessagesExtension {
+  optional bytes topicID = 1;
+  optional bytes groupID = 2;
+
+  optional PartialMessage message = 3;
+  optional PartialIWANT iwant = 4;
+  optional PartialIDONTWANT idontwant = 5;
+  optional PartialIHAVE ihave = 6;
+}
+
+message PartialMessage {
+  optional bytes data = 1;
+}
+
+message PartialIWANT {
+  optional bytes metadata = 1;
+}
+
+message PartialIDONTWANT {}
+
+message PartialIHAVE {
+  optional bytes metadata = 1;
 }
