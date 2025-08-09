@@ -133,10 +133,6 @@ pub(crate) struct Metrics {
     ignored_messages: Family<TopicHash, Counter>,
     /// The number of messages rejected by the application (validation result).
     rejected_messages: Family<TopicHash, Counter>,
-    /// The number of publish messages dropped by the sender.
-    publish_messages_dropped: Family<TopicHash, Counter>,
-    /// The number of forward messages dropped by the sender.
-    forward_messages_dropped: Family<TopicHash, Counter>,
     /// The number of messages that timed out and could not be sent.
     timedout_messages_dropped: Family<TopicHash, Counter>,
 
@@ -194,9 +190,7 @@ pub(crate) struct Metrics {
     idontwant_msgs_ids: Counter,
 
     /// The size of the priority queue.
-    priority_queue_size: Histogram,
-    /// The size of the non-priority queue.
-    non_priority_queue_size: Histogram,
+    queue_size: Histogram,
 }
 
 impl Metrics {
@@ -243,16 +237,6 @@ impl Metrics {
         let rejected_messages = register_family!(
             "rejected_messages_per_topic",
             "Number of rejected messages received for each topic"
-        );
-
-        let publish_messages_dropped = register_family!(
-            "publish_messages_dropped_per_topic",
-            "Number of publish messages dropped per topic"
-        );
-
-        let forward_messages_dropped = register_family!(
-            "forward_messages_dropped_per_topic",
-            "Number of forward messages dropped per topic"
         );
 
         let timedout_messages_dropped = register_family!(
@@ -361,18 +345,11 @@ impl Metrics {
             metric
         };
 
-        let priority_queue_size = Histogram::new(linear_buckets(0.0, 25.0, 100));
+        let queue_size = Histogram::new(linear_buckets(0.0, 50.0, 100));
         registry.register(
             "priority_queue_size",
             "Histogram of observed priority queue sizes",
-            priority_queue_size.clone(),
-        );
-
-        let non_priority_queue_size = Histogram::new(linear_buckets(0.0, 25.0, 100));
-        registry.register(
-            "non_priority_queue_size",
-            "Histogram of observed non-priority queue sizes",
-            non_priority_queue_size.clone(),
+            queue_size.clone(),
         );
 
         Self {
@@ -385,8 +362,6 @@ impl Metrics {
             accepted_messages,
             ignored_messages,
             rejected_messages,
-            publish_messages_dropped,
-            forward_messages_dropped,
             timedout_messages_dropped,
             mesh_peer_counts,
             mesh_peer_inclusion_events,
@@ -405,8 +380,7 @@ impl Metrics {
             topic_iwant_msgs,
             idontwant_msgs,
             idontwant_msgs_ids,
-            priority_queue_size,
-            non_priority_queue_size,
+            queue_size,
         }
     }
 
@@ -537,20 +511,6 @@ impl Metrics {
         }
     }
 
-    /// Register dropping a Publish message over a topic.
-    pub(crate) fn publish_msg_dropped(&mut self, topic: &TopicHash) {
-        if self.register_topic(topic).is_ok() {
-            self.publish_messages_dropped.get_or_create(topic).inc();
-        }
-    }
-
-    /// Register dropping a Forward message over a topic.
-    pub(crate) fn forward_msg_dropped(&mut self, topic: &TopicHash) {
-        if self.register_topic(topic).is_ok() {
-            self.forward_messages_dropped.get_or_create(topic).inc();
-        }
-    }
-
     /// Register dropping a message that timedout over a topic.
     pub(crate) fn timeout_msg_dropped(&mut self, topic: &TopicHash) {
         if self.register_topic(topic).is_ok() {
@@ -616,12 +576,7 @@ impl Metrics {
 
     /// Observes a priority queue size.
     pub(crate) fn observe_priority_queue_size(&mut self, len: usize) {
-        self.priority_queue_size.observe(len as f64);
-    }
-
-    /// Observes a non-priority queue size.
-    pub(crate) fn observe_non_priority_queue_size(&mut self, len: usize) {
-        self.non_priority_queue_size.observe(len as f64);
+        self.queue_size.observe(len as f64);
     }
 
     /// Observe a score of a mesh peer.
