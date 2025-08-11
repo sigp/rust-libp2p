@@ -2901,6 +2901,12 @@ where
                 let failed_messages = self.failed_messages.entry(peer_id).or_default();
                 failed_messages.queue_full += 1;
 
+                // Update metrics for failed messages by type.
+                #[cfg(feature = "metrics")]
+                if let Some(metrics) = &mut self.metrics {
+                    metrics.register_failed_message(&rpc);
+                }
+
                 // Update peer score.
                 if let PeerScoreState::Active(peer_score) = &mut self.peer_score {
                     peer_score.failed_message_slow_peer(&peer_id);
@@ -3224,6 +3230,7 @@ where
                 // Record metrics on the failure.
                 #[cfg(feature = "metrics")]
                 if let Some(metrics) = self.metrics.as_mut() {
+                    metrics.register_failed_message(&rpc);
                     if let RpcOut::Publish { message, .. } | RpcOut::Forward { message, .. } = rpc {
                         metrics.timeout_msg_dropped(&message.topic);
                     }

@@ -36,7 +36,7 @@ use prometheus_client::{
 
 use crate::{
     topic::TopicHash,
-    types::{MessageAcceptance, PeerKind},
+    types::{MessageAcceptance, PeerKind, RpcOut},
 };
 
 // Default value that limits for how many topics do we store metrics.
@@ -191,6 +191,8 @@ pub(crate) struct Metrics {
 
     /// The size of the priority queue.
     queue_size: Histogram,
+    /// Failed messages by message type.
+    failed_messages: Family<FailedMessagesLabel, Counter>,
 }
 
 impl Metrics {
@@ -352,6 +354,11 @@ impl Metrics {
             queue_size.clone(),
         );
 
+        let failed_messages = register_family!(
+            "failed_messages",
+            "Number of failed messages by message type"
+        );
+
         Self {
             max_topics,
             max_never_subscribed_topics,
@@ -381,6 +388,7 @@ impl Metrics {
             idontwant_msgs,
             idontwant_msgs_ids,
             queue_size,
+            failed_messages,
         }
     }
 
@@ -610,6 +618,24 @@ impl Metrics {
             self.topic_info.insert(topic_hash, true);
         }
     }
+
+    /// Register a failed message by its type.
+    pub(crate) fn register_failed_message(&mut self, message: &crate::types::RpcOut) {
+        let message_type = match message {
+            RpcOut::Publish { .. } => "publish",
+            RpcOut::Forward { .. } => "forward",
+            RpcOut::Subscribe(_) => "subscribe",
+            RpcOut::Unsubscribe(_) => "unsubscribe",
+            RpcOut::Graft(_) => "graft",
+            RpcOut::Prune(_) => "prune",
+            RpcOut::IHave(_) => "ihave",
+            RpcOut::IWant(_) => "iwant",
+            RpcOut::IDontWant(_) => "idontwant",
+        };
+
+        let label = FailedMessagesLabel { message_type };
+        self.failed_messages.get_or_create(&label).inc();
+    }
 }
 
 /// Reasons why a peer was included in the mesh.
@@ -677,6 +703,12 @@ struct ProtocolLabel {
 #[derive(PartialEq, Eq, Hash, EncodeLabelSet, Clone, Debug)]
 struct PenaltyLabel {
     penalty: Penalty,
+}
+
+/// Label for failed messages by message type
+#[derive(PartialEq, Eq, Hash, EncodeLabelSet, Clone, Debug)]
+struct FailedMessagesLabel {
+    message_type: &'static str,
 }
 
 #[derive(Clone)]
