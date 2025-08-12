@@ -1,4 +1,6 @@
 ## 0.50.0
+- Remove peer penalty for duplicate messages.
+  See [PR 6112](https://github.com/libp2p/rust-libp2p/pull/6112)
 
 - switch the internal `async-channel` used to dispatch messages from `NetworkBehaviour` to the `ConnectionHandler`
   with an internal priority queue. See [PR XXXX](https://github.com/libp2p/rust-libp2p/pull/XXXX)
