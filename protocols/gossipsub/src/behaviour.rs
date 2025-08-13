@@ -165,7 +165,7 @@ pub enum Event {
         failed_messages: FailedMessages,
     },
     /// A Peer is below the score threshold.
-    LowScorePeers { peer_ids: Vec<PeerId> },
+    BelowThresholdPeers { peer_ids: Vec<PeerId> },
 }
 
 /// A data structure for storing configuration for publishing messages. See [`MessageAuthenticity`]
@@ -2178,7 +2178,7 @@ where
 
             if !peers_to_report.is_empty() {
                 self.events
-                    .push_back(ToSwarm::GenerateEvent(Event::LowScorePeers {
+                    .push_back(ToSwarm::GenerateEvent(Event::BelowThresholdPeers {
                         peer_ids: peers_to_report,
                     }));
             }

@@ -6826,11 +6826,16 @@ fn test_low_score_peer_is_reported() {
     let low_score_event = gs
         .events
         .iter()
-        .find(|event| matches!(event, ToSwarm::GenerateEvent(Event::LowScorePeers { .. })))
+        .find(|event| {
+            matches!(
+                event,
+                ToSwarm::GenerateEvent(Event::BelowThresholdPeers { .. })
+            )
+        })
         .unwrap();
 
     match low_score_event {
-        ToSwarm::GenerateEvent(Event::LowScorePeers { peer_ids }) => {
+        ToSwarm::GenerateEvent(Event::BelowThresholdPeers { peer_ids }) => {
             assert_eq!(peer_ids.len(), 2);
             assert!(peer_ids.contains(&peers[0]));
             assert!(peer_ids.contains(&peers[1]));
