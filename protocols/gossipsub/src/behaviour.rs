@@ -164,6 +164,8 @@ pub enum Event {
         /// The types and amounts of failed messages that are occurring for this peer.
         failed_messages: FailedMessages,
     },
+    /// A Peer is below the score threshold.
+    BelowThresholdPeers { peer_ids: Vec<PeerId> },
 }
 
 /// A data structure for storing configuration for publishing messages. See [`MessageAuthenticity`]
@@ -2139,16 +2141,21 @@ where
             let mesh_outbound_min = self.config.mesh_outbound_min_for_topic(topic_hash);
 
             // drop all peers with negative score, without PX
-            // if there is at some point a stable retain method for BTreeSet the following can be
-            // written more efficiently with retain.
-            let mut to_remove_peers = Vec::new();
-            for peer_id in peers.iter() {
+            // report peers below the score report threshold.
+            let mut removed_peers = 0;
+            let mut peers_to_report = vec![];
+            peers.retain(|peer_id| {
                 let peer_score = scores.get(peer_id).map(|r| r.score).unwrap_or_default();
-
                 // Record the score per mesh
                 #[cfg(feature = "metrics")]
                 if let Some(metrics) = self.metrics.as_mut() {
                     metrics.observe_mesh_peers_score(topic_hash, peer_score);
+                }
+
+                if let Some(threshold) = self.config.score_report_threshold() {
+                    if peer_score < threshold {
+                        peers_to_report.push(*peer_id);
+                    }
                 }
 
                 if peer_score < 0.0 {
@@ -2162,17 +2169,23 @@ where
                     let current_topic = to_prune.entry(*peer_id).or_insert_with(Vec::new);
                     current_topic.push(topic_hash.clone());
                     no_px.insert(*peer_id);
-                    to_remove_peers.push(*peer_id);
+                    removed_peers += 1;
+                    return false;
                 }
+
+                true
+            });
+
+            if !peers_to_report.is_empty() {
+                self.events
+                    .push_back(ToSwarm::GenerateEvent(Event::BelowThresholdPeers {
+                        peer_ids: peers_to_report,
+                    }));
             }
 
             #[cfg(feature = "metrics")]
             if let Some(m) = self.metrics.as_mut() {
-                m.peers_removed(topic_hash, Churn::BadScore, to_remove_peers.len())
-            }
-
-            for peer_id in to_remove_peers {
-                peers.remove(&peer_id);
+                m.peers_removed(topic_hash, Churn::BadScore, removed_peers)
             }
 
             // too little peers - add some

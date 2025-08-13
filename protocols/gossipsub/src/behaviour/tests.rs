@@ -6787,3 +6787,60 @@ fn test_validation_message_size_within_topic_specific() {
         _ => panic!("Unexpected event"),
     }
 }
+
+#[test]
+fn test_low_score_peer_is_reported() {
+    let score_report_threshold = -5.0;
+
+    let config = ConfigBuilder::default()
+        .score_report_threshold(score_report_threshold)
+        .build()
+        .expect("valid config");
+
+    let (mut gs, peers, _receivers, _topics) = inject_nodes1()
+        .peer_no(3)
+        .topics(vec!["test".into()])
+        .to_subscribe(true)
+        .gs_config(config)
+        .scoring(Some((
+            PeerScoreParams::default(),
+            PeerScoreThresholds::default(),
+        )))
+        .create_network();
+
+    // Reduce the score of the first peer below the threshold
+    gs.as_peer_score_mut().add_penalty(&peers[0], 10);
+
+    // Reduce the score of the second peer below the threshold
+    gs.as_peer_score_mut().add_penalty(&peers[1], 8);
+
+    // Verify initial scores are below threshold
+    assert!(gs.as_peer_score_mut().score_report(&peers[0]).score < score_report_threshold);
+    assert!(gs.as_peer_score_mut().score_report(&peers[1]).score < score_report_threshold);
+    assert!(gs.as_peer_score_mut().score_report(&peers[2]).score >= score_report_threshold);
+
+    // Trigger a heartbeat which should generate the LowScorePeers event
+    gs.heartbeat();
+
+    // Check for the LowScorePeers event
+    let low_score_event = gs
+        .events
+        .iter()
+        .find(|event| {
+            matches!(
+                event,
+                ToSwarm::GenerateEvent(Event::BelowThresholdPeers { .. })
+            )
+        })
+        .unwrap();
+
+    match low_score_event {
+        ToSwarm::GenerateEvent(Event::BelowThresholdPeers { peer_ids }) => {
+            assert_eq!(peer_ids.len(), 2);
+            assert!(peer_ids.contains(&peers[0]));
+            assert!(peer_ids.contains(&peers[1]));
+            assert!(!peer_ids.contains(&peers[2]));
+        }
+        _ => unreachable!(),
+    }
+}
