@@ -124,10 +124,16 @@ impl Queue {
         true
     }
 
-    /// Returns the length of the queue.
+    /// Returns the length of the priority queue.
     #[cfg(feature = "metrics")]
-    pub(crate) fn len(&self) -> usize {
-        self.high_priority.len() + self.control.len() + self.low_priority.len()
+    pub(crate) fn high_priority_len(&self) -> usize {
+        self.high_priority.len() + self.control.len()
+    }
+
+    /// Returns the length of the non priority queue.
+    #[cfg(feature = "metrics")]
+    pub(crate) fn low_priority_len(&self) -> usize {
+        self.low_priority.len()
     }
 
     /// Attempts to pop an item from the queue.

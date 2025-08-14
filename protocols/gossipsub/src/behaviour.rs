@@ -2084,7 +2084,8 @@ where
         #[cfg(feature = "metrics")]
         if let Some(m) = &mut self.metrics {
             for sender_queue in self.connected_peers.values().map(|v| &v.messages) {
-                m.observe_priority_queue_size(sender_queue.len());
+                m.observe_priority_queue_size(sender_queue.high_priority_len());
+                m.observe_priority_queue_size(sender_queue.low_priority_len());
             }
         }
 
