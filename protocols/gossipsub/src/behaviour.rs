@@ -2084,8 +2084,8 @@ where
         #[cfg(feature = "metrics")]
         if let Some(m) = &mut self.metrics {
             for sender_queue in self.connected_peers.values().map(|v| &v.messages) {
-                m.observe_priority_queue_size(sender_queue.high_priority_len());
-                m.observe_priority_queue_size(sender_queue.low_priority_len());
+                m.observe_priority_queue_size(sender_queue.priority_len());
+                m.observe_priority_queue_size(sender_queue.non_priority_len());
             }
         }
 
@@ -2501,6 +2501,11 @@ where
         // Report expired messages
         for (peer_id, failed_messages) in self.failed_messages.drain() {
             tracing::debug!("Peer couldn't consume messages: {:?}", failed_messages);
+            #[cfg(feature = "metrics")]
+            if let Some(metrics) = self.metrics.as_mut() {
+                metrics.observe_failed_priority_messages(failed_messages.priority);
+                metrics.observe_failed_non_priority_messages(failed_messages.non_priority);
+            }
             self.events
                 .push_back(ToSwarm::GenerateEvent(Event::SlowPeer {
                     peer_id,
@@ -2887,12 +2892,10 @@ where
 
                 // Update failed message counter.
                 let failed_messages = self.failed_messages.entry(peer_id).or_default();
-                failed_messages.queue_full += 1;
-
-                // Update metrics for failed messages by type.
-                #[cfg(feature = "metrics")]
-                if let Some(metrics) = &mut self.metrics {
-                    metrics.register_failed_message(&rpc);
+                if rpc.priority() {
+                    failed_messages.priority += 1;
+                } else {
+                    failed_messages.non_priority += 1;
                 }
 
                 // Update peer score.
@@ -3205,7 +3208,7 @@ where
             }
             // rpc is only used for metrics code
             #[allow(unused_variables)]
-            HandlerEvent::MessagesDropped(rpc) => {
+            HandlerEvent::MessageDropped(rpc) => {
                 // Account for this in the scoring logic
                 if let PeerScoreState::Active(peer_score) = &mut self.peer_score {
                     peer_score.failed_message_slow_peer(&propagation_source);
@@ -3213,16 +3216,7 @@ where
 
                 // Keep track of expired messages for the application layer.
                 let failed_messages = self.failed_messages.entry(propagation_source).or_default();
-                failed_messages.timeout += 1;
-
-                // Record metrics on the failure.
-                #[cfg(feature = "metrics")]
-                if let Some(metrics) = self.metrics.as_mut() {
-                    metrics.register_failed_message(&rpc);
-                    if let RpcOut::Publish { message, .. } | RpcOut::Forward { message, .. } = rpc {
-                        metrics.timeout_msg_dropped(&message.topic);
-                    }
-                }
+                failed_messages.non_priority += 1;
             }
             HandlerEvent::Message {
                 rpc,

@@ -35,11 +35,11 @@ const CONTROL_MSGS_LIMIT: usize = 20_000;
 #[derive(Debug)]
 pub(crate) struct Queue {
     /// High-priority unbounded queue (Subscribe, Unsubscribe)
-    pub(crate) high_priority: Shared,
+    pub(crate) priority: Shared,
     /// Control messages bounded queue (Graft, Prune, IDontWant)
     pub(crate) control: Shared,
     /// Low-priority bounded queue (Publish, Forward, IHave, IWant)
-    pub(crate) low_priority: Shared,
+    pub(crate) non_priority: Shared,
     /// The id of the current reference of the counter.
     pub(crate) id: usize,
     /// The total number of references for the queue.
@@ -50,9 +50,9 @@ impl Queue {
     /// Create a new `Queue` with the `capacity`.
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
-            high_priority: Shared::new(),
+            priority: Shared::new(),
             control: Shared::with_capacity(CONTROL_MSGS_LIMIT),
-            low_priority: Shared::with_capacity(capacity),
+            non_priority: Shared::with_capacity(capacity),
             id: 1,
             count: Arc::new(AtomicUsize::new(1)),
         }
@@ -62,7 +62,7 @@ impl Queue {
     pub(crate) fn try_push(&mut self, message: RpcOut) -> Result<(), RpcOut> {
         match message {
             RpcOut::Subscribe(_) | RpcOut::Unsubscribe(_) => {
-                self.high_priority
+                self.priority
                     .try_push(message)
                     .expect("Shared is unbounded");
                 Ok(())
@@ -73,13 +73,13 @@ impl Queue {
             RpcOut::Publish { .. }
             | RpcOut::Forward { .. }
             | RpcOut::IHave(_)
-            | RpcOut::IWant(_) => self.low_priority.try_push(message),
+            | RpcOut::IWant(_) => self.non_priority.try_push(message),
         }
     }
 
     /// Remove pending low piority Publish and Forward messages.
     pub(crate) fn remove_data_messages(&mut self, message_ids: &[MessageId]) {
-        self.low_priority.retain(|message| match message {
+        self.non_priority.retain(|message| match message {
             RpcOut::Publish { message_id, .. } | RpcOut::Forward { message_id, .. } => {
                 !message_ids.contains(message_id)
             }
@@ -89,8 +89,8 @@ impl Queue {
 
     /// Pop an element from the queue.
     pub(crate) fn poll_pop(&mut self, cx: &mut Context) -> Poll<RpcOut> {
-        // First we try the high priority messages.
-        if let Poll::Ready(rpc) = Pin::new(&mut self.high_priority).poll_pop(cx) {
+        // First we try the priority messages.
+        if let Poll::Ready(rpc) = Pin::new(&mut self.priority).poll_pop(cx) {
             return Poll::Ready(rpc);
         }
 
@@ -99,8 +99,8 @@ impl Queue {
             return Poll::Ready(rpc);
         }
 
-        // Finaly we try the low priority messages
-        if let Poll::Ready(rpc) = Pin::new(&mut self.low_priority).poll_pop(cx) {
+        // Finaly we try the non priority messages
+        if let Poll::Ready(rpc) = Pin::new(&mut self.non_priority).poll_pop(cx) {
             return Poll::Ready(rpc);
         }
 
@@ -109,7 +109,7 @@ impl Queue {
 
     /// Check if the queue is empty.
     pub(crate) fn is_empty(&self) -> bool {
-        if !self.high_priority.is_empty() {
+        if !self.priority.is_empty() {
             return false;
         }
 
@@ -117,7 +117,7 @@ impl Queue {
             return false;
         }
 
-        if !self.low_priority.is_empty() {
+        if !self.non_priority.is_empty() {
             return false;
         }
 
@@ -126,22 +126,22 @@ impl Queue {
 
     /// Returns the length of the priority queue.
     #[cfg(feature = "metrics")]
-    pub(crate) fn high_priority_len(&self) -> usize {
-        self.high_priority.len() + self.control.len()
+    pub(crate) fn priority_len(&self) -> usize {
+        self.priority.len() + self.control.len()
     }
 
     /// Returns the length of the non priority queue.
     #[cfg(feature = "metrics")]
-    pub(crate) fn low_priority_len(&self) -> usize {
-        self.low_priority.len()
+    pub(crate) fn non_priority_len(&self) -> usize {
+        self.non_priority.len()
     }
 
     /// Attempts to pop an item from the queue.
     /// this method returns an error if the queue is empty.
     #[cfg(test)]
     pub(crate) fn try_pop(&mut self) -> Result<RpcOut, ()> {
-        // Try high priority first
-        if let Ok(msg) = self.high_priority.try_pop() {
+        // Try priority first
+        if let Ok(msg) = self.priority.try_pop() {
             return Ok(msg);
         }
 
@@ -150,8 +150,8 @@ impl Queue {
             return Ok(msg);
         }
 
-        // Finally low priority
-        if let Ok(msg) = self.low_priority.try_pop() {
+        // Finally non priority
+        if let Ok(msg) = self.non_priority.try_pop() {
             return Ok(msg);
         }
 
@@ -163,9 +163,9 @@ impl Clone for Queue {
     fn clone(&self) -> Self {
         let new_id = self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Self {
-            high_priority: Shared {
-                inner: self.high_priority.inner.clone(),
-                capacity: self.high_priority.capacity,
+            priority: Shared {
+                inner: self.priority.inner.clone(),
+                capacity: self.priority.capacity,
                 id: new_id,
             },
             control: Shared {
@@ -173,9 +173,9 @@ impl Clone for Queue {
                 capacity: self.control.capacity,
                 id: new_id,
             },
-            low_priority: Shared {
-                inner: self.low_priority.inner.clone(),
-                capacity: self.low_priority.capacity,
+            non_priority: Shared {
+                inner: self.non_priority.inner.clone(),
+                capacity: self.non_priority.capacity,
                 id: new_id,
             },
             id: self.id,

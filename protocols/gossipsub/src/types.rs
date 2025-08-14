@@ -39,11 +39,12 @@ use crate::{queue::Queue, rpc_proto::proto, TopicHash};
 /// Messages that have expired while attempting to be sent to a peer.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FailedMessages {
-    /// The number of messages that were failed to be sent to the non-priority queue as it was
+    /// The number of messages that were failed to be sent to the priority queue as it was
     /// full.
-    pub queue_full: usize,
-    /// The number of messages that timed out and could not be sent.
-    pub timeout: usize,
+    pub priority: usize,
+    /// The number of messages that were failed to be sent to the non priority queue as it was
+    /// full.
+    pub non_priority: usize,
 }
 
 #[derive(Debug)]
@@ -341,8 +342,8 @@ impl RpcOut {
         self.into()
     }
 
-    /// Returns true if the `RpcOut` is high priority.
-    pub(crate) fn high_priority(&self) -> bool {
+    /// Returns true if the `RpcOut` is priority.
+    pub(crate) fn priority(&self) -> bool {
         matches!(
             self,
             RpcOut::Subscribe(_)
@@ -392,7 +393,7 @@ impl PartialEq for RpcOut {
 
 impl Ord for RpcOut {
     fn cmp(&self, other: &Self) -> Ordering {
-        match (self.high_priority(), other.high_priority()) {
+        match (self.priority(), other.priority()) {
             (true, true) | (false, false) => {
                 // Among non priority messages, `RpcOut::Publish` has the higher priority.
                 match (self, other) {

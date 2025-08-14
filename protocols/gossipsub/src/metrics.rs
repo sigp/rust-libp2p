@@ -36,7 +36,7 @@ use prometheus_client::{
 
 use crate::{
     topic::TopicHash,
-    types::{MessageAcceptance, PeerKind, RpcOut},
+    types::{MessageAcceptance, PeerKind},
 };
 
 // Default value that limits for how many topics do we store metrics.
@@ -133,8 +133,6 @@ pub(crate) struct Metrics {
     ignored_messages: Family<TopicHash, Counter>,
     /// The number of messages rejected by the application (validation result).
     rejected_messages: Family<TopicHash, Counter>,
-    /// The number of messages that timed out and could not be sent.
-    timedout_messages_dropped: Family<TopicHash, Counter>,
 
     // Metrics regarding mesh state
     /// Number of peers in our mesh. This metric should be updated with the count of peers for a
@@ -192,7 +190,7 @@ pub(crate) struct Metrics {
     /// The size of the priority queue.
     queue_size: Histogram,
     /// Failed messages by message type.
-    failed_messages: Family<FailedMessagesLabel, Counter>,
+    failed_messages: Family<FailedMessageLabel, Histogram>,
 }
 
 impl Metrics {
@@ -239,11 +237,6 @@ impl Metrics {
         let rejected_messages = register_family!(
             "rejected_messages_per_topic",
             "Number of rejected messages received for each topic"
-        );
-
-        let timedout_messages_dropped = register_family!(
-            "timedout_messages_dropped_per_topic",
-            "Number of timedout messages dropped per topic"
         );
 
         let mesh_peer_counts = register_family!(
@@ -354,9 +347,15 @@ impl Metrics {
             queue_size.clone(),
         );
 
-        let failed_messages = register_family!(
+        let failed_messages = Family::<FailedMessageLabel, Histogram>::new_with_constructor(|| {
+            Histogram::new([
+                0.0, 1.0, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 1000.0, 2000.0,
+            ])
+        });
+        registry.register(
             "failed_messages",
-            "Number of failed messages by message type"
+            "Histogram of observed failed messages by type",
+            failed_messages.clone(),
         );
 
         Self {
@@ -369,7 +368,6 @@ impl Metrics {
             accepted_messages,
             ignored_messages,
             rejected_messages,
-            timedout_messages_dropped,
             mesh_peer_counts,
             mesh_peer_inclusion_events,
             mesh_peer_churn_events,
@@ -519,13 +517,6 @@ impl Metrics {
         }
     }
 
-    /// Register dropping a message that timedout over a topic.
-    pub(crate) fn timeout_msg_dropped(&mut self, topic: &TopicHash) {
-        if self.register_topic(topic).is_ok() {
-            self.timedout_messages_dropped.get_or_create(topic).inc();
-        }
-    }
-
     /// Register that a message was received (and was not a duplicate).
     pub(crate) fn msg_recvd(&mut self, topic: &TopicHash) {
         if self.register_topic(topic).is_ok() {
@@ -619,22 +610,22 @@ impl Metrics {
         }
     }
 
-    /// Register a failed message by its type.
-    pub(crate) fn register_failed_message(&mut self, message: &crate::types::RpcOut) {
-        let message_type = match message {
-            RpcOut::Publish { .. } => "publish",
-            RpcOut::Forward { .. } => "forward",
-            RpcOut::Subscribe(_) => "subscribe",
-            RpcOut::Unsubscribe(_) => "unsubscribe",
-            RpcOut::Graft(_) => "graft",
-            RpcOut::Prune(_) => "prune",
-            RpcOut::IHave(_) => "ihave",
-            RpcOut::IWant(_) => "iwant",
-            RpcOut::IDontWant(_) => "idontwant",
-        };
+    /// Observe the failed priority messages.
+    pub(crate) fn observe_failed_priority_messages(&mut self, messages: usize) {
+        self.failed_messages
+            .get_or_create(&FailedMessageLabel {
+                message: "priority",
+            })
+            .observe(messages as f64);
+    }
 
-        let label = FailedMessagesLabel { message_type };
-        self.failed_messages.get_or_create(&label).inc();
+    /// Observe the failed non priority messages.
+    pub(crate) fn observe_failed_non_priority_messages(&mut self, messages: usize) {
+        self.failed_messages
+            .get_or_create(&FailedMessageLabel {
+                message: "non_priority",
+            })
+            .observe(messages as f64);
     }
 }
 
@@ -705,10 +696,10 @@ struct PenaltyLabel {
     penalty: Penalty,
 }
 
-/// Label for failed messages by message type
+/// Label for the kinds of failed messages
 #[derive(PartialEq, Eq, Hash, EncodeLabelSet, Clone, Debug)]
-struct FailedMessagesLabel {
-    message_type: &'static str,
+struct FailedMessageLabel {
+    message: &'static str,
 }
 
 #[derive(Clone)]

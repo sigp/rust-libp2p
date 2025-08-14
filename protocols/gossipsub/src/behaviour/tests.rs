@@ -5611,8 +5611,8 @@ fn test_slow_peer_returns_failed_publish() {
         .expect("No SlowPeer event found");
 
     let failed_messages = FailedMessages {
-        queue_full: 1,
-        timeout: 0,
+        priority: 0,
+        non_priority: 1,
     };
 
     assert_eq!(slow_peer_failed_messages, failed_messages);
@@ -5715,8 +5715,8 @@ fn test_slow_peer_returns_failed_ihave_handling() {
         .unwrap();
 
     let failed_messages = FailedMessages {
-        timeout: 0,
-        queue_full: 1,
+        priority: 0,
+        non_priority: 1,
     };
 
     assert_eq!(slow_peer_failed_messages, failed_messages);
@@ -5800,8 +5800,8 @@ fn test_slow_peer_returns_failed_iwant_handling() {
         .unwrap();
 
     let failed_messages = FailedMessages {
-        queue_full: 1,
-        timeout: 0,
+        priority: 0,
+        non_priority: 1,
     };
 
     assert_eq!(slow_peer_failed_messages, failed_messages);
@@ -5885,8 +5885,8 @@ fn test_slow_peer_returns_failed_forward() {
         .unwrap();
 
     let failed_messages = FailedMessages {
-        queue_full: 1,
-        timeout: 0,
+        non_priority: 1,
+        priority: 0,
     };
 
     assert_eq!(slow_peer_failed_messages, failed_messages);
