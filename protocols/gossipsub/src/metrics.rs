@@ -133,12 +133,6 @@ pub(crate) struct Metrics {
     ignored_messages: Family<TopicHash, Counter>,
     /// The number of messages rejected by the application (validation result).
     rejected_messages: Family<TopicHash, Counter>,
-    /// The number of publish messages dropped by the sender.
-    publish_messages_dropped: Family<TopicHash, Counter>,
-    /// The number of forward messages dropped by the sender.
-    forward_messages_dropped: Family<TopicHash, Counter>,
-    /// The number of messages that timed out and could not be sent.
-    timedout_messages_dropped: Family<TopicHash, Counter>,
 
     // Metrics regarding mesh state
     /// Number of peers in our mesh. This metric should be updated with the count of peers for a
@@ -194,9 +188,9 @@ pub(crate) struct Metrics {
     idontwant_msgs_ids: Counter,
 
     /// The size of the priority queue.
-    priority_queue_size: Histogram,
-    /// The size of the non-priority queue.
-    non_priority_queue_size: Histogram,
+    queue_size: Histogram,
+    /// Failed messages by message type.
+    failed_messages: Family<FailedMessageLabel, Histogram>,
 }
 
 impl Metrics {
@@ -243,21 +237,6 @@ impl Metrics {
         let rejected_messages = register_family!(
             "rejected_messages_per_topic",
             "Number of rejected messages received for each topic"
-        );
-
-        let publish_messages_dropped = register_family!(
-            "publish_messages_dropped_per_topic",
-            "Number of publish messages dropped per topic"
-        );
-
-        let forward_messages_dropped = register_family!(
-            "forward_messages_dropped_per_topic",
-            "Number of forward messages dropped per topic"
-        );
-
-        let timedout_messages_dropped = register_family!(
-            "timedout_messages_dropped_per_topic",
-            "Number of timedout messages dropped per topic"
         );
 
         let mesh_peer_counts = register_family!(
@@ -361,18 +340,22 @@ impl Metrics {
             metric
         };
 
-        let priority_queue_size = Histogram::new(linear_buckets(0.0, 25.0, 100));
+        let queue_size = Histogram::new(linear_buckets(0.0, 50.0, 100));
         registry.register(
             "priority_queue_size",
             "Histogram of observed priority queue sizes",
-            priority_queue_size.clone(),
+            queue_size.clone(),
         );
 
-        let non_priority_queue_size = Histogram::new(linear_buckets(0.0, 25.0, 100));
+        let failed_messages = Family::<FailedMessageLabel, Histogram>::new_with_constructor(|| {
+            Histogram::new([
+                0.0, 1.0, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 1000.0, 2000.0,
+            ])
+        });
         registry.register(
-            "non_priority_queue_size",
-            "Histogram of observed non-priority queue sizes",
-            non_priority_queue_size.clone(),
+            "failed_messages",
+            "Histogram of observed failed messages by type",
+            failed_messages.clone(),
         );
 
         Self {
@@ -385,9 +368,6 @@ impl Metrics {
             accepted_messages,
             ignored_messages,
             rejected_messages,
-            publish_messages_dropped,
-            forward_messages_dropped,
-            timedout_messages_dropped,
             mesh_peer_counts,
             mesh_peer_inclusion_events,
             mesh_peer_churn_events,
@@ -405,8 +385,8 @@ impl Metrics {
             topic_iwant_msgs,
             idontwant_msgs,
             idontwant_msgs_ids,
-            priority_queue_size,
-            non_priority_queue_size,
+            queue_size,
+            failed_messages,
         }
     }
 
@@ -537,27 +517,6 @@ impl Metrics {
         }
     }
 
-    /// Register dropping a Publish message over a topic.
-    pub(crate) fn publish_msg_dropped(&mut self, topic: &TopicHash) {
-        if self.register_topic(topic).is_ok() {
-            self.publish_messages_dropped.get_or_create(topic).inc();
-        }
-    }
-
-    /// Register dropping a Forward message over a topic.
-    pub(crate) fn forward_msg_dropped(&mut self, topic: &TopicHash) {
-        if self.register_topic(topic).is_ok() {
-            self.forward_messages_dropped.get_or_create(topic).inc();
-        }
-    }
-
-    /// Register dropping a message that timedout over a topic.
-    pub(crate) fn timeout_msg_dropped(&mut self, topic: &TopicHash) {
-        if self.register_topic(topic).is_ok() {
-            self.timedout_messages_dropped.get_or_create(topic).inc();
-        }
-    }
-
     /// Register that a message was received (and was not a duplicate).
     pub(crate) fn msg_recvd(&mut self, topic: &TopicHash) {
         if self.register_topic(topic).is_ok() {
@@ -616,12 +575,7 @@ impl Metrics {
 
     /// Observes a priority queue size.
     pub(crate) fn observe_priority_queue_size(&mut self, len: usize) {
-        self.priority_queue_size.observe(len as f64);
-    }
-
-    /// Observes a non-priority queue size.
-    pub(crate) fn observe_non_priority_queue_size(&mut self, len: usize) {
-        self.non_priority_queue_size.observe(len as f64);
+        self.queue_size.observe(len as f64);
     }
 
     /// Observe a score of a mesh peer.
@@ -654,6 +608,24 @@ impl Metrics {
         for topic_hash in topics {
             self.topic_info.insert(topic_hash, true);
         }
+    }
+
+    /// Observe the failed priority messages.
+    pub(crate) fn observe_failed_priority_messages(&mut self, messages: usize) {
+        self.failed_messages
+            .get_or_create(&FailedMessageLabel {
+                message: "priority",
+            })
+            .observe(messages as f64);
+    }
+
+    /// Observe the failed non priority messages.
+    pub(crate) fn observe_failed_non_priority_messages(&mut self, messages: usize) {
+        self.failed_messages
+            .get_or_create(&FailedMessageLabel {
+                message: "non_priority",
+            })
+            .observe(messages as f64);
     }
 }
 
@@ -722,6 +694,12 @@ struct ProtocolLabel {
 #[derive(PartialEq, Eq, Hash, EncodeLabelSet, Clone, Debug)]
 struct PenaltyLabel {
     penalty: Penalty,
+}
+
+/// Label for the kinds of failed messages
+#[derive(PartialEq, Eq, Hash, EncodeLabelSet, Clone, Debug)]
+struct FailedMessageLabel {
+    message: &'static str,
 }
 
 #[derive(Clone)]

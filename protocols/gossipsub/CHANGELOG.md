@@ -2,6 +2,9 @@
 - Remove peer penalty for duplicate messages.
   See [PR 6112](https://github.com/libp2p/rust-libp2p/pull/6112)
 
+- switch the internal `async-channel` used to dispatch messages from `NetworkBehaviour` to the `ConnectionHandler`
+  with an internal priority queue. See [PR XXXX](https://github.com/libp2p/rust-libp2p/pull/XXXX)
+
 - Remove `Rpc` from the public API.
   See [PR 6091](https://github.com/libp2p/rust-libp2p/pull/6091)
 
@@ -20,11 +23,13 @@
 
 - Fix mesh not being constructed even when not adding any peer.
   See [PR 6100](https://github.com/libp2p/rust-libp2p/pull/6100)
+>>>>>>> 2a726cdbec1f055854755dc03a632d804e268543
 
 ## 0.49.0
 
 - Feature gate metrics related code. This changes some `Behaviour` constructor methods.
   See [PR 6020](https://github.com/libp2p/rust-libp2p/pull/6020)
+
 - Send IDONTWANT before Publishing a new message.
   See [PR 6017](https://github.com/libp2p/rust-libp2p/pull/6017)
 
