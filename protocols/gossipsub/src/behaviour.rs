@@ -2085,7 +2085,7 @@ where
         if let Some(m) = &mut self.metrics {
             for sender_queue in self.connected_peers.values().map(|v| &v.messages) {
                 m.observe_priority_queue_size(sender_queue.priority_len());
-                m.observe_priority_queue_size(sender_queue.non_priority_len());
+                m.observe_non_priority_queue_size(sender_queue.non_priority_len());
             }
         }
 

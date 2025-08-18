@@ -187,10 +187,11 @@ pub(crate) struct Metrics {
     /// The number of msg_id's we have received in every IDONTWANT control message.
     idontwant_msgs_ids: Counter,
 
-    /// The size of the priority queue.
-    queue_size: Histogram,
+    /// The size of the queue by priority.
+    queue_size: Family<PriorityLabel, Histogram>,
+
     /// Failed messages by message type.
-    failed_messages: Family<FailedMessageLabel, Histogram>,
+    failed_messages: Family<PriorityLabel, Histogram>,
 }
 
 impl Metrics {
@@ -340,14 +341,16 @@ impl Metrics {
             metric
         };
 
-        let queue_size = Histogram::new(linear_buckets(0.0, 50.0, 100));
+        let queue_size = Family::<PriorityLabel, Histogram>::new_with_constructor(|| {
+            Histogram::new(linear_buckets(0.0, 50.0, 100))
+        });
         registry.register(
-            "priority_queue_size",
-            "Histogram of observed priority queue sizes",
+            "queue_size",
+            "Histogram of observed queue sizes",
             queue_size.clone(),
         );
 
-        let failed_messages = Family::<FailedMessageLabel, Histogram>::new_with_constructor(|| {
+        let failed_messages = Family::<PriorityLabel, Histogram>::new_with_constructor(|| {
             Histogram::new([
                 0.0, 1.0, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 1000.0, 2000.0,
             ])
@@ -575,7 +578,20 @@ impl Metrics {
 
     /// Observes a priority queue size.
     pub(crate) fn observe_priority_queue_size(&mut self, len: usize) {
-        self.queue_size.observe(len as f64);
+        self.queue_size
+            .get_or_create(&PriorityLabel {
+                priority: "priority",
+            })
+            .observe(len as f64);
+    }
+
+    /// Observes a priority queue size.
+    pub(crate) fn observe_non_priority_queue_size(&mut self, len: usize) {
+        self.queue_size
+            .get_or_create(&PriorityLabel {
+                priority: "non_priority",
+            })
+            .observe(len as f64);
     }
 
     /// Observe a score of a mesh peer.
@@ -613,8 +629,8 @@ impl Metrics {
     /// Observe the failed priority messages.
     pub(crate) fn observe_failed_priority_messages(&mut self, messages: usize) {
         self.failed_messages
-            .get_or_create(&FailedMessageLabel {
-                message: "priority",
+            .get_or_create(&PriorityLabel {
+                priority: "priority",
             })
             .observe(messages as f64);
     }
@@ -622,8 +638,8 @@ impl Metrics {
     /// Observe the failed non priority messages.
     pub(crate) fn observe_failed_non_priority_messages(&mut self, messages: usize) {
         self.failed_messages
-            .get_or_create(&FailedMessageLabel {
-                message: "non_priority",
+            .get_or_create(&PriorityLabel {
+                priority: "non_priority",
             })
             .observe(messages as f64);
     }
@@ -696,10 +712,10 @@ struct PenaltyLabel {
     penalty: Penalty,
 }
 
-/// Label for the kinds of failed messages
+/// Label for the queue priority label.
 #[derive(PartialEq, Eq, Hash, EncodeLabelSet, Clone, Debug)]
-struct FailedMessageLabel {
-    message: &'static str,
+struct PriorityLabel {
+    priority: &'static str,
 }
 
 #[derive(Clone)]
