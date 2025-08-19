@@ -192,6 +192,10 @@ pub(crate) struct Metrics {
 
     /// Failed messages by message type.
     failed_messages: Family<PriorityLabel, Histogram>,
+
+    /// The number of messages we have removed from a queue that we would otherwise send. A rough
+    /// guide to measure of bandwidth saved.
+    removed_queued_messages: Counter,
 }
 
 impl Metrics {
@@ -361,6 +365,16 @@ impl Metrics {
             failed_messages.clone(),
         );
 
+        let removed_queued_messages = {
+            let metric = Counter::default();
+            registry.register(
+                "removed_queued_messages",
+                "Number of messages we have removed from all our queues due to IDONTWANTs",
+                metric.clone(),
+            );
+            metric
+        };
+
         Self {
             max_topics,
             max_never_subscribed_topics,
@@ -390,6 +404,7 @@ impl Metrics {
             idontwant_msgs_ids,
             queue_size,
             failed_messages,
+            removed_queued_messages,
         }
     }
 
@@ -642,6 +657,11 @@ impl Metrics {
                 priority: "non_priority",
             })
             .observe(messages as f64);
+    }
+
+    pub(crate) fn removed_messages_from_queue(&mut self, removed_messages: usize) {
+        self.removed_messages_from_queue
+            .inc_by(removed_messages as u64);
     }
 }
 

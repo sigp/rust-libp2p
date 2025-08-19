@@ -3315,13 +3315,14 @@ where
                                     "Could not handle IDONTWANT, peer doesn't exist in connected peer list");
                                 continue;
                             };
+                            // Remove messages from the queue.
+                            let _removed_count = peer.messages.remove_data_messages(&message_ids);
+
                             #[cfg(feature = "metrics")]
                             if let Some(metrics) = self.metrics.as_mut() {
                                 metrics.register_idontwant(message_ids.len());
+                                metrics.removed_messages_from_queue(_removed_count);
                             }
-
-                            // Remove messages from the queue.
-                            peer.messages.remove_data_messages(&message_ids);
 
                             for message_id in message_ids {
                                 peer.dont_send.insert(message_id, Instant::now());

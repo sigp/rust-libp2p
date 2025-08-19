@@ -77,14 +77,23 @@ impl Queue {
         }
     }
 
-    /// Remove pending low piority Publish and Forward messages.
-    pub(crate) fn remove_data_messages(&mut self, message_ids: &[MessageId]) {
+    /// Remove pending low priority Publish and Forward messages.
+    /// This returns the number of messages that were removed.
+    pub(crate) fn remove_data_messages(&mut self, message_ids: &[MessageId]) -> usize {
+        let mut count = 0;
         self.non_priority.retain(|message| match message {
             RpcOut::Publish { message_id, .. } | RpcOut::Forward { message_id, .. } => {
-                !message_ids.contains(message_id)
+                if message_ids.contains(message_id) {
+                    // A message is in the queue that we have received an IDONTWANT for
+                    count += 1;
+                    false
+                } else {
+                    true
+                }
             }
             _ => true,
-        })
+        });
+        count
     }
 
     /// Pop an element from the queue.
