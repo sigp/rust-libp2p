@@ -20,7 +20,6 @@
 
 //! A collection of types using the Gossipsub system.
 use std::{
-    cmp::Ordering,
     collections::BTreeSet,
     fmt::{self, Debug},
 };
@@ -352,66 +351,6 @@ impl RpcOut {
                 | RpcOut::Prune(_)
                 | RpcOut::IDontWant(_)
         )
-    }
-}
-
-impl Eq for RpcOut {}
-impl PartialEq for RpcOut {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                Self::Publish {
-                    message_id: l_message_id,
-                    ..
-                },
-                Self::Publish {
-                    message_id: r_message_id,
-                    ..
-                },
-            ) => l_message_id == r_message_id,
-            (
-                Self::Forward {
-                    message_id: l_message_id,
-                    ..
-                },
-                Self::Forward {
-                    message_id: r_message_id,
-                    ..
-                },
-            ) => l_message_id == r_message_id,
-            (Self::Subscribe(l0), Self::Subscribe(r0)) => l0 == r0,
-            (Self::Unsubscribe(l0), Self::Unsubscribe(r0)) => l0 == r0,
-            (Self::Graft(l0), Self::Graft(r0)) => l0 == r0,
-            (Self::Prune(l0), Self::Prune(r0)) => l0 == r0,
-            (Self::IHave(l0), Self::IHave(r0)) => l0 == r0,
-            (Self::IWant(l0), Self::IWant(r0)) => l0 == r0,
-            (Self::IDontWant(l0), Self::IDontWant(r0)) => l0 == r0,
-            _ => false,
-        }
-    }
-}
-
-impl Ord for RpcOut {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match (self.priority(), other.priority()) {
-            (true, true) | (false, false) => {
-                // Among non priority messages, `RpcOut::Publish` has the higher priority.
-                match (self, other) {
-                    (RpcOut::Publish { .. }, RpcOut::Publish { .. }) => Ordering::Equal,
-                    (RpcOut::Publish { .. }, _) => Ordering::Greater,
-                    (_, RpcOut::Publish { .. }) => Ordering::Less,
-                    _ => Ordering::Equal,
-                }
-            }
-            (true, false) => Ordering::Greater,
-            (false, true) => Ordering::Less,
-        }
-    }
-}
-
-impl PartialOrd for RpcOut {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
     }
 }
 

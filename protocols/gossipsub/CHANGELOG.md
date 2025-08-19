@@ -23,7 +23,6 @@
 
 - Fix mesh not being constructed even when not adding any peer.
   See [PR 6100](https://github.com/libp2p/rust-libp2p/pull/6100)
->>>>>>> 2a726cdbec1f055854755dc03a632d804e268543
 
 ## 0.49.0
 

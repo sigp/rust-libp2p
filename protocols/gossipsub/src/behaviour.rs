@@ -3122,11 +3122,11 @@ where
         // occur.
         let connected_peer = self.connected_peers.entry(peer_id).or_insert(PeerDetails {
             kind: PeerKind::Floodsub,
-            outbound: false,
             connections: vec![],
+            outbound: false,
+            messages: Queue::new(self.config.connection_handler_queue_len()),
             topics: Default::default(),
             dont_send: LinkedHashMap::new(),
-            messages: Queue::new(self.config.connection_handler_queue_len()),
         });
         // Add the new connection
         connected_peer.connections.push(connection_id);
@@ -3149,13 +3149,13 @@ where
     ) -> Result<THandler<Self>, ConnectionDenied> {
         let connected_peer = self.connected_peers.entry(peer_id).or_insert(PeerDetails {
             kind: PeerKind::Floodsub,
+            connections: vec![],
             // Diverging from the go implementation we only want to consider a peer as outbound peer
             // if its first connection is outbound.
             outbound: !self.px_peers.contains(&peer_id),
-            connections: vec![],
+            messages: Queue::new(self.config.connection_handler_queue_len()),
             topics: Default::default(),
             dont_send: LinkedHashMap::new(),
-            messages: Queue::new(self.config.connection_handler_queue_len()),
         });
         // Add the new connection
         connected_peer.connections.push(connection_id);
@@ -3206,7 +3206,7 @@ where
                     }
                 }
             }
-            // rpc is only used for metrics code
+            // rpc is only used for metrics code.
             #[allow(unused_variables)]
             HandlerEvent::MessageDropped(rpc) => {
                 // Account for this in the scoring logic
@@ -3315,13 +3315,16 @@ where
                                     "Could not handle IDONTWANT, peer doesn't exist in connected peer list");
                                 continue;
                             };
+
+                            // Remove messages from the queue.
+                            #[allow(unused)]
+                            let removed = peer.messages.remove_data_messages(&message_ids);
+
                             #[cfg(feature = "metrics")]
                             if let Some(metrics) = self.metrics.as_mut() {
                                 metrics.register_idontwant(message_ids.len());
+                                metrics.register_removed_messages(removed);
                             }
-
-                            // Remove messages from the queue.
-                            peer.messages.remove_data_messages(&message_ids);
 
                             for message_id in message_ids {
                                 peer.dont_send.insert(message_id, Instant::now());

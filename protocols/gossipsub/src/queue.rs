@@ -31,7 +31,7 @@ const CONTROL_MSGS_LIMIT: usize = 20_000;
 
 /// An async priority queue used to dispatch messages from the `NetworkBehaviour`
 /// Provides a clean abstraction over high-priority (unbounded), control (bounded),
-/// and low-priority (bounded) message queues.
+/// and non priority (bounded) message queues.
 #[derive(Debug)]
 pub(crate) struct Queue {
     /// High-priority unbounded queue (Subscribe, Unsubscribe)
@@ -47,7 +47,7 @@ pub(crate) struct Queue {
 }
 
 impl Queue {
-    /// Create a new `Queue` with the `capacity`.
+    /// Create a new `Queue` with `capacity`.
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
             priority: Shared::new(),
@@ -58,8 +58,9 @@ impl Queue {
         }
     }
 
-    /// Try to add an item to the Queue, return Err if the queue is full.
-    pub(crate) fn try_push(&mut self, message: RpcOut) -> Result<(), RpcOut> {
+    /// Try to push a message to the Queue, return Err if the queue is full,
+    /// which will only happen for control and non priority messages.
+    pub(crate) fn try_push(&mut self, message: RpcOut) -> Result<(), Box<RpcOut>> {
         match message {
             RpcOut::Subscribe(_) | RpcOut::Unsubscribe(_) => {
                 self.priority
@@ -77,14 +78,22 @@ impl Queue {
         }
     }
 
-    /// Remove pending low piority Publish and Forward messages.
-    pub(crate) fn remove_data_messages(&mut self, message_ids: &[MessageId]) {
+    /// Remove pending low priority Publish and Forward messages.
+    /// Returns the number of messages removed.
+    pub(crate) fn remove_data_messages(&mut self, message_ids: &[MessageId]) -> usize {
+        let mut count = 0;
         self.non_priority.retain(|message| match message {
             RpcOut::Publish { message_id, .. } | RpcOut::Forward { message_id, .. } => {
-                !message_ids.contains(message_id)
+                if message_ids.contains(message_id) {
+                    count += 1;
+                    false
+                } else {
+                    true
+                }
             }
             _ => true,
-        })
+        });
+        count
     }
 
     /// Pop an element from the queue.
@@ -99,7 +108,7 @@ impl Queue {
             return Poll::Ready(rpc);
         }
 
-        // Finaly we try the non priority messages
+        // Finally we try the non priority messages
         if let Poll::Ready(rpc) = Pin::new(&mut self.non_priority).poll_pop(cx) {
             return Poll::Ready(rpc);
         }
@@ -136,26 +145,17 @@ impl Queue {
         self.non_priority.len()
     }
 
-    /// Attempts to pop an item from the queue.
-    /// this method returns an error if the queue is empty.
+    /// Attempts to pop a message from the queue.
+    /// returns None if the queue is empty.
     #[cfg(test)]
-    pub(crate) fn try_pop(&mut self) -> Result<RpcOut, ()> {
+    pub(crate) fn try_pop(&mut self) -> Option<RpcOut> {
         // Try priority first
-        if let Ok(msg) = self.priority.try_pop() {
-            return Ok(msg);
-        }
-
-        // Then control messages
-        if let Ok(msg) = self.control.try_pop() {
-            return Ok(msg);
-        }
-
-        // Finally non priority
-        if let Ok(msg) = self.non_priority.try_pop() {
-            return Ok(msg);
-        }
-
-        Err(())
+        self.priority
+            .try_pop()
+            // Then control messages
+            .or_else(|| self.control.try_pop())
+            // Finally non priority
+            .or_else(|| self.non_priority.try_pop())
     }
 }
 
@@ -184,6 +184,8 @@ impl Clone for Queue {
     }
 }
 
+/// The internal shared part of the queue,
+/// that allows for shallow copies of the queue among each connection of the remote.
 #[derive(Debug)]
 pub(crate) struct Shared {
     inner: Arc<Mutex<SharedInner>>,
@@ -229,14 +231,13 @@ impl Shared {
         }
     }
 
-    #[allow(clippy::result_large_err)]
-    pub(crate) fn try_push(&mut self, message: RpcOut) -> Result<(), RpcOut> {
+    pub(crate) fn try_push(&mut self, message: RpcOut) -> Result<(), Box<RpcOut>> {
         let mut guard = self.inner.lock().expect("lock to not be poisoned");
         if self
             .capacity
             .is_some_and(|capacity| guard.queue.len() >= capacity)
         {
-            return Err(message);
+            return Err(Box::new(message));
         }
 
         guard.queue.push_back(message);
@@ -250,7 +251,7 @@ impl Shared {
 
     /// Retain only the elements specified by the predicate.
     /// In other words, remove all elements e for which f(&e) returns false. The elements are
-    /// visited in unsorted (and unspecified) order. Returns the cleared items.
+    /// visited in unsorted (and unspecified) order. Returns the cleared messages.
     pub(crate) fn retain<F: FnMut(&RpcOut) -> bool>(&mut self, f: F) {
         let mut shared = self.inner.lock().expect("lock to not be poisoned");
         shared.queue.retain(f);
@@ -269,12 +270,12 @@ impl Shared {
         guard.queue.len()
     }
 
-    /// Attempts to pop an item from the queue.
-    /// this method returns an error if the queue is empty.
+    /// Attempts to pop an message from the queue.
+    /// returns None if the queue is empty.
     #[cfg(test)]
-    pub(crate) fn try_pop(&mut self) -> Result<RpcOut, ()> {
+    pub(crate) fn try_pop(&mut self) -> Option<RpcOut> {
         let mut guard = self.inner.lock().expect("lock to not be poisoned");
-        guard.queue.pop_front().ok_or(())
+        guard.queue.pop_front()
     }
 }
 

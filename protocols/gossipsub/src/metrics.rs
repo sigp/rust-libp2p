@@ -188,10 +188,14 @@ pub(crate) struct Metrics {
     idontwant_msgs_ids: Counter,
 
     /// The size of the queue by priority.
-    queue_size: Family<PriorityLabel, Histogram>,
+    queue_size: Family<MessageTypeLabel, Histogram>,
 
     /// Failed messages by message type.
-    failed_messages: Family<PriorityLabel, Histogram>,
+    failed_messages: Family<MessageTypeLabel, Histogram>,
+
+    /// The number of messages we have removed from a queue that we would otherwise send. A rough
+    /// guide to measure of bandwidth saved.
+    removed_queued_messages: Counter,
 }
 
 impl Metrics {
@@ -341,7 +345,7 @@ impl Metrics {
             metric
         };
 
-        let queue_size = Family::<PriorityLabel, Histogram>::new_with_constructor(|| {
+        let queue_size = Family::<MessageTypeLabel, Histogram>::new_with_constructor(|| {
             Histogram::new(linear_buckets(0.0, 50.0, 100))
         });
         registry.register(
@@ -350,7 +354,7 @@ impl Metrics {
             queue_size.clone(),
         );
 
-        let failed_messages = Family::<PriorityLabel, Histogram>::new_with_constructor(|| {
+        let failed_messages = Family::<MessageTypeLabel, Histogram>::new_with_constructor(|| {
             Histogram::new([
                 0.0, 1.0, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 1000.0, 2000.0,
             ])
@@ -360,6 +364,16 @@ impl Metrics {
             "Histogram of observed failed messages by type",
             failed_messages.clone(),
         );
+
+        let removed_queued_messages = {
+            let metric = Counter::default();
+            registry.register(
+                "removed_queued_messages",
+                "Number of messages we have removed from all our queues due to IDONTWANTs",
+                metric.clone(),
+            );
+            metric
+        };
 
         Self {
             max_topics,
@@ -390,6 +404,7 @@ impl Metrics {
             idontwant_msgs_ids,
             queue_size,
             failed_messages,
+            removed_queued_messages,
         }
     }
 
@@ -579,17 +594,17 @@ impl Metrics {
     /// Observes a priority queue size.
     pub(crate) fn observe_priority_queue_size(&mut self, len: usize) {
         self.queue_size
-            .get_or_create(&PriorityLabel {
-                priority: "priority",
+            .get_or_create(&MessageTypeLabel {
+                message_type: MessageType::Priority,
             })
             .observe(len as f64);
     }
 
-    /// Observes a priority queue size.
+    /// Observes a non-priority queue size.
     pub(crate) fn observe_non_priority_queue_size(&mut self, len: usize) {
         self.queue_size
-            .get_or_create(&PriorityLabel {
-                priority: "non_priority",
+            .get_or_create(&MessageTypeLabel {
+                message_type: MessageType::NonPriority,
             })
             .observe(len as f64);
     }
@@ -629,8 +644,8 @@ impl Metrics {
     /// Observe the failed priority messages.
     pub(crate) fn observe_failed_priority_messages(&mut self, messages: usize) {
         self.failed_messages
-            .get_or_create(&PriorityLabel {
-                priority: "priority",
+            .get_or_create(&MessageTypeLabel {
+                message_type: MessageType::Priority,
             })
             .observe(messages as f64);
     }
@@ -638,10 +653,16 @@ impl Metrics {
     /// Observe the failed non priority messages.
     pub(crate) fn observe_failed_non_priority_messages(&mut self, messages: usize) {
         self.failed_messages
-            .get_or_create(&PriorityLabel {
-                priority: "non_priority",
+            .get_or_create(&MessageTypeLabel {
+                message_type: MessageType::NonPriority,
             })
             .observe(messages as f64);
+    }
+
+    /// Register the number of removed messages from the `Handler` queue
+    /// When receiving IDONTWANT messages
+    pub(crate) fn register_removed_messages(&mut self, removed_messages: usize) {
+        self.removed_queued_messages.inc_by(removed_messages as u64);
     }
 }
 
@@ -686,6 +707,15 @@ pub(crate) enum Penalty {
     IPColocation,
 }
 
+/// Kinds of messages in the send queue.
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug, EncodeLabelValue)]
+pub(crate) enum MessageType {
+    /// A priority message.
+    Priority,
+    /// Non Priority Message.
+    NonPriority,
+}
+
 /// Label for the mesh inclusion event metrics.
 #[derive(PartialEq, Eq, Hash, EncodeLabelSet, Clone, Debug)]
 struct InclusionLabel {
@@ -712,10 +742,10 @@ struct PenaltyLabel {
     penalty: Penalty,
 }
 
-/// Label for the queue priority label.
+/// Label for the queue message priority kind.
 #[derive(PartialEq, Eq, Hash, EncodeLabelSet, Clone, Debug)]
-struct PriorityLabel {
-    priority: &'static str,
+struct MessageTypeLabel {
+    message_type: MessageType,
 }
 
 #[derive(Clone)]
