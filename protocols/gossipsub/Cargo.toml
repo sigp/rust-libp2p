@@ -32,7 +32,7 @@ web-time = { workspace = true }
 # crates.io libp2p
 libp2p-core = "0.43"
 libp2p-identity = { version = "0.2", features = ["rand"] }
-libp2p-swarm = "0.46"
+libp2p-swarm = "0.47"
 quick-protobuf = "0.8"
 quick-protobuf-codec = "0.3.1"
 rand = "0.8"
@@ -41,12 +41,10 @@ serde = { version = "1", optional = true, features = ["derive"] }
 sha2 = "0.10.8"
 tracing = { workspace = true }
 
-# Metrics dependencies
-# TODO: update to 0.23 when libp2p-metrics 0.17 is released.
-prometheus-client = "0.22.2"
+prometheus-client = { version = "0.23", optional = true }
 
 [dev-dependencies]
-libp2p-swarm-test = "0.5.0"
+libp2p-swarm-test = { version = "0.6.0", features = ["tokio"] }
 quickcheck = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "macros"] }
