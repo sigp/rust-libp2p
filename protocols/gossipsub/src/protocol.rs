@@ -35,8 +35,9 @@ use crate::{
     rpc_proto::proto,
     topic::TopicHash,
     types::{
-        ControlAction, Extensions, Graft, IDontWant, IHave, IWant, MessageId, PeerInfo, PeerKind,
-        Prune, RawMessage, RpcIn, Subscription, SubscriptionAction, TestExtension,
+        ControlAction, Extensions, Graft, IDontWant, IHave, IWant, MessageId, PartialMessage,
+        PartialMessageKind, PeerInfo, PeerKind, Prune, RawMessage, RpcIn, Subscription,
+        SubscriptionAction, TestExtension,
     },
     ValidationError,
 };
@@ -575,6 +576,46 @@ impl Decoder for GossipsubCodec {
             control_msgs.push(ControlAction::Extensions(extensions_msg));
         }
 
+        let partial_message = rpc.partial.and_then(|partial_proto| {
+            // Extract topic and group context
+            let Some(topic_id_bytes) = partial_proto.topicID else {
+                tracing::debug!("Partial message without topic_id, discarding");
+                return None;
+            };
+            let topic_id = TopicHash::from_raw(String::from_utf8_lossy(&topic_id_bytes));
+
+            let Some(group_id) = partial_proto.groupID else {
+                tracing::debug!("Partial message without group_id, discarding");
+                return None;
+            };
+
+            let mut messages = vec![];
+
+            if let Some(proto::PartialIHAVE {
+                metadata: Some(metadata),
+            }) = partial_proto.ihave
+            {
+                messages.push(PartialMessageKind::IHave { metadata });
+            }
+
+            if let Some(proto::PartialIWANT {
+                metadata: Some(metadata),
+            }) = partial_proto.iwant
+            {
+                messages.push(PartialMessageKind::IWant { metadata });
+            }
+
+            if let Some(proto::PartialMessage { data: Some(data) }) = partial_proto.message {
+                messages.push(PartialMessageKind::Publish { data });
+            }
+
+            Some(PartialMessage {
+                topic_id,
+                group_id,
+                messages,
+            })
+        });
+
         Ok(Some(HandlerEvent::Message {
             rpc: RpcIn {
                 messages,
@@ -592,6 +633,7 @@ impl Decoder for GossipsubCodec {
                     .collect(),
                 control_msgs,
                 test_extension: rpc.testExtension.map(|_test_extension| TestExtension {}),
+                partial_message,
             },
             invalid_messages,
         }))

@@ -94,7 +94,8 @@ impl Sender {
             | RpcOut::IHave(_)
             | RpcOut::IWant(_)
             | RpcOut::IDontWant(_)
-            | RpcOut::TestExtension => &self.non_priority_sender,
+            | RpcOut::TestExtension
+            | RpcOut::PartialMessage { .. } => &self.non_priority_sender,
         };
         sender.try_send(rpc).map_err(|err| err.into_inner())
     }

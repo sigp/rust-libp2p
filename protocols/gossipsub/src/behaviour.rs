@@ -2918,7 +2918,10 @@ where
                         failed_messages.non_priority += 1;
                         failed_messages.forward += 1;
                     }
-                    RpcOut::IWant(_) | RpcOut::IHave(_) | RpcOut::IDontWant(_) => {
+                    RpcOut::IWant(_)
+                    | RpcOut::IHave(_)
+                    | RpcOut::IDontWant(_)
+                    | RpcOut::PartialMessage { .. } => {
                         failed_messages.non_priority += 1;
                     }
                     RpcOut::Graft(_)
@@ -3403,6 +3406,9 @@ where
                             if let Some(extensions) = extensions {
                                 self.handle_extensions(&propagation_source, extensions);
                             }
+                        }
+                        ControlAction::PartialMessages(_partial) => {
+                            todo!("Handle partial messages in behaviour")
                         }
                     }
                 }

@@ -277,6 +277,8 @@ pub enum ControlAction {
     IDontWant(IDontWant),
     /// The Node has sent us its supported extensions.
     Extensions(Option<Extensions>),
+    /// Partial messages extension.
+    PartialMessages(PartialMessage),
 }
 
 /// Node broadcasts known messages per topic - IHave control message.
@@ -320,6 +322,28 @@ pub struct IDontWant {
     pub(crate) message_ids: Vec<MessageId>,
 }
 
+/// The type of partial message being sent and received.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PartialMessageKind {
+    /// Partial IHAVE message.
+    IHave { metadata: Vec<u8> },
+    /// Partial IWANT message.
+    IWant { metadata: Vec<u8> },
+    /// Partial message data.
+    Publish { data: Vec<u8> },
+}
+
+/// A received partial message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PartialMessage {
+    /// The topic ID this partial message belongs to.
+    pub topic_id: TopicHash,
+    /// The group ID that identifies the complete logical message.
+    pub group_id: Vec<u8>,
+    /// The specific partial message type and data.
+    pub messages: Vec<PartialMessageKind>,
+}
+
 /// The node has sent us the supported Gossipsub Extensions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Extensions {
@@ -358,6 +382,12 @@ pub enum RpcOut {
     Extensions(Extensions),
     /// Send a test extension message.
     TestExtension,
+    /// Send a partial messages extension.
+    PartialMessage {
+        group_id: Vec<u8>,
+        topic_id: String,
+        message: PartialMessageKind,
+    },
 }
 
 impl RpcOut {
@@ -538,6 +568,64 @@ impl From<RpcOut> for proto::RPC {
                 testExtension: Some(proto::TestExtension {}),
                 partial: None,
             },
+            RpcOut::PartialMessage {
+                group_id,
+                topic_id,
+                message: PartialMessageKind::Publish { data },
+            } => proto::RPC {
+                subscriptions: vec![],
+                publish: vec![],
+                control: None,
+                testExtension: None,
+                partial: Some(proto::PartialMessagesExtension {
+                    topicID: Some(topic_id.as_str().as_bytes().to_vec()),
+                    groupID: Some(group_id),
+                    message: Some(proto::PartialMessage { data: Some(data) }),
+                    iwant: None,
+                    idontwant: None,
+                    ihave: None,
+                }),
+            },
+            RpcOut::PartialMessage {
+                group_id,
+                topic_id,
+                message: PartialMessageKind::IHave { metadata },
+            } => proto::RPC {
+                subscriptions: vec![],
+                publish: vec![],
+                control: None,
+                testExtension: None,
+                partial: Some(proto::PartialMessagesExtension {
+                    topicID: Some(topic_id.as_str().as_bytes().to_vec()),
+                    groupID: Some(group_id),
+                    message: None,
+                    iwant: None,
+                    idontwant: None,
+                    ihave: Some(proto::PartialIHAVE {
+                        metadata: Some(metadata),
+                    }),
+                }),
+            },
+            RpcOut::PartialMessage {
+                group_id,
+                topic_id,
+                message: PartialMessageKind::IWant { metadata },
+            } => proto::RPC {
+                subscriptions: vec![],
+                publish: vec![],
+                control: None,
+                testExtension: None,
+                partial: Some(proto::PartialMessagesExtension {
+                    topicID: Some(topic_id.as_str().as_bytes().to_vec()),
+                    groupID: Some(group_id),
+                    message: None,
+                    iwant: Some(proto::PartialIWANT {
+                        metadata: Some(metadata),
+                    }),
+                    idontwant: None,
+                    ihave: None,
+                }),
+            },
         }
     }
 }
@@ -553,6 +641,8 @@ pub struct RpcIn {
     pub control_msgs: Vec<ControlAction>,
     /// Gossipsub test extension.
     pub test_extension: Option<TestExtension>,
+    /// Partial messages extension.
+    pub partial_message: Option<PartialMessage>,
 }
 
 impl fmt::Debug for RpcIn {
@@ -567,6 +657,8 @@ impl fmt::Debug for RpcIn {
         if !self.control_msgs.is_empty() {
             b.field("control_msgs", &self.control_msgs);
         }
+        b.field("partial_messages", &self.partial_message);
+
         b.finish()
     }
 }
