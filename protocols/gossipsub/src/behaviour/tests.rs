@@ -250,6 +250,7 @@ where
             sender,
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         },
     );
 
@@ -421,6 +422,7 @@ fn proto_to_message(rpc: &proto::RPC) -> RpcIn {
             .collect(),
         control_msgs,
         test_extension: None,
+        partial_message: None,
     }
 }
 
@@ -648,6 +650,7 @@ fn test_join() {
                 sender,
                 dont_send: LinkedHashMap::new(),
                 extensions: None,
+                partial_messages: Default::default(),
             },
         );
         receivers.insert(random_peer, receiver);
@@ -1046,6 +1049,7 @@ fn test_get_random_peers() {
                 sender: Sender::new(gs.config.connection_handler_queue_len()),
                 dont_send: LinkedHashMap::new(),
                 extensions: None,
+                partial_messages: Default::default(),
             },
         );
     }
@@ -1255,6 +1259,7 @@ fn test_handle_iwant_msg_but_already_sent_idontwant() {
             message_ids: vec![msg_id.clone()],
         })],
         test_extension: None,
+        partial_message: None,
     };
     gs.on_connection_handler_event(
         peers[1],
@@ -3148,6 +3153,7 @@ fn test_ignore_rpc_from_peers_below_graylist_threshold() {
                 subscriptions: vec![subscription.clone()],
                 control_msgs: vec![control_action],
                 test_extension: None,
+                partial_message: None,
             },
             invalid_messages: Vec::new(),
         },
@@ -3175,6 +3181,7 @@ fn test_ignore_rpc_from_peers_below_graylist_threshold() {
                 subscriptions: vec![subscription],
                 control_msgs: vec![control_action],
                 test_extension: None,
+                partial_message: None,
             },
             invalid_messages: Vec::new(),
         },
@@ -3786,6 +3793,7 @@ fn test_scoring_p4_invalid_signature() {
                 subscriptions: vec![],
                 control_msgs: vec![],
                 test_extension: None,
+                partial_message: None,
             },
             invalid_messages: vec![(m, ValidationError::InvalidSignature)],
         },
@@ -5546,6 +5554,7 @@ fn parses_idontwant() {
             message_ids: vec![message_id.clone()],
         })],
         test_extension: None,
+        partial_message: None,
     };
     gs.on_connection_handler_event(
         peers[1],
@@ -5606,6 +5615,7 @@ fn test_all_queues_full() {
             sender: Sender::new(2),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         },
     );
 
@@ -5643,6 +5653,7 @@ fn test_slow_peer_returns_failed_publish() {
             sender: Sender::new(2),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         },
     );
     let peer_id = PeerId::random();
@@ -5657,6 +5668,7 @@ fn test_slow_peer_returns_failed_publish() {
             sender: Sender::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         },
     );
 
@@ -5719,6 +5731,7 @@ fn test_slow_peer_returns_failed_ihave_handling() {
             sender: Sender::new(2),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         },
     );
     peers.push(slow_peer_id);
@@ -5737,6 +5750,7 @@ fn test_slow_peer_returns_failed_ihave_handling() {
             sender: Sender::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         },
     );
 
@@ -5835,6 +5849,7 @@ fn test_slow_peer_returns_failed_iwant_handling() {
             sender: Sender::new(2),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         },
     );
     peers.push(slow_peer_id);
@@ -5853,6 +5868,7 @@ fn test_slow_peer_returns_failed_iwant_handling() {
             sender: Sender::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         },
     );
 
@@ -5931,6 +5947,7 @@ fn test_slow_peer_returns_failed_forward() {
             sender: Sender::new(2),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         },
     );
     peers.push(slow_peer_id);
@@ -5949,6 +5966,7 @@ fn test_slow_peer_returns_failed_forward() {
             sender: Sender::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         },
     );
 
@@ -6032,6 +6050,7 @@ fn test_slow_peer_is_downscored_on_publish() {
             sender: Sender::new(2),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         },
     );
     gs.as_peer_score_mut().add_peer(slow_peer_id);
@@ -6047,6 +6066,7 @@ fn test_slow_peer_is_downscored_on_publish() {
             sender: Sender::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         },
     );
 
@@ -6645,6 +6665,7 @@ fn test_validation_error_message_size_too_large_topic_specific() {
                 subscriptions: vec![],
                 control_msgs: vec![],
                 test_extension: None,
+                partial_message: None,
             },
             invalid_messages: vec![],
         },
@@ -6690,6 +6711,7 @@ fn test_validation_error_message_size_too_large_topic_specific() {
         subscriptions: vec![],
         control: None,
         testExtension: None,
+        partial: None,
     };
     codec.encode(rpc, &mut buf).unwrap();
 
@@ -6751,6 +6773,7 @@ fn test_validation_message_size_within_topic_specific() {
                 subscriptions: vec![],
                 control_msgs: vec![],
                 test_extension: None,
+                partial_message: None,
             },
             invalid_messages: vec![],
         },
@@ -6796,6 +6819,7 @@ fn test_validation_message_size_within_topic_specific() {
         subscriptions: vec![],
         control: None,
         testExtension: None,
+        partial: None,
     };
     codec.encode(rpc, &mut buf).unwrap();
 
@@ -6817,6 +6841,7 @@ fn test_validation_message_size_within_topic_specific() {
 fn test_extensions_message_creation() {
     let extensions_rpc = RpcOut::Extensions(Extensions {
         test_extension: Some(true),
+        partial_messages: None,
     });
     let proto_rpc: proto::RPC = extensions_rpc.into();
 
@@ -6857,12 +6882,14 @@ fn test_handle_extensions_message() {
             sender,
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         },
     );
 
     // Simulate receiving extensions message
     let extensions = Extensions {
         test_extension: Some(false),
+        partial_messages: None,
     };
     gs.handle_extensions(&peer_id, extensions);
 
@@ -6876,8 +6903,10 @@ fn test_handle_extensions_message() {
         subscriptions: vec![],
         control_msgs: vec![ControlAction::Extensions(Some(Extensions {
             test_extension: Some(true),
+            partial_messages: None,
         }))],
         test_extension: None,
+        partial_message: None,
     };
 
     gs.on_connection_handler_event(

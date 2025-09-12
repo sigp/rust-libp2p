@@ -19,7 +19,10 @@
 // DEALINGS IN THE SOFTWARE.
 
 //! A collection of types using the Gossipsub system.
-use std::{collections::BTreeSet, fmt, fmt::Debug};
+use std::{
+    collections::{BTreeSet, HashMap},
+    fmt::{self, Debug},
+};
 
 use futures_timer::Delay;
 use hashlink::LinkedHashMap;
@@ -102,7 +105,7 @@ impl std::fmt::Debug for MessageId {
 
 #[derive(Debug)]
 /// Connected peer details.
-pub(crate) struct PeerDetails {
+pub(crate) struct PeerDetails<P> {
     /// The kind of protocol the peer supports.
     pub(crate) kind: PeerKind,
     /// The Extensions supported by the peer if any.
@@ -117,6 +120,8 @@ pub(crate) struct PeerDetails {
     pub(crate) sender: Sender,
     /// Don't send messages.
     pub(crate) dont_send: LinkedHashMap<MessageId, Instant>,
+    /// Peer Partial messages.
+    pub(crate) partial_messages: HashMap<(TopicHash, Vec<u8>), P>,
 }
 
 /// Describes the types of peers that can exist in the gossipsub context.
@@ -277,8 +282,6 @@ pub enum ControlAction {
     IDontWant(IDontWant),
     /// The Node has sent us its supported extensions.
     Extensions(Option<Extensions>),
-    /// Partial messages extension.
-    PartialMessages(PartialMessage),
 }
 
 /// Node broadcasts known messages per topic - IHave control message.
@@ -322,17 +325,6 @@ pub struct IDontWant {
     pub(crate) message_ids: Vec<MessageId>,
 }
 
-/// The type of partial message being sent and received.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum PartialMessageKind {
-    /// Partial IHAVE message.
-    IHave { metadata: Vec<u8> },
-    /// Partial IWANT message.
-    IWant { metadata: Vec<u8> },
-    /// Partial message data.
-    Publish { data: Vec<u8> },
-}
-
 /// A received partial message.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PartialMessage {
@@ -340,8 +332,12 @@ pub struct PartialMessage {
     pub topic_id: TopicHash,
     /// The group ID that identifies the complete logical message.
     pub group_id: Vec<u8>,
-    /// The specific partial message type and data.
-    pub messages: Vec<PartialMessageKind>,
+    /// The partial parts we want.
+    pub iwant: Option<Vec<u8>>,
+    /// The partial parts we have.
+    pub ihave: Option<Vec<u8>>,
+    /// The partial message itself
+    pub message: Option<Vec<u8>>,
 }
 
 /// The node has sent us the supported Gossipsub Extensions.
@@ -383,11 +379,7 @@ pub enum RpcOut {
     /// Send a test extension message.
     TestExtension,
     /// Send a partial messages extension.
-    PartialMessage {
-        group_id: Vec<u8>,
-        topic_id: String,
-        message: PartialMessageKind,
-    },
+    PartialMessage(PartialMessage),
 }
 
 impl RpcOut {
@@ -568,11 +560,13 @@ impl From<RpcOut> for proto::RPC {
                 testExtension: Some(proto::TestExtension {}),
                 partial: None,
             },
-            RpcOut::PartialMessage {
-                group_id,
+            RpcOut::PartialMessage(PartialMessage {
                 topic_id,
-                message: PartialMessageKind::Publish { data },
-            } => proto::RPC {
+                group_id,
+                iwant,
+                ihave,
+                message,
+            }) => proto::RPC {
                 subscriptions: vec![],
                 publish: vec![],
                 control: None,
@@ -580,50 +574,14 @@ impl From<RpcOut> for proto::RPC {
                 partial: Some(proto::PartialMessagesExtension {
                     topicID: Some(topic_id.as_str().as_bytes().to_vec()),
                     groupID: Some(group_id),
-                    message: Some(proto::PartialMessage { data: Some(data) }),
-                    iwant: None,
-                    idontwant: None,
-                    ihave: None,
-                }),
-            },
-            RpcOut::PartialMessage {
-                group_id,
-                topic_id,
-                message: PartialMessageKind::IHave { metadata },
-            } => proto::RPC {
-                subscriptions: vec![],
-                publish: vec![],
-                control: None,
-                testExtension: None,
-                partial: Some(proto::PartialMessagesExtension {
-                    topicID: Some(topic_id.as_str().as_bytes().to_vec()),
-                    groupID: Some(group_id),
-                    message: None,
-                    iwant: None,
-                    idontwant: None,
-                    ihave: Some(proto::PartialIHAVE {
+                    message: message.map(|data| proto::PartialMessage { data: Some(data) }),
+                    iwant: iwant.map(|metadata| proto::PartialIWANT {
                         metadata: Some(metadata),
                     }),
-                }),
-            },
-            RpcOut::PartialMessage {
-                group_id,
-                topic_id,
-                message: PartialMessageKind::IWant { metadata },
-            } => proto::RPC {
-                subscriptions: vec![],
-                publish: vec![],
-                control: None,
-                testExtension: None,
-                partial: Some(proto::PartialMessagesExtension {
-                    topicID: Some(topic_id.as_str().as_bytes().to_vec()),
-                    groupID: Some(group_id),
-                    message: None,
-                    iwant: Some(proto::PartialIWANT {
+                    ihave: ihave.map(|metadata| proto::PartialIHAVE {
                         metadata: Some(metadata),
                     }),
                     idontwant: None,
-                    ihave: None,
                 }),
             },
         }

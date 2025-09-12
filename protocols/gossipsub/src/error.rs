@@ -40,6 +40,9 @@ pub enum PublishError {
     /// Messages could not be sent because the queues for all peers were full. The usize represents
     /// the number of peers that were attempted.
     AllQueuesFull(usize),
+
+    /// An Error while trying to publish a partial message.
+    Partial(PartialMessageError),
 }
 
 impl std::fmt::Display for PublishError {

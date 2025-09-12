@@ -36,8 +36,8 @@ use crate::{
     topic::TopicHash,
     types::{
         ControlAction, Extensions, Graft, IDontWant, IHave, IWant, MessageId, PartialMessage,
-        PartialMessageKind, PeerInfo, PeerKind, Prune, RawMessage, RpcIn, Subscription,
-        SubscriptionAction, TestExtension,
+        PeerInfo, PeerKind, Prune, RawMessage, RpcIn, Subscription, SubscriptionAction,
+        TestExtension,
     },
     ValidationError,
 };
@@ -589,30 +589,12 @@ impl Decoder for GossipsubCodec {
                 return None;
             };
 
-            let mut messages = vec![];
-
-            if let Some(proto::PartialIHAVE {
-                metadata: Some(metadata),
-            }) = partial_proto.ihave
-            {
-                messages.push(PartialMessageKind::IHave { metadata });
-            }
-
-            if let Some(proto::PartialIWANT {
-                metadata: Some(metadata),
-            }) = partial_proto.iwant
-            {
-                messages.push(PartialMessageKind::IWant { metadata });
-            }
-
-            if let Some(proto::PartialMessage { data: Some(data) }) = partial_proto.message {
-                messages.push(PartialMessageKind::Publish { data });
-            }
-
             Some(PartialMessage {
                 topic_id,
                 group_id,
-                messages,
+                iwant: partial_proto.iwant.and_then(|iwant| iwant.metadata),
+                ihave: partial_proto.ihave.and_then(|ihave| ihave.metadata),
+                message: partial_proto.message.and_then(|message| message.data),
             })
         });
 

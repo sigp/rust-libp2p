@@ -56,6 +56,7 @@ use crate::metrics::{Churn, Config as MetricsConfig, Inclusion, Metrics, Penalty
 use crate::{
     backoff::BackoffStorage,
     config::{Config, ValidationMode},
+    error::PartialMessageError,
     gossip_promises::GossipPromises,
     handler::{Handler, HandlerEvent, HandlerIn},
     mcache::MessageCache,
@@ -69,10 +70,10 @@ use crate::{
     transform::{DataTransform, IdentityTransform},
     types::{
         ControlAction, Extensions, Graft, IDontWant, IHave, IWant, Message, MessageAcceptance,
-        MessageId, PeerDetails, PeerInfo, PeerKind, Prune, RawMessage, RpcOut, Subscription,
-        SubscriptionAction,
+        MessageId, PartialMessage, PeerDetails, PeerInfo, PeerKind, Prune, RawMessage, RpcOut,
+        Subscription, SubscriptionAction,
     },
-    FailedMessages, PublishError, SubscriptionError, TopicScoreParams, ValidationError,
+    FailedMessages, Partial, PublishError, SubscriptionError, TopicScoreParams, ValidationError,
 };
 
 #[cfg(test)]
@@ -140,6 +141,15 @@ pub enum Event {
         message_id: MessageId,
         /// The decompressed message itself.
         message: Message,
+    },
+    /// A Partial message has been completed.
+    Partial {
+        /// The peer that forwarded us this message.
+        propagation_source: PeerId,
+        /// The group ID that identifies the complete logical message.
+        group_id: Vec<u8>,
+        /// The specific partial message data.
+        data: Vec<u8>,
     },
     /// A remote subscribed to a topic.
     Subscribed {
@@ -258,7 +268,7 @@ impl From<MessageAuthenticity> for PublishConfig {
 ///
 /// The TopicSubscriptionFilter allows applications to implement specific filters on topics to
 /// prevent unwanted messages being propagated and evaluated.
-pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
+pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter, P = ()> {
     /// Configuration providing gossipsub performance parameters.
     config: Config,
 
@@ -274,7 +284,7 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
 
     /// A set of connected peers, indexed by their [`PeerId`] tracking both the [`PeerKind`] and
     /// the set of [`ConnectionId`]s.
-    connected_peers: HashMap<PeerId, PeerDetails>,
+    connected_peers: HashMap<PeerId, PeerDetails<P>>,
 
     /// A set of all explicit peers. These are peers that remain connected and we unconditionally
     /// forward messages to, outside of the scoring system.
@@ -330,6 +340,9 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     /// user to implement arbitrary topic-based compression algorithms.
     data_transform: D,
 
+    /// Partial messages received.
+    partial_messages: HashMap<TopicHash, HashMap<Vec<u8>, P>>,
+
     /// Keep track of a set of internal metrics relating to gossipsub.
     #[cfg(feature = "metrics")]
     metrics: Option<Metrics>,
@@ -341,10 +354,11 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     gossip_promises: GossipPromises,
 }
 
-impl<D, F> Behaviour<D, F>
+impl<D, F, P> Behaviour<D, F, P>
 where
     D: DataTransform + Default,
     F: TopicSubscriptionFilter + Default,
+    P: Partial + Default,
 {
     /// Creates a Gossipsub [`Behaviour`] struct given a set of parameters specified via a
     /// [`Config`]. This has no subscription filter and uses no compression.
@@ -358,10 +372,11 @@ where
     }
 }
 
-impl<D, F> Behaviour<D, F>
+impl<D, F, P> Behaviour<D, F, P>
 where
     D: DataTransform + Default,
     F: TopicSubscriptionFilter,
+    P: Partial + Default,
 {
     /// Creates a Gossipsub [`Behaviour`] struct given a set of parameters specified via a
     /// [`Config`] and a custom subscription filter.
@@ -379,10 +394,11 @@ where
     }
 }
 
-impl<D, F> Behaviour<D, F>
+impl<D, F, P> Behaviour<D, F, P>
 where
     D: DataTransform,
     F: TopicSubscriptionFilter + Default,
+    P: Partial + Default,
 {
     /// Creates a Gossipsub [`Behaviour`] struct given a set of parameters specified via a
     /// [`Config`] and a custom data transform.
@@ -401,10 +417,11 @@ where
     }
 }
 
-impl<D, F> Behaviour<D, F>
+impl<D, F, P> Behaviour<D, F, P>
 where
     D: DataTransform,
     F: TopicSubscriptionFilter,
+    P: Partial + Default,
 {
     /// Creates a Gossipsub [`Behaviour`] struct given a set of parameters specified via a
     /// [`Config`] and a custom subscription filter and data transform.
@@ -448,6 +465,7 @@ where
             config,
             subscription_filter,
             data_transform,
+            partial_messages: Default::default(),
             failed_messages: Default::default(),
             gossip_promises: Default::default(),
         })
@@ -466,10 +484,11 @@ where
     }
 }
 
-impl<D, F> Behaviour<D, F>
+impl<D, F, P> Behaviour<D, F, P>
 where
     D: DataTransform + Send + 'static,
     F: TopicSubscriptionFilter + Send + 'static,
+    P: Partial + Send + 'static + Default,
 {
     /// Lists the hashes of the topics we are currently subscribed to.
     pub fn topics(&self) -> impl Iterator<Item = &TopicHash> {
@@ -565,66 +584,16 @@ where
         true
     }
 
-    /// Publishes a message with multiple topics to the network.
-    pub fn publish(
-        &mut self,
-        topic: impl Into<TopicHash>,
-        data: impl Into<Vec<u8>>,
-    ) -> Result<MessageId, PublishError> {
-        let data = data.into();
-        let topic = topic.into();
+    // Get Peers from the mesh or fanout to publish a message to.
+    fn get_publish_peers(&mut self, topic_hash: &TopicHash) -> HashSet<PeerId> {
+        let mesh_n = self.config.mesh_n_for_topic(topic_hash);
 
-        // Transform the data before building a raw_message.
-        let transformed_data = self
-            .data_transform
-            .outbound_transform(&topic.clone(), data.clone())?;
-
-        let max_transmit_size_for_topic = self
-            .config
-            .protocol_config()
-            .max_transmit_size_for_topic(&topic);
-
-        // check that the size doesn't exceed the max transmission size.
-        if transformed_data.len() > max_transmit_size_for_topic {
-            return Err(PublishError::MessageTooLarge);
-        }
-
-        let mesh_n = self.config.mesh_n_for_topic(&topic);
-        let raw_message = self.build_raw_message(topic, transformed_data)?;
-
-        // calculate the message id from the un-transformed data
-        let msg_id = self.config.message_id(&Message {
-            source: raw_message.source,
-            data, // the uncompressed form
-            sequence_number: raw_message.sequence_number,
-            topic: raw_message.topic.clone(),
-        });
-
-        // Check the if the message has been published before
-        if self.duplicate_cache.contains(&msg_id) {
-            // This message has already been seen. We don't re-publish messages that have already
-            // been published on the network.
-            tracing::warn!(
-                message_id=%msg_id,
-                "Not publishing a message that has already been published"
-            );
-            return Err(PublishError::Duplicate);
-        }
-
-        tracing::trace!(message_id=%msg_id, "Publishing message");
-
-        let topic_hash = raw_message.topic.clone();
-
-        let mut peers_on_topic = self
+        let peers_on_topic = self
             .connected_peers
             .iter()
-            .filter(|(_, p)| p.topics.contains(&topic_hash))
+            .filter(|(_, p)| p.topics.contains(topic_hash))
             .map(|(peer_id, _)| peer_id)
             .peekable();
-
-        if peers_on_topic.peek().is_none() {
-            return Err(PublishError::NoPeersSubscribedToTopic);
-        }
 
         let mut recipient_peers = HashSet::new();
         if self.config.flood_publish() {
@@ -637,7 +606,7 @@ where
                         .0
             }));
         } else {
-            match self.mesh.get(&topic_hash) {
+            match self.mesh.get(topic_hash) {
                 // Mesh peers
                 Some(mesh_peers) => {
                     // We have a mesh set. We want to make sure to publish to at least `mesh_n`
@@ -651,7 +620,7 @@ where
                         // Get a random set of peers that are appropriate to send messages too.
                         let peer_list = get_random_peers(
                             &self.connected_peers,
-                            &topic_hash,
+                            topic_hash,
                             needed_extra_peers,
                             |peer| {
                                 !mesh_peers.contains(peer)
@@ -673,7 +642,7 @@ where
                     // `fanout_peers` is always non-empty if it's `Some`.
                     let fanout_peers = self
                         .fanout
-                        .get(&topic_hash)
+                        .get(topic_hash)
                         .filter(|peers| !peers.is_empty());
                     // If we have fanout peers add them to the map.
                     if let Some(peers) = fanout_peers {
@@ -683,7 +652,7 @@ where
                     } else {
                         // We have no fanout peers, select mesh_n of them and add them to the fanout
                         let new_peers =
-                            get_random_peers(&self.connected_peers, &topic_hash, mesh_n, {
+                            get_random_peers(&self.connected_peers, topic_hash, mesh_n, {
                                 |p| {
                                     !self.explicit_peers.contains(p)
                                         && !self
@@ -712,7 +681,7 @@ where
             // Floodsub peers
             for (peer, connections) in &self.connected_peers {
                 if connections.kind == PeerKind::Floodsub
-                    && connections.topics.contains(&topic_hash)
+                    && connections.topics.contains(topic_hash)
                     && !self
                         .peer_score
                         .below_threshold(peer, |ts| ts.publish_threshold)
@@ -722,6 +691,60 @@ where
                 }
             }
         }
+
+        recipient_peers
+    }
+
+    /// Publishes a message with multiple topics to the network.
+    pub fn publish(
+        &mut self,
+        topic: impl Into<TopicHash>,
+        data: impl Into<Vec<u8>>,
+    ) -> Result<MessageId, PublishError> {
+        let data = data.into();
+        let topic = topic.into();
+
+        // Transform the data before building a raw_message.
+        let transformed_data = self
+            .data_transform
+            .outbound_transform(&topic.clone(), data.clone())?;
+
+        let max_transmit_size_for_topic = self
+            .config
+            .protocol_config()
+            .max_transmit_size_for_topic(&topic);
+
+        // check that the size doesn't exceed the max transmission size.
+        if transformed_data.len() > max_transmit_size_for_topic {
+            return Err(PublishError::MessageTooLarge);
+        }
+
+        let raw_message = self.build_raw_message(topic, transformed_data)?;
+
+        // calculate the message id from the un-transformed data
+        let msg_id = self.config.message_id(&Message {
+            source: raw_message.source,
+            data, // the uncompressed form
+            sequence_number: raw_message.sequence_number,
+            topic: raw_message.topic.clone(),
+        });
+
+        // Check the if the message has been published before
+        if self.duplicate_cache.contains(&msg_id) {
+            // This message has already been seen. We don't re-publish messages that have already
+            // been published on the network.
+            tracing::warn!(
+                message_id=%msg_id,
+                "Not publishing a message that has already been published"
+            );
+            return Err(PublishError::Duplicate);
+        }
+
+        tracing::trace!(message_id=%msg_id, "Publishing message");
+
+        let topic_hash = raw_message.topic.clone();
+
+        let recipient_peers = self.get_publish_peers(&topic_hash);
 
         // If the message isn't a duplicate and we have sent it to some peers add it to the
         // duplicate cache and memcache.
@@ -775,6 +798,58 @@ where
         }
 
         Ok(msg_id)
+    }
+
+    pub fn publish_partial(
+        &mut self,
+        topic: impl Into<TopicHash>,
+        mut partial_message: P,
+    ) -> Result<(), PublishError> {
+        let topic_id = topic.into();
+        if let Some(existing) = self
+            .partial_messages
+            .get_mut(&topic_id)
+            .and_then(|p| p.remove(partial_message.group_id()))
+        {
+            // Return err if trying to publish the same partial message state we currently have.
+            if existing.available_parts() == partial_message.available_parts() {
+                return Err(PublishError::Duplicate);
+            }
+            partial_message
+                .extend_from_encoded_partial_message(existing.into_data())
+                .map_err(PublishError::Partial)?;
+        }
+
+        let available_parts = partial_message.available_parts().map(|p| p.to_vec());
+        let missing_parts = partial_message.missing_parts().map(|p| p.to_vec());
+        let group_id = partial_message.group_id().to_vec();
+        let message_data = partial_message.as_data().to_vec();
+
+        // TODO: should we construct a recipient list just for partials?
+        let recipient_peers = self.get_publish_peers(&topic_id);
+        let rpc = PartialMessage {
+            topic_id,
+            group_id,
+            iwant: missing_parts,
+            ihave: available_parts,
+            message: Some(message_data),
+        };
+        let mut publish_failed = true;
+        for peer_id in recipient_peers.iter() {
+            if self.send_message(*peer_id, RpcOut::PartialMessage(rpc.clone())) {
+                publish_failed = false;
+            }
+        }
+
+        if recipient_peers.is_empty() {
+            return Err(PublishError::NoPeersSubscribedToTopic);
+        }
+
+        if publish_failed {
+            return Err(PublishError::AllQueuesFull(recipient_peers.len()));
+        }
+
+        Ok(())
     }
 
     /// This function should be called when [`Config::validate_messages()`] is `true` after
@@ -1545,6 +1620,29 @@ where
         {
             self.send_message(*peer_id, RpcOut::TestExtension);
         }
+    }
+
+    /// Handle incoming partial message from a peer
+    fn handle_partial_message(
+        &mut self,
+        peer_id: &PeerId,
+        partial_message: crate::types::PartialMessage,
+    ) {
+        tracing::debug!(
+            peer=%peer_id,
+            topic=%partial_message.topic_id,
+            group_id=?partial_message.group_id,
+            "Received partial message"
+        );
+
+        // Check if peer exists
+        let Some(_peer) = self.connected_peers.get(peer_id) else {
+            tracing::error!(
+                peer=%peer_id,
+                "Partial message from unknown peer"
+            );
+            return;
+        };
     }
 
     /// Removes the specified peer from the mesh, returning true if it was present.
@@ -3136,10 +3234,11 @@ fn get_ip_addr(addr: &Multiaddr) -> Option<IpAddr> {
     })
 }
 
-impl<C, F> NetworkBehaviour for Behaviour<C, F>
+impl<C, F, P> NetworkBehaviour for Behaviour<C, F, P>
 where
     C: Send + 'static + DataTransform,
     F: Send + 'static + TopicSubscriptionFilter,
+    P: Send + 'static + Partial + Default,
 {
     type ConnectionHandler = Handler;
     type ToSwarm = Event;
@@ -3164,6 +3263,7 @@ where
             topics: Default::default(),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         });
         // Add the new connection
         connected_peer.connections.push(connection_id);
@@ -3175,7 +3275,11 @@ where
                 peer_id,
                 RpcOut::Extensions(Extensions {
                     test_extension: Some(true),
-                    partial_messages: Some(true),
+                    partial_messages: if self.config.partial_messages_extension() {
+                        Some(true)
+                    } else {
+                        None
+                    },
                 }),
             );
         }
@@ -3201,6 +3305,7 @@ where
             topics: Default::default(),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            partial_messages: Default::default(),
         });
         // Add the new connection
         connected_peer.connections.push(connection_id);
@@ -3212,7 +3317,11 @@ where
                 peer_id,
                 RpcOut::Extensions(Extensions {
                     test_extension: Some(true),
-                    partial_messages: Some(true),
+                    partial_messages: if self.config.partial_messages_extension() {
+                        Some(true)
+                    } else {
+                        None
+                    },
                 }),
             );
         }
@@ -3407,9 +3516,6 @@ where
                                 self.handle_extensions(&propagation_source, extensions);
                             }
                         }
-                        ControlAction::PartialMessages(_partial) => {
-                            todo!("Handle partial messages in behaviour")
-                        }
                     }
                 }
                 if !ihave_msgs.is_empty() {
@@ -3424,6 +3530,17 @@ where
 
                 if let Some(_extension) = rpc.test_extension {
                     tracing::debug!("Received Test Extension");
+                }
+
+                if let Some(partial_message) = rpc.partial_message {
+                    if self.config.partial_messages_extension() {
+                        self.handle_partial_message(&propagation_source, partial_message);
+                    } else {
+                        tracing::debug!(
+                            peer=%propagation_source,
+                            "Ignoring partial message - extension disabled"
+                        );
+                    }
                 }
             }
         }
@@ -3473,12 +3590,12 @@ where
 /// This is called when peers are added to any mesh. It checks if the peer existed
 /// in any other mesh. If this is the first mesh they have joined, it queues a message to notify
 /// the appropriate connection handler to maintain a connection.
-fn peer_added_to_mesh(
+fn peer_added_to_mesh<P: Partial>(
     peer_id: PeerId,
     new_topics: Vec<&TopicHash>,
     mesh: &HashMap<TopicHash, BTreeSet<PeerId>>,
     events: &mut VecDeque<ToSwarm<Event, HandlerIn>>,
-    connections: &HashMap<PeerId, PeerDetails>,
+    connections: &HashMap<PeerId, PeerDetails<P>>,
 ) {
     // Ensure there is an active connection
     let connection_id = match connections.get(&peer_id) {
@@ -3515,12 +3632,12 @@ fn peer_added_to_mesh(
 /// This is called when peers are removed from a mesh. It checks if the peer exists
 /// in any other mesh. If this is the last mesh they have joined, we return true, in order to
 /// notify the handler to no longer maintain a connection.
-fn peer_removed_from_mesh(
+fn peer_removed_from_mesh<P: Partial>(
     peer_id: PeerId,
     old_topic: &TopicHash,
     mesh: &HashMap<TopicHash, BTreeSet<PeerId>>,
     events: &mut VecDeque<ToSwarm<Event, HandlerIn>>,
-    connections: &HashMap<PeerId, PeerDetails>,
+    connections: &HashMap<PeerId, PeerDetails<P>>,
 ) {
     // Ensure there is an active connection
     let connection_id = match connections.get(&peer_id) {
@@ -3557,8 +3674,8 @@ fn peer_removed_from_mesh(
 /// Helper function to get a subset of random gossipsub peers for a `topic_hash`
 /// filtered by the function `f`. The number of peers to get equals the output of `n_map`
 /// that gets as input the number of filtered peers.
-fn get_random_peers_dynamic(
-    connected_peers: &HashMap<PeerId, PeerDetails>,
+fn get_random_peers_dynamic<P: Partial>(
+    connected_peers: &HashMap<PeerId, PeerDetails<P>>,
     topic_hash: &TopicHash,
     // maps the number of total peers to the number of selected peers
     n_map: impl Fn(usize) -> usize,
@@ -3590,8 +3707,8 @@ fn get_random_peers_dynamic(
 
 /// Helper function to get a set of `n` random gossipsub peers for a `topic_hash`
 /// filtered by the function `f`.
-fn get_random_peers(
-    connected_peers: &HashMap<PeerId, PeerDetails>,
+fn get_random_peers<P: Partial>(
+    connected_peers: &HashMap<PeerId, PeerDetails<P>>,
     topic_hash: &TopicHash,
     n: usize,
     f: impl FnMut(&PeerId) -> bool,

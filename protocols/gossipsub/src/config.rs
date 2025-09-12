@@ -119,6 +119,7 @@ pub struct Config {
     unsubscribe_backoff: Duration,
     backoff_slack: u32,
     flood_publish: bool,
+    partial_messages_extension: bool,
     graft_flood_threshold: Duration,
     opportunistic_graft_ticks: u64,
     opportunistic_graft_peers: usize,
@@ -363,6 +364,13 @@ impl Config {
         self.flood_publish
     }
 
+    /// Whether to enable the partial messages extension.
+    /// When enabled, gossipsub can handle partial message reconstruction for large messages.
+    /// The default is false.
+    pub fn partial_messages_extension(&self) -> bool {
+        self.partial_messages_extension
+    }
+
     /// If a GRAFT comes before `graft_flood_threshold` has elapsed since the last PRUNE,
     /// then there is an extra score penalty applied to the peer through P7.
     pub fn graft_flood_threshold(&self) -> Duration {
@@ -532,6 +540,7 @@ impl Default for ConfigBuilder {
                 unsubscribe_backoff: Duration::from_secs(10),
                 backoff_slack: 1,
                 flood_publish: true,
+                partial_messages_extension: false,
                 graft_flood_threshold: Duration::from_secs(10),
                 opportunistic_graft_ticks: 60,
                 opportunistic_graft_peers: 2,
@@ -891,6 +900,14 @@ impl ConfigBuilder {
         self
     }
 
+    /// Whether to enable the partial messages extension.
+    /// When enabled, gossipsub can handle partial message reconstruction for large messages.
+    /// The default is false.
+    pub fn partial_messages_extension(&mut self, partial_messages_extension: bool) -> &mut Self {
+        self.config.partial_messages_extension = partial_messages_extension;
+        self
+    }
+
     /// If a GRAFT comes before `graft_flood_threshold` has elapsed since the last PRUNE,
     /// then there is an extra score penalty applied to the peer through P7.
     pub fn graft_flood_threshold(&mut self, graft_flood_threshold: Duration) -> &mut Self {
@@ -1156,6 +1173,7 @@ impl std::fmt::Debug for Config {
         let _ = builder.field("prune_backoff", &self.prune_backoff);
         let _ = builder.field("backoff_slack", &self.backoff_slack);
         let _ = builder.field("flood_publish", &self.flood_publish);
+        let _ = builder.field("partial_messages_extension", &self.partial_messages_extension);
         let _ = builder.field("graft_flood_threshold", &self.graft_flood_threshold);
         let _ = builder.field(
             "mesh_outbound_min",
@@ -1303,5 +1321,31 @@ mod test {
         let mut v = s.finish().to_string();
         v.push('e');
         MessageId::from(v)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_partial_messages_extension_config() {
+        // Test default is false
+        let config = Config::default();
+        assert!(!config.partial_messages_extension());
+        
+        // Test builder can enable it
+        let config = ConfigBuilder::default()
+            .partial_messages_extension(true)
+            .build()
+            .unwrap();
+        assert!(config.partial_messages_extension());
+        
+        // Test builder can explicitly disable it
+        let config = ConfigBuilder::default()
+            .partial_messages_extension(false)
+            .build()
+            .unwrap();
+        assert!(!config.partial_messages_extension());
     }
 }

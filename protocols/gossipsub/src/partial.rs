@@ -32,7 +32,7 @@ use crate::error::PartialMessageError;
 /// 4. When requests are received, `partial_message_bytes_from_metadata()` generates the response
 /// 5. Received partial data is integrated using `extend_from_encoded_partial_message()`
 /// 6. The `group_id()` ties all parts of the same logical message together
-pub trait PartialMessage {
+pub trait Partial {
     /// Returns the unique identifier for this message group.
     ///
     /// All partial messages belonging to the same logical message should return
@@ -81,6 +81,73 @@ pub trait PartialMessage {
     /// if the data was invalid or couldn't be processed.
     fn extend_from_encoded_partial_message(
         &mut self,
-        data: &[u8],
+        data: Vec<u8>,
     ) -> Result<(), PartialMessageError>;
+
+    /// Consumes self and returns the message data.
+    ///
+    /// This method should only be called when the partial message reconstruction
+    /// is complete (i.e., when `missing_parts()` returns `None`).
+    /// Calling this method on an incomplete partial message may return partial data,
+    /// invalid data, or panic, depending on the implementation.
+    ///
+    /// # Returns
+    ///
+    /// The complete message data as a `Vec<u8>`. The format and contents of this
+    /// data are application-defined and should match what would have been sent
+    /// in a regular gossipsub message.
+    fn into_data(self) -> Vec<u8>;
+
+    /// Returns the complete message data without consuming self.
+    ///
+    /// This method provides access to the reconstructed message data for use cases
+    /// like eager pushing, where the partial message implementation needs to send
+    /// complete or substantial portions of the message proactively to peers.
+    ///
+    /// Unlike `into_data()`, this method does not consume self, allowing the
+    /// partial message to continue participating in the reconstruction process.
+    /// The returned data should represent the current state of reconstruction -
+    /// this may be incomplete data, complete data, or application-specific
+    /// encoded data depending on the implementation's needs.
+    ///
+    /// This method is called during `publish_partial` operations when
+    /// applications want to eagerly push data to peers without waiting for
+    /// explicit requests via PartialIWANT messages.
+    fn as_data(&self) -> &[u8];
+}
+
+/// Default implementation that disables partial messages.
+impl Partial for () {
+    fn group_id(&self) -> &[u8] {
+        &[]
+    }
+
+    fn missing_parts(&self) -> Option<&[u8]> {
+        None
+    }
+
+    fn available_parts(&self) -> Option<&[u8]> {
+        None
+    }
+
+    fn partial_message_bytes_from_metadata(&self, _metadata: &[u8]) -> (Vec<u8>, Option<Vec<u8>>) {
+        (vec![], None)
+    }
+
+    fn extend_from_encoded_partial_message(
+        &mut self,
+        _data: Vec<u8>,
+    ) -> Result<(), PartialMessageError> {
+        // This should never be called since we never advertise having or wanting parts,
+        // but if it is called, just ignore the data silently
+        Ok(())
+    }
+
+    fn into_data(self) -> Vec<u8> {
+        vec![]
+    }
+
+    fn as_data(&self) -> &[u8] {
+        &[]
+    }
 }
