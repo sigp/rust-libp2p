@@ -81,7 +81,7 @@ pub trait Partial {
     /// if the data was invalid or couldn't be processed.
     fn extend_from_encoded_partial_message(
         &mut self,
-        data: Vec<u8>,
+        data: &[u8],
     ) -> Result<(), PartialMessageError>;
 
     /// Consumes self and returns the message data.
@@ -136,7 +136,7 @@ impl Partial for () {
 
     fn extend_from_encoded_partial_message(
         &mut self,
-        _data: Vec<u8>,
+        _data: &[u8],
     ) -> Result<(), PartialMessageError> {
         // This should never be called since we never advertise having or wanting parts,
         // but if it is called, just ignore the data silently
