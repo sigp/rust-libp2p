@@ -105,7 +105,7 @@ impl std::fmt::Debug for MessageId {
 
 #[derive(Debug)]
 /// Connected peer details.
-pub(crate) struct PeerDetails<P> {
+pub(crate) struct PeerDetails {
     /// The kind of protocol the peer supports.
     pub(crate) kind: PeerKind,
     /// The Extensions supported by the peer if any.
@@ -121,7 +121,15 @@ pub(crate) struct PeerDetails<P> {
     /// Don't send messages.
     pub(crate) dont_send: LinkedHashMap<MessageId, Instant>,
     /// Peer Partial messages.
-    pub(crate) partial_messages: HashMap<(TopicHash, Vec<u8>), P>,
+    pub(crate) partial_messages: HashMap<TopicHash, HashMap<Vec<u8>, PartialData>>,
+}
+
+/// The partial message data the peer has.
+#[derive(Debug, Default)]
+pub(crate) struct PartialData {
+    pub(crate) ihave: Vec<u8>,
+    pub(crate) iwant: Vec<u8>,
+    pub(crate) message: Vec<u8>,
 }
 
 /// Describes the types of peers that can exist in the gossipsub context.

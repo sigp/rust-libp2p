@@ -56,7 +56,6 @@ use crate::metrics::{Churn, Config as MetricsConfig, Inclusion, Metrics, Penalty
 use crate::{
     backoff::BackoffStorage,
     config::{Config, ValidationMode},
-    error::PartialMessageError,
     gossip_promises::GossipPromises,
     handler::{Handler, HandlerEvent, HandlerIn},
     mcache::MessageCache,
@@ -142,14 +141,18 @@ pub enum Event {
         /// The decompressed message itself.
         message: Message,
     },
-    /// A Partial message has been completed.
+    /// A new partial message has been received.
     Partial {
         /// The peer that forwarded us this message.
         propagation_source: PeerId,
         /// The group ID that identifies the complete logical message.
         group_id: Vec<u8>,
-        /// The specific partial message data.
-        data: Vec<u8>,
+        /// The partial message data.
+        message: Option<Vec<u8>>,
+        /// The partial message iwant.
+        iwant: Option<Vec<u8>>,
+        /// The partial message ihave.
+        ihave: Option<Vec<u8>>,
     },
     /// A remote subscribed to a topic.
     Subscribed {
@@ -284,7 +287,7 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter, P = 
 
     /// A set of connected peers, indexed by their [`PeerId`] tracking both the [`PeerKind`] and
     /// the set of [`ConnectionId`]s.
-    connected_peers: HashMap<PeerId, PeerDetails<P>>,
+    connected_peers: HashMap<PeerId, PeerDetails>,
 
     /// A set of all explicit peers. These are peers that remain connected and we unconditionally
     /// forward messages to, outside of the scoring system.
@@ -803,39 +806,63 @@ where
     pub fn publish_partial(
         &mut self,
         topic: impl Into<TopicHash>,
-        mut partial_message: P,
+        partial_message: P,
     ) -> Result<(), PublishError> {
         let topic_id = topic.into();
         if let Some(existing) = self
             .partial_messages
             .get_mut(&topic_id)
-            .and_then(|p| p.remove(partial_message.group_id()))
+            .and_then(|p| p.get_mut(partial_message.group_id()))
         {
             // Return err if trying to publish the same partial message state we currently have.
             if existing.available_parts() == partial_message.available_parts() {
                 return Err(PublishError::Duplicate);
             }
-            partial_message
-                .extend_from_encoded_partial_message(existing.into_data())
-                .map_err(PublishError::Partial)?;
         }
 
         let available_parts = partial_message.available_parts().map(|p| p.to_vec());
         let missing_parts = partial_message.missing_parts().map(|p| p.to_vec());
         let group_id = partial_message.group_id().to_vec();
-        let message_data = partial_message.as_data().to_vec();
 
         // TODO: should we construct a recipient list just for partials?
         let recipient_peers = self.get_publish_peers(&topic_id);
-        let rpc = PartialMessage {
-            topic_id,
-            group_id,
-            iwant: missing_parts,
-            ihave: available_parts,
-            message: Some(message_data),
-        };
         let mut publish_failed = true;
         for peer_id in recipient_peers.iter() {
+            // TODO: this can be optimized, we are going to get the peer again on `send_message`
+            let Some(peer) = &mut self.connected_peers.get_mut(peer_id) else {
+                tracing::error!(peer = %peer_id,
+                    "Could not send rpc to connection handler, peer doesn't exist in connected peer list");
+                continue;
+            };
+
+            let peer_partials = peer.partial_messages.entry(topic_id.clone()).or_default();
+            let peer_partial = peer_partials.entry(group_id.clone()).or_default();
+
+            let Ok((message_data, rest_wanted)) =
+                partial_message.partial_message_bytes_from_metadata(&peer_partial.iwant)
+            else {
+                tracing::error!(peer = %peer_id, group_id = ?group_id,
+                    "Could not reconstruct message bytes for peer metadata");
+                peer_partials.remove(&group_id);
+                continue;
+            };
+
+            if let Some(r) = rest_wanted {
+                peer_partial.iwant = r;
+            } else {
+                // Peer partial is now complete
+                // remove it from the list
+                peer_partials.remove(&group_id);
+            }
+
+            let rpc = PartialMessage {
+                topic_id: topic_id.clone(),
+                group_id: group_id.clone(),
+                iwant: missing_parts.clone(),
+                ihave: available_parts.clone(),
+                message: Some(message_data),
+            };
+
             if self.send_message(*peer_id, RpcOut::PartialMessage(rpc.clone())) {
                 publish_failed = false;
             }
@@ -1623,11 +1650,7 @@ where
     }
 
     /// Handle incoming partial message from a peer
-    fn handle_partial_message(
-        &mut self,
-        peer_id: &PeerId,
-        partial_message: crate::types::PartialMessage,
-    ) {
+    fn handle_partial_message(&mut self, peer_id: &PeerId, partial_message: PartialMessage) {
         tracing::debug!(
             peer=%peer_id,
             topic=%partial_message.topic_id,
@@ -1636,13 +1659,47 @@ where
         );
 
         // Check if peer exists
-        let Some(_peer) = self.connected_peers.get(peer_id) else {
+        let Some(peer) = self.connected_peers.get_mut(peer_id) else {
             tracing::error!(
                 peer=%peer_id,
                 "Partial message from unknown peer"
             );
             return;
         };
+
+        let peer_partial = peer
+            .partial_messages
+            .entry(partial_message.topic_id.clone())
+            .or_default()
+            .entry(partial_message.group_id.clone())
+            .or_default();
+
+        // Noop if the received partial is the same we already have.
+        if partial_message.ihave.as_ref() == Some(&peer_partial.ihave)
+            && partial_message.iwant.as_ref() == Some(&peer_partial.iwant)
+            && partial_message.message.as_ref() == Some(&peer_partial.message)
+        {
+            return;
+        }
+
+        if let Some(ref iwant) = partial_message.iwant {
+            peer_partial.iwant = iwant.clone();
+        }
+        if let Some(ref ihave) = partial_message.ihave {
+            peer_partial.ihave = ihave.clone();
+        }
+        if let Some(ref message) = partial_message.message {
+            peer_partial.message = message.clone();
+        }
+
+        self.events
+            .push_back(ToSwarm::GenerateEvent(Event::Partial {
+                propagation_source: *peer_id,
+                group_id: partial_message.group_id,
+                message: partial_message.message,
+                iwant: partial_message.iwant,
+                ihave: partial_message.ihave,
+            }));
     }
 
     /// Removes the specified peer from the mesh, returning true if it was present.
@@ -3590,12 +3647,12 @@ where
 /// This is called when peers are added to any mesh. It checks if the peer existed
 /// in any other mesh. If this is the first mesh they have joined, it queues a message to notify
 /// the appropriate connection handler to maintain a connection.
-fn peer_added_to_mesh<P: Partial>(
+fn peer_added_to_mesh(
     peer_id: PeerId,
     new_topics: Vec<&TopicHash>,
     mesh: &HashMap<TopicHash, BTreeSet<PeerId>>,
     events: &mut VecDeque<ToSwarm<Event, HandlerIn>>,
-    connections: &HashMap<PeerId, PeerDetails<P>>,
+    connections: &HashMap<PeerId, PeerDetails>,
 ) {
     // Ensure there is an active connection
     let connection_id = match connections.get(&peer_id) {
@@ -3632,12 +3689,12 @@ fn peer_added_to_mesh<P: Partial>(
 /// This is called when peers are removed from a mesh. It checks if the peer exists
 /// in any other mesh. If this is the last mesh they have joined, we return true, in order to
 /// notify the handler to no longer maintain a connection.
-fn peer_removed_from_mesh<P: Partial>(
+fn peer_removed_from_mesh(
     peer_id: PeerId,
     old_topic: &TopicHash,
     mesh: &HashMap<TopicHash, BTreeSet<PeerId>>,
     events: &mut VecDeque<ToSwarm<Event, HandlerIn>>,
-    connections: &HashMap<PeerId, PeerDetails<P>>,
+    connections: &HashMap<PeerId, PeerDetails>,
 ) {
     // Ensure there is an active connection
     let connection_id = match connections.get(&peer_id) {
@@ -3674,8 +3731,8 @@ fn peer_removed_from_mesh<P: Partial>(
 /// Helper function to get a subset of random gossipsub peers for a `topic_hash`
 /// filtered by the function `f`. The number of peers to get equals the output of `n_map`
 /// that gets as input the number of filtered peers.
-fn get_random_peers_dynamic<P: Partial>(
-    connected_peers: &HashMap<PeerId, PeerDetails<P>>,
+fn get_random_peers_dynamic(
+    connected_peers: &HashMap<PeerId, PeerDetails>,
     topic_hash: &TopicHash,
     // maps the number of total peers to the number of selected peers
     n_map: impl Fn(usize) -> usize,
@@ -3707,8 +3764,8 @@ fn get_random_peers_dynamic<P: Partial>(
 
 /// Helper function to get a set of `n` random gossipsub peers for a `topic_hash`
 /// filtered by the function `f`.
-fn get_random_peers<P: Partial>(
-    connected_peers: &HashMap<PeerId, PeerDetails<P>>,
+fn get_random_peers(
+    connected_peers: &HashMap<PeerId, PeerDetails>,
     topic_hash: &TopicHash,
     n: usize,
     f: impl FnMut(&PeerId) -> bool,
