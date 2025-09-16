@@ -33,34 +33,17 @@ use quick_protobuf::MessageWrite;
 use serde::{Deserialize, Serialize};
 use web_time::Instant;
 
-use crate::{rpc::Sender, rpc_proto::proto, TopicHash};
+use crate::{queue::Queue, rpc_proto::proto, TopicHash};
 
 /// Messages that have expired while attempting to be sent to a peer.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FailedMessages {
-    /// The number of publish messages that failed to be published in a heartbeat.
-    pub publish: usize,
-    /// The number of forward messages that failed to be published in a heartbeat.
-    pub forward: usize,
-    /// The number of messages that were failed to be sent to the priority queue as it was full.
+    /// The number of messages that were failed to be sent to the priority queue as it was
+    /// full.
     pub priority: usize,
-    /// The number of messages that were failed to be sent to the non-priority queue as it was
+    /// The number of messages that were failed to be sent to the non priority queue as it was
     /// full.
     pub non_priority: usize,
-    /// The number of messages that timed out and could not be sent.
-    pub timeout: usize,
-}
-
-impl FailedMessages {
-    /// The total number of messages that failed due to the queue being full.
-    pub fn total_queue_full(&self) -> usize {
-        self.priority + self.non_priority
-    }
-
-    /// The total failed messages in a heartbeat.
-    pub fn total(&self) -> usize {
-        self.priority + self.non_priority
-    }
 }
 
 #[derive(Debug)]
@@ -116,12 +99,12 @@ pub(crate) struct PeerDetails {
     pub(crate) connections: Vec<ConnectionId>,
     /// Subscribed topics.
     pub(crate) topics: BTreeSet<TopicHash>,
-    /// The rpc sender to the connection handler(s).
-    pub(crate) sender: Sender,
     /// Don't send messages.
     pub(crate) dont_send: LinkedHashMap<MessageId, Instant>,
     /// Peer Partial messages.
     pub(crate) partial_messages: HashMap<TopicHash, HashMap<Vec<u8>, PartialData>>,
+    /// Message queue consumed by the connection handler.
+    pub(crate) messages: Queue,
 }
 
 /// The partial message data the peer has.
@@ -363,10 +346,18 @@ pub struct TestExtension {}
 pub enum RpcOut {
     /// PublishV a Gossipsub message on network.`timeout` limits the duration the message
     /// can wait to be sent before it is abandoned.
-    Publish { message: RawMessage, timeout: Delay },
+    Publish {
+        message_id: MessageId,
+        message: RawMessage,
+        timeout: Delay,
+    },
     /// Forward a Gossipsub message on network. `timeout` limits the duration the message
     /// can wait to be sent before it is abandoned.
-    Forward { message: RawMessage, timeout: Delay },
+    Forward {
+        message_id: MessageId,
+        message: RawMessage,
+        timeout: Delay,
+    },
     /// Subscribe a topic.
     Subscribe(TopicHash),
     /// Unsubscribe a topic.
@@ -396,26 +387,32 @@ impl RpcOut {
     pub fn into_protobuf(self) -> proto::RPC {
         self.into()
     }
+
+    /// Returns true if the `RpcOut` is priority.
+    pub(crate) fn priority(&self) -> bool {
+        matches!(
+            self,
+            RpcOut::Subscribe(_)
+                | RpcOut::Unsubscribe(_)
+                | RpcOut::Graft(_)
+                | RpcOut::Prune(_)
+                | RpcOut::IDontWant(_)
+        )
+    }
 }
 
 impl From<RpcOut> for proto::RPC {
     /// Converts the RPC into protobuf format.
     fn from(rpc: RpcOut) -> Self {
         match rpc {
-            RpcOut::Publish {
-                message,
-                timeout: _,
-            } => proto::RPC {
+            RpcOut::Publish { message, .. } => proto::RPC {
                 subscriptions: Vec::new(),
                 publish: vec![message.into()],
                 control: None,
                 testExtension: None,
                 partial: None,
             },
-            RpcOut::Forward {
-                message,
-                timeout: _,
-            } => proto::RPC {
+            RpcOut::Forward { message, .. } => proto::RPC {
                 publish: vec![message.into()],
                 subscriptions: Vec::new(),
                 control: None,

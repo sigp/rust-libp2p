@@ -61,7 +61,7 @@ use crate::{
     mcache::MessageCache,
     peer_score::{PeerScore, PeerScoreParams, PeerScoreState, PeerScoreThresholds, RejectReason},
     protocol::SIGNING_PREFIX,
-    rpc::Sender,
+    queue::Queue,
     rpc_proto::proto,
     subscription_filter::{AllowAllSubscriptionFilter, TopicSubscriptionFilter},
     time_cache::DuplicateCache,
@@ -777,6 +777,7 @@ where
             if self.send_message(
                 *peer_id,
                 RpcOut::Publish {
+                    message_id: msg_id.clone(),
                     message: raw_message.clone(),
                     timeout: Delay::new(self.config.publish_queue_duration()),
                 },
@@ -1443,6 +1444,7 @@ where
                     self.send_message(
                         *peer_id,
                         RpcOut::Forward {
+                            message_id: id.clone(),
                             message: msg,
                             timeout: Delay::new(self.config.forward_queue_duration()),
                         },
@@ -2262,9 +2264,9 @@ where
         // steady-state size of the queues.
         #[cfg(feature = "metrics")]
         if let Some(m) = &mut self.metrics {
-            for sender_queue in self.connected_peers.values().map(|v| &v.sender) {
-                m.observe_priority_queue_size(sender_queue.priority_queue_len());
-                m.observe_non_priority_queue_size(sender_queue.non_priority_queue_len());
+            for sender_queue in self.connected_peers.values().map(|v| &v.messages) {
+                m.observe_priority_queue_size(sender_queue.priority_len());
+                m.observe_non_priority_queue_size(sender_queue.non_priority_len());
             }
         }
 
@@ -2680,6 +2682,11 @@ where
         // Report expired messages
         for (peer_id, failed_messages) in self.failed_messages.drain() {
             tracing::debug!("Peer couldn't consume messages: {:?}", failed_messages);
+            #[cfg(feature = "metrics")]
+            if let Some(metrics) = self.metrics.as_mut() {
+                metrics.observe_failed_priority_messages(failed_messages.priority);
+                metrics.observe_failed_non_priority_messages(failed_messages.non_priority);
+            }
             self.events
                 .push_back(ToSwarm::GenerateEvent(Event::SlowPeer {
                     peer_id,
@@ -2927,6 +2934,7 @@ where
                 self.send_message(
                     *peer_id,
                     RpcOut::Forward {
+                        message_id: msg_id.clone(),
                         message: message.clone(),
                         timeout: Delay::new(self.config.forward_queue_duration()),
                     },
@@ -3055,8 +3063,9 @@ where
             return false;
         }
 
-        // Try sending the message to the connection handler.
-        match peer.sender.send_message(rpc) {
+        // Try sending the message to the connection handler,
+        // High priority messages should not fail.
+        match peer.messages.try_push(rpc) {
             Ok(()) => true,
             Err(rpc) => {
                 // Sending failed because the channel is full.
@@ -3064,29 +3073,10 @@ where
 
                 // Update failed message counter.
                 let failed_messages = self.failed_messages.entry(peer_id).or_default();
-                match rpc {
-                    RpcOut::Publish { .. } => {
-                        failed_messages.priority += 1;
-                        failed_messages.publish += 1;
-                    }
-                    RpcOut::Forward { .. } => {
-                        failed_messages.non_priority += 1;
-                        failed_messages.forward += 1;
-                    }
-                    RpcOut::IWant(_)
-                    | RpcOut::IHave(_)
-                    | RpcOut::IDontWant(_)
-                    | RpcOut::PartialMessage { .. } => {
-                        failed_messages.non_priority += 1;
-                    }
-                    RpcOut::Graft(_)
-                    | RpcOut::Prune(_)
-                    | RpcOut::Subscribe(_)
-                    | RpcOut::Unsubscribe(_)
-                    | RpcOut::Extensions(_)
-                    | RpcOut::TestExtension => {
-                        unreachable!("Channel for highpriority control messages is unbounded and should always be open.")
-                    }
+                if rpc.priority() {
+                    failed_messages.priority += 1;
+                } else {
+                    failed_messages.non_priority += 1;
                 }
 
                 // Update peer score.
@@ -3316,7 +3306,7 @@ where
             kind: PeerKind::Floodsub,
             connections: vec![],
             outbound: false,
-            sender: Sender::new(self.config.connection_handler_queue_len()),
+            messages: Queue::new(self.config.connection_handler_queue_len()),
             topics: Default::default(),
             dont_send: LinkedHashMap::new(),
             extensions: None,
@@ -3324,24 +3314,26 @@ where
         });
         // Add the new connection
         connected_peer.connections.push(connection_id);
-        let receiver = connected_peer.sender.new_receiver();
+        let queue = connected_peer.messages.clone();
 
-        if connected_peer.connections.len() <= 1 {
-            // If this is the first connection send extensions message.
-            self.send_message(
-                peer_id,
-                RpcOut::Extensions(Extensions {
-                    test_extension: Some(true),
-                    partial_messages: if self.config.partial_messages_extension() {
-                        Some(true)
-                    } else {
-                        None
-                    },
-                }),
-            );
-        }
+        // if connected_peer.connections.len() <= 1 {
+        // If this is the first connection send extensions message.
+        self.send_message(
+            peer_id,
+            RpcOut::Extensions(Extensions {
+                test_extension: Some(true),
+                partial_messages: if self.config.partial_messages_extension() {
+                    Some(true)
+                } else {
+                    None
+                },
+            }),
+        );
+        // }
 
-        Ok(Handler::new(self.config.protocol_config(), receiver))
+        // This clones a reference to the Queue so any new handlers reference the same underlying
+        // queue. No data is actually cloned here.
+        Ok(Handler::new(self.config.protocol_config(), queue))
     }
 
     fn handle_established_outbound_connection(
@@ -3358,7 +3350,7 @@ where
             // Diverging from the go implementation we only want to consider a peer as outbound peer
             // if its first connection is outbound.
             outbound: !self.px_peers.contains(&peer_id),
-            sender: Sender::new(self.config.connection_handler_queue_len()),
+            messages: Queue::new(self.config.connection_handler_queue_len()),
             topics: Default::default(),
             dont_send: LinkedHashMap::new(),
             extensions: None,
@@ -3366,7 +3358,7 @@ where
         });
         // Add the new connection
         connected_peer.connections.push(connection_id);
-        let receiver = connected_peer.sender.new_receiver();
+        let queue = connected_peer.messages.clone();
 
         if connected_peer.connections.len() <= 1 {
             // If this is the first connection send extensions message.
@@ -3383,7 +3375,9 @@ where
             );
         }
 
-        Ok(Handler::new(self.config.protocol_config(), receiver))
+        // This clones a reference to the Queue so any new handlers reference the same underlying
+        // queue. No data is actually cloned here.
+        Ok(Handler::new(self.config.protocol_config(), queue))
     }
 
     fn on_connection_handler_event(
@@ -3424,6 +3418,8 @@ where
                     }
                 }
             }
+            // rpc is only used for metrics code.
+            #[allow(unused_variables)]
             HandlerEvent::MessageDropped(rpc) => {
                 // Account for this in the scoring logic
                 if let PeerScoreState::Active(peer_score) = &mut self.peer_score {
@@ -3432,32 +3428,7 @@ where
 
                 // Keep track of expired messages for the application layer.
                 let failed_messages = self.failed_messages.entry(propagation_source).or_default();
-                failed_messages.timeout += 1;
-                match rpc {
-                    RpcOut::Publish { .. } => {
-                        failed_messages.publish += 1;
-                    }
-                    RpcOut::Forward { .. } => {
-                        failed_messages.forward += 1;
-                    }
-                    _ => {}
-                }
-
-                // Record metrics on the failure.
-                #[cfg(feature = "metrics")]
-                if let Some(metrics) = self.metrics.as_mut() {
-                    match rpc {
-                        RpcOut::Publish { message, .. } => {
-                            metrics.publish_msg_dropped(&message.topic);
-                            metrics.timeout_msg_dropped(&message.topic);
-                        }
-                        RpcOut::Forward { message, .. } => {
-                            metrics.forward_msg_dropped(&message.topic);
-                            metrics.timeout_msg_dropped(&message.topic);
-                        }
-                        _ => {}
-                    }
-                }
+                failed_messages.non_priority += 1;
             }
             HandlerEvent::Message {
                 rpc,
@@ -3556,10 +3527,17 @@ where
                                     "Could not handle IDONTWANT, peer doesn't exist in connected peer list");
                                 continue;
                             };
+
+                            // Remove messages from the queue.
+                            #[allow(unused)]
+                            let removed = peer.messages.remove_data_messages(&message_ids);
+
                             #[cfg(feature = "metrics")]
                             if let Some(metrics) = self.metrics.as_mut() {
                                 metrics.register_idontwant(message_ids.len());
+                                metrics.register_removed_messages(removed);
                             }
+
                             for message_id in message_ids {
                                 peer.dont_send.insert(message_id, Instant::now());
                                 // Don't exceed capacity.
