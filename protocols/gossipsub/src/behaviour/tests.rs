@@ -32,11 +32,6 @@ use super::*;
 use crate::{
     config::{ConfigBuilder, TopicMeshConfig},
     protocol::GossipsubCodec,
-<<<<<<< HEAD
-    rpc::Receiver,
-    rpc_proto::proto,
-=======
->>>>>>> fabf27f2021ba582d9b0d1c15ca47babef453497
     subscription_filter::WhitelistSubscriptionFilter,
     types::{ControlAction, Extensions, RpcIn, RpcOut},
     IdentTopic as Topic,
@@ -6745,7 +6740,7 @@ fn test_handle_extensions_message() {
     .unwrap();
 
     let peer_id = PeerId::random();
-    let sender = Sender::new(gs.config.connection_handler_queue_len());
+    let messages = Queue::new(gs.config.connection_handler_queue_len());
 
     // Add peer without extensions
     gs.connected_peers.insert(
@@ -6755,7 +6750,7 @@ fn test_handle_extensions_message() {
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
             topics: BTreeSet::new(),
-            sender,
+            messages,
             dont_send: LinkedHashMap::new(),
             extensions: None,
             partial_messages: Default::default(),

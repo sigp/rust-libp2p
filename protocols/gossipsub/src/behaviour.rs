@@ -271,7 +271,7 @@ impl From<MessageAuthenticity> for PublishConfig {
 ///
 /// The TopicSubscriptionFilter allows applications to implement specific filters on topics to
 /// prevent unwanted messages being propagated and evaluated.
-pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter, P = ()> {
+pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     /// Configuration providing gossipsub performance parameters.
     config: Config,
 
@@ -343,9 +343,6 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter, P = 
     /// user to implement arbitrary topic-based compression algorithms.
     data_transform: D,
 
-    /// Partial messages received.
-    partial_messages: HashMap<TopicHash, HashMap<Vec<u8>, P>>,
-
     /// Keep track of a set of internal metrics relating to gossipsub.
     #[cfg(feature = "metrics")]
     metrics: Option<Metrics>,
@@ -357,11 +354,10 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter, P = 
     gossip_promises: GossipPromises,
 }
 
-impl<D, F, P> Behaviour<D, F, P>
+impl<D, F> Behaviour<D, F>
 where
     D: DataTransform + Default,
     F: TopicSubscriptionFilter + Default,
-    P: Partial + Default,
 {
     /// Creates a Gossipsub [`Behaviour`] struct given a set of parameters specified via a
     /// [`Config`]. This has no subscription filter and uses no compression.
@@ -375,11 +371,10 @@ where
     }
 }
 
-impl<D, F, P> Behaviour<D, F, P>
+impl<D, F> Behaviour<D, F>
 where
     D: DataTransform + Default,
     F: TopicSubscriptionFilter,
-    P: Partial + Default,
 {
     /// Creates a Gossipsub [`Behaviour`] struct given a set of parameters specified via a
     /// [`Config`] and a custom subscription filter.
@@ -397,11 +392,10 @@ where
     }
 }
 
-impl<D, F, P> Behaviour<D, F, P>
+impl<D, F> Behaviour<D, F>
 where
     D: DataTransform,
     F: TopicSubscriptionFilter + Default,
-    P: Partial + Default,
 {
     /// Creates a Gossipsub [`Behaviour`] struct given a set of parameters specified via a
     /// [`Config`] and a custom data transform.
@@ -420,11 +414,10 @@ where
     }
 }
 
-impl<D, F, P> Behaviour<D, F, P>
+impl<D, F> Behaviour<D, F>
 where
     D: DataTransform,
     F: TopicSubscriptionFilter,
-    P: Partial + Default,
 {
     /// Creates a Gossipsub [`Behaviour`] struct given a set of parameters specified via a
     /// [`Config`] and a custom subscription filter and data transform.
@@ -468,7 +461,6 @@ where
             config,
             subscription_filter,
             data_transform,
-            partial_messages: Default::default(),
             failed_messages: Default::default(),
             gossip_promises: Default::default(),
         })
@@ -487,11 +479,10 @@ where
     }
 }
 
-impl<D, F, P> Behaviour<D, F, P>
+impl<D, F> Behaviour<D, F>
 where
     D: DataTransform + Send + 'static,
     F: TopicSubscriptionFilter + Send + 'static,
-    P: Partial + Send + 'static + Default,
 {
     /// Lists the hashes of the topics we are currently subscribed to.
     pub fn topics(&self) -> impl Iterator<Item = &TopicHash> {
@@ -804,22 +795,12 @@ where
         Ok(msg_id)
     }
 
-    pub fn publish_partial(
+    pub fn publish_partial<P: Partial>(
         &mut self,
         topic: impl Into<TopicHash>,
         partial_message: P,
     ) -> Result<(), PublishError> {
         let topic_id = topic.into();
-        if let Some(existing) = self
-            .partial_messages
-            .get_mut(&topic_id)
-            .and_then(|p| p.get_mut(partial_message.group_id()))
-        {
-            // Return err if trying to publish the same partial message state we currently have.
-            if existing.available_parts() == partial_message.available_parts() {
-                return Err(PublishError::Duplicate);
-            }
-        }
 
         let available_parts = partial_message.available_parts().map(|p| p.to_vec());
         let missing_parts = partial_message.missing_parts().map(|p| p.to_vec());
@@ -840,7 +821,7 @@ where
             let peer_partial = peer_partials.entry(group_id.clone()).or_default();
 
             let Ok((message_data, rest_wanted)) =
-                partial_message.partial_message_bytes_from_metadata(&peer_partial.iwant)
+                partial_message.partial_message_bytes_from_metadata(&peer_partial.wanted)
             else {
                 tracing::error!(peer = %peer_id, group_id = ?group_id,
                     "Could not reconstruct message bytes for peer metadata");
@@ -848,13 +829,18 @@ where
                 continue;
             };
 
-            if let Some(r) = rest_wanted {
-                peer_partial.iwant = r;
-            } else {
+            match rest_wanted {
+                // No new data to send peer.
+                Some(r) if r == peer_partial.wanted => {
+                    continue;
+                }
+                Some(r) => peer_partial.wanted = r,
                 // Peer partial is now complete
                 // remove it from the list
-                peer_partials.remove(&group_id);
-            }
+                None => {
+                    peer_partials.remove(&group_id);
+                }
+            };
 
             let rpc = PartialMessage {
                 topic_id: topic_id.clone(),
@@ -1677,21 +1663,17 @@ where
             .or_default();
 
         // Noop if the received partial is the same we already have.
-        if partial_message.ihave.as_ref() == Some(&peer_partial.ihave)
-            && partial_message.iwant.as_ref() == Some(&peer_partial.iwant)
-            && partial_message.message.as_ref() == Some(&peer_partial.message)
+        if partial_message.ihave.as_ref() == Some(&peer_partial.has)
+            && partial_message.iwant.as_ref() == Some(&peer_partial.wanted)
         {
             return;
         }
 
         if let Some(ref iwant) = partial_message.iwant {
-            peer_partial.iwant = iwant.clone();
+            peer_partial.wanted = iwant.clone();
         }
         if let Some(ref ihave) = partial_message.ihave {
-            peer_partial.ihave = ihave.clone();
-        }
-        if let Some(ref message) = partial_message.message {
-            peer_partial.message = message.clone();
+            peer_partial.has = ihave.clone();
         }
 
         self.events
@@ -2695,7 +2677,7 @@ where
         }
         self.failed_messages.shrink_to_fit();
 
-        // Flush stale IDONTWANTs.
+        // Flush stale IDONTWANTs and partial messages.
         for peer in self.connected_peers.values_mut() {
             while let Some((_front, instant)) = peer.dont_send.front() {
                 if (*instant + IDONTWANT_TIMEOUT) >= Instant::now() {
@@ -2703,6 +2685,12 @@ where
                 } else {
                     peer.dont_send.pop_front();
                 }
+            }
+            for topics in peer.partial_messages.values_mut() {
+                topics.retain(|_, partial| {
+                    partial.ttl -= 1;
+                    partial.ttl <= 0
+                });
             }
         }
 
@@ -3281,11 +3269,10 @@ fn get_ip_addr(addr: &Multiaddr) -> Option<IpAddr> {
     })
 }
 
-impl<C, F, P> NetworkBehaviour for Behaviour<C, F, P>
+impl<C, F> NetworkBehaviour for Behaviour<C, F>
 where
     C: Send + 'static + DataTransform,
     F: Send + 'static + TopicSubscriptionFilter,
-    P: Send + 'static + Partial + Default,
 {
     type ConnectionHandler = Handler;
     type ToSwarm = Event;

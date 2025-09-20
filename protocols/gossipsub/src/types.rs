@@ -108,11 +108,24 @@ pub(crate) struct PeerDetails {
 }
 
 /// The partial message data the peer has.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct PartialData {
-    pub(crate) ihave: Vec<u8>,
-    pub(crate) iwant: Vec<u8>,
-    pub(crate) message: Vec<u8>,
+    /// The remaining metada needed by the peer
+    pub(crate) wanted: Vec<u8>,
+    /// The last partial IHAVE received from the peer.
+    pub(crate) has: Vec<u8>,
+    /// The remaining heartbeats for this message to be deleted.
+    pub(crate) ttl: usize,
+}
+
+impl Default for PartialData {
+    fn default() -> Self {
+        Self {
+            wanted: Default::default(),
+            has: Default::default(),
+            ttl: 5,
+        }
+    }
 }
 
 /// Describes the types of peers that can exist in the gossipsub context.
