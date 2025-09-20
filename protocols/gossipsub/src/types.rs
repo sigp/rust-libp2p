@@ -20,7 +20,7 @@
 
 //! A collection of types using the Gossipsub system.
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::BTreeSet,
     fmt::{self, Debug},
 };
 
@@ -102,12 +102,15 @@ pub(crate) struct PeerDetails {
     /// Don't send messages.
     pub(crate) dont_send: LinkedHashMap<MessageId, Instant>,
     /// Peer Partial messages.
-    pub(crate) partial_messages: HashMap<TopicHash, HashMap<Vec<u8>, PartialData>>,
+    #[cfg(feature = "partial_messages")]
+    pub(crate) partial_messages:
+        std::collections::HashMap<TopicHash, HashMap<Vec<u8>, PartialData>>,
     /// Message queue consumed by the connection handler.
     pub(crate) messages: Queue,
 }
 
 /// The partial message data the peer has.
+#[cfg(feature = "partial_messages")]
 #[derive(Debug)]
 pub(crate) struct PartialData {
     /// The remaining metada needed by the peer
@@ -118,6 +121,7 @@ pub(crate) struct PartialData {
     pub(crate) ttl: usize,
 }
 
+#[cfg(feature = "partial_messages")]
 impl Default for PartialData {
     fn default() -> Self {
         Self {

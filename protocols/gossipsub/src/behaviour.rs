@@ -69,11 +69,14 @@ use crate::{
     transform::{DataTransform, IdentityTransform},
     types::{
         ControlAction, Extensions, Graft, IDontWant, IHave, IWant, Message, MessageAcceptance,
-        MessageId, PartialMessage, PeerDetails, PeerInfo, PeerKind, Prune, RawMessage, RpcOut,
-        Subscription, SubscriptionAction,
+        MessageId, PeerDetails, PeerInfo, PeerKind, Prune, RawMessage, RpcOut, Subscription,
+        SubscriptionAction,
     },
-    FailedMessages, Partial, PublishError, SubscriptionError, TopicScoreParams, ValidationError,
+    FailedMessages, PublishError, SubscriptionError, TopicScoreParams, ValidationError,
 };
+
+#[cfg(feature = "partial_messages")]
+use crate::{partial::Partial, types::PartialMessage};
 
 #[cfg(test)]
 mod tests;
@@ -142,18 +145,8 @@ pub enum Event {
         message: Message,
     },
     /// A new partial message has been received.
-    Partial {
-        /// The peer that forwarded us this message.
-        propagation_source: PeerId,
-        /// The group ID that identifies the complete logical message.
-        group_id: Vec<u8>,
-        /// The partial message data.
-        message: Option<Vec<u8>>,
-        /// The partial message iwant.
-        iwant: Option<Vec<u8>>,
-        /// The partial message ihave.
-        ihave: Option<Vec<u8>>,
-    },
+    #[cfg(feature = "partial_messages")]
+    Partial(crate::types::PartialMessage),
     /// A remote subscribed to a topic.
     Subscribed {
         /// Remote that has subscribed.
@@ -795,6 +788,7 @@ where
         Ok(msg_id)
     }
 
+    #[cfg(feature = "partial_messages")]
     pub fn publish_partial<P: Partial>(
         &mut self,
         topic: impl Into<TopicHash>,
@@ -1638,6 +1632,7 @@ where
     }
 
     /// Handle incoming partial message from a peer
+    #[cfg(feature = "partial_messages")]
     fn handle_partial_message(&mut self, peer_id: &PeerId, partial_message: PartialMessage) {
         tracing::debug!(
             peer=%peer_id,
@@ -1677,13 +1672,7 @@ where
         }
 
         self.events
-            .push_back(ToSwarm::GenerateEvent(Event::Partial {
-                propagation_source: *peer_id,
-                group_id: partial_message.group_id,
-                message: partial_message.message,
-                iwant: partial_message.iwant,
-                ihave: partial_message.ihave,
-            }));
+            .push_back(ToSwarm::GenerateEvent(Event::Partial(partial_message)));
     }
 
     /// Removes the specified peer from the mesh, returning true if it was present.
@@ -2686,6 +2675,7 @@ where
                     peer.dont_send.pop_front();
                 }
             }
+            #[cfg(feature = "partial_messages")]
             for topics in peer.partial_messages.values_mut() {
                 topics.retain(|_, partial| {
                     partial.ttl -= 1;
@@ -3297,6 +3287,7 @@ where
             topics: Default::default(),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
         });
         // Add the new connection
@@ -3309,7 +3300,7 @@ where
             peer_id,
             RpcOut::Extensions(Extensions {
                 test_extension: Some(true),
-                partial_messages: if self.config.partial_messages_extension() {
+                partial_messages: if cfg!(feature = "partial_messages") {
                     Some(true)
                 } else {
                     None
@@ -3341,6 +3332,7 @@ where
             topics: Default::default(),
             dont_send: LinkedHashMap::new(),
             extensions: None,
+            #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
         });
         // Add the new connection
@@ -3353,7 +3345,7 @@ where
                 peer_id,
                 RpcOut::Extensions(Extensions {
                     test_extension: Some(true),
-                    partial_messages: if self.config.partial_messages_extension() {
+                    partial_messages: if cfg!(feature = "partial_messages") {
                         Some(true)
                     } else {
                         None
@@ -3554,15 +3546,9 @@ where
                     tracing::debug!("Received Test Extension");
                 }
 
+                #[cfg(feature = "partial_messages")]
                 if let Some(partial_message) = rpc.partial_message {
-                    if self.config.partial_messages_extension() {
-                        self.handle_partial_message(&propagation_source, partial_message);
-                    } else {
-                        tracing::debug!(
-                            peer=%propagation_source,
-                            "Ignoring partial message - extension disabled"
-                        );
-                    }
+                    self.handle_partial_message(&propagation_source, partial_message);
                 }
             }
         }
