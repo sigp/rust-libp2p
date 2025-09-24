@@ -603,7 +603,6 @@ impl From<RpcOut> for proto::RPC {
                     ihave: ihave.map(|metadata| proto::PartialIHAVE {
                         metadata: Some(metadata),
                     }),
-                    idontwant: None,
                 }),
             },
         }

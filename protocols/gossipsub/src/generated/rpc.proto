@@ -114,8 +114,7 @@ message PartialMessagesExtension {
 
   optional PartialMessage message = 3;
   optional PartialIWANT iwant = 4;
-  optional PartialIDONTWANT idontwant = 5;
-  optional PartialIHAVE ihave = 6;
+  optional PartialIHAVE ihave = 5;
 }
 
 message PartialMessage {

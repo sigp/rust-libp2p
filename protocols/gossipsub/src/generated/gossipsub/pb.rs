@@ -669,7 +669,6 @@ pub struct PartialMessagesExtension {
     pub groupID: Option<Vec<u8>>,
     pub message: Option<gossipsub::pb::PartialMessage>,
     pub iwant: Option<gossipsub::pb::PartialIWANT>,
-    pub idontwant: Option<gossipsub::pb::PartialIDONTWANT>,
     pub ihave: Option<gossipsub::pb::PartialIHAVE>,
 }
 
@@ -682,8 +681,7 @@ impl<'a> MessageRead<'a> for PartialMessagesExtension {
                 Ok(18) => msg.groupID = Some(r.read_bytes(bytes)?.to_owned()),
                 Ok(26) => msg.message = Some(r.read_message::<gossipsub::pb::PartialMessage>(bytes)?),
                 Ok(34) => msg.iwant = Some(r.read_message::<gossipsub::pb::PartialIWANT>(bytes)?),
-                Ok(42) => msg.idontwant = Some(r.read_message::<gossipsub::pb::PartialIDONTWANT>(bytes)?),
-                Ok(50) => msg.ihave = Some(r.read_message::<gossipsub::pb::PartialIHAVE>(bytes)?),
+                Ok(42) => msg.ihave = Some(r.read_message::<gossipsub::pb::PartialIHAVE>(bytes)?),
                 Ok(t) => { r.read_unknown(bytes, t)?; }
                 Err(e) => return Err(e),
             }
@@ -699,7 +697,6 @@ impl MessageWrite for PartialMessagesExtension {
         + self.groupID.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
         + self.message.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
         + self.iwant.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
-        + self.idontwant.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
         + self.ihave.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
     }
 
@@ -708,8 +705,7 @@ impl MessageWrite for PartialMessagesExtension {
         if let Some(ref s) = self.groupID { w.write_with_tag(18, |w| w.write_bytes(&**s))?; }
         if let Some(ref s) = self.message { w.write_with_tag(26, |w| w.write_message(s))?; }
         if let Some(ref s) = self.iwant { w.write_with_tag(34, |w| w.write_message(s))?; }
-        if let Some(ref s) = self.idontwant { w.write_with_tag(42, |w| w.write_message(s))?; }
-        if let Some(ref s) = self.ihave { w.write_with_tag(50, |w| w.write_message(s))?; }
+        if let Some(ref s) = self.ihave { w.write_with_tag(42, |w| w.write_message(s))?; }
         Ok(())
     }
 }
