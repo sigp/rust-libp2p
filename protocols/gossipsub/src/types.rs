@@ -31,6 +31,8 @@ use libp2p_swarm::ConnectionId;
 use quick_protobuf::MessageWrite;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "partial_messages")]
+use std::collections::HashMap;
 use web_time::Instant;
 
 use crate::{queue::Queue, rpc_proto::proto, TopicHash};
@@ -103,8 +105,7 @@ pub(crate) struct PeerDetails {
     pub(crate) dont_send: LinkedHashMap<MessageId, Instant>,
     /// Peer Partial messages.
     #[cfg(feature = "partial_messages")]
-    pub(crate) partial_messages:
-        std::collections::HashMap<TopicHash, HashMap<Vec<u8>, PartialData>>,
+    pub(crate) partial_messages: HashMap<TopicHash, HashMap<Vec<u8>, PartialData>>,
     /// Message queue consumed by the connection handler.
     pub(crate) messages: Queue,
 }

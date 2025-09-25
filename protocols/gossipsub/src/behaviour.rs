@@ -796,9 +796,11 @@ where
     ) -> Result<(), PublishError> {
         let topic_id = topic.into();
 
-        let available_parts = partial_message.available_parts().map(|p| p.to_vec());
-        let missing_parts = partial_message.missing_parts().map(|p| p.to_vec());
-        let group_id = partial_message.group_id().to_vec();
+        let available_parts = partial_message
+            .available_parts()
+            .map(|p| p.as_ref().to_vec());
+        let missing_parts = partial_message.missing_parts().map(|p| p.as_ref().to_vec());
+        let group_id = partial_message.group_id().as_ref().to_vec();
 
         // TODO: should we construct a recipient list just for partials?
         let recipient_peers = self.get_publish_peers(&topic_id);
@@ -814,8 +816,9 @@ where
             let peer_partials = peer.partial_messages.entry(topic_id.clone()).or_default();
             let peer_partial = peer_partials.entry(group_id.clone()).or_default();
 
-            let Ok((message_data, rest_wanted)) =
-                partial_message.partial_message_bytes_from_metadata(&peer_partial.wanted)
+            let Ok((message_data, rest_wanted)) = partial_message
+                .partial_message_bytes_from_metadata(&peer_partial.wanted)
+                .map(|(m, r)| (m.as_ref().to_vec(), r.map(|r| r.as_ref().to_vec())))
             else {
                 tracing::error!(peer = %peer_id, group_id = ?group_id,
                     "Could not reconstruct message bytes for peer metadata");

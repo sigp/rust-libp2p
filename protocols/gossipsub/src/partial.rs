@@ -38,7 +38,7 @@ pub trait Partial {
     /// All partial messages belonging to the same logical message should return
     /// the same group ID. This is used to associate partial messages together
     /// during reconstruction.
-    fn group_id(&self) -> &[u8];
+    fn group_id(&self) -> impl AsRef<[u8]>;
 
     /// Returns metadata describing which parts of the message are missing.
     ///
@@ -48,7 +48,7 @@ pub trait Partial {
     ///
     /// The returned bytes will be sent in PartialIWANT messages to request
     /// missing parts from peers.
-    fn missing_parts(&self) -> Option<&[u8]>;
+    fn missing_parts(&self) -> Option<impl AsRef<[u8]>>;
 
     /// Returns metadata describing which parts of the message are available.
     ///
@@ -58,7 +58,7 @@ pub trait Partial {
     ///
     /// The returned bytes will be sent in PartialIHAVE messages to advertise
     /// available parts to peers.
-    fn available_parts(&self) -> Option<&[u8]>;
+    fn available_parts(&self) -> Option<impl AsRef<[u8]>>;
 
     /// Generates partial message bytes from the given metadata.
     ///
@@ -71,8 +71,8 @@ pub trait Partial {
     /// - Optional remaining metadata if more parts are still available after this one
     fn partial_message_bytes_from_metadata(
         &self,
-        metadata: &[u8],
-    ) -> Result<(Vec<u8>, Option<Vec<u8>>), PartialMessageError>;
+        metadata: impl AsRef<[u8]>,
+    ) -> Result<(impl AsRef<[u8]>, Option<impl AsRef<[u8]>>), PartialMessageError>;
 
     /// Extends this message with received partial message data.
     ///
@@ -86,35 +86,4 @@ pub trait Partial {
         &mut self,
         data: &[u8],
     ) -> Result<(), PartialMessageError>;
-}
-
-/// Default implementation that disables partial messages.
-impl Partial for () {
-    fn group_id(&self) -> &[u8] {
-        &[]
-    }
-
-    fn missing_parts(&self) -> Option<&[u8]> {
-        None
-    }
-
-    fn available_parts(&self) -> Option<&[u8]> {
-        None
-    }
-
-    fn partial_message_bytes_from_metadata(
-        &self,
-        _metadata: &[u8],
-    ) -> Result<(Vec<u8>, Option<Vec<u8>>), PartialMessageError> {
-        Ok((vec![], None))
-    }
-
-    fn extend_from_encoded_partial_message(
-        &mut self,
-        _data: &[u8],
-    ) -> Result<(), PartialMessageError> {
-        // This should never be called since we never advertise having or wanting parts,
-        // but if it is called, just ignore the data silently
-        Ok(())
-    }
 }

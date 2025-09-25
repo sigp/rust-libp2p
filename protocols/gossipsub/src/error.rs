@@ -180,10 +180,8 @@ pub enum PartialMessageError {
 
     /// The partial data doesn't belong to this message group.
     WrongGroup {
-        /// Expected minimum number of bytes.
-        expected: usize,
-        /// Actual number of bytes received.
-        received: usize,
+        /// Group Id of the received message.
+        received: Vec<u8>,
     },
 
     /// The partial data is a duplicate of already received data.
@@ -214,12 +212,8 @@ impl std::fmt::Display for PartialMessageError {
             Self::InvalidFormat => {
                 write!(f, "Invalid data format")
             }
-            Self::WrongGroup { expected, received } => {
-                write!(
-                    f,
-                    "Wrong group ID: expected {:?}, got {:?}",
-                    expected, received
-                )
+            Self::WrongGroup { received } => {
+                write!(f, "Wrong group ID: got {:?}", received)
             }
             Self::DuplicateData(part_id) => {
                 write!(f, "Duplicate data for part {:?}", part_id)
