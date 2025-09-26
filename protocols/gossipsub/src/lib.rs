@@ -120,7 +120,7 @@ pub mod partial;
 pub use metrics::Config as MetricsConfig;
 
 #[cfg(feature = "partial_messages")]
-pub use self::{error::PartialMessageError, partial::Partial, types::PartialMessage};
+pub use self::{error::PartialMessageError, partial::Partial};
 
 pub use self::{
     behaviour::{Behaviour, Event, MessageAuthenticity},

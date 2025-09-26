@@ -146,7 +146,19 @@ pub enum Event {
     },
     /// A new partial message has been received.
     #[cfg(feature = "partial_messages")]
-    Partial(crate::types::PartialMessage),
+    Partial {
+        topic_id: TopicHash,
+        /// The peer that forwarded us this message.
+        propagation_source: PeerId,
+        /// The group ID that identifies the complete logical message.
+        group_id: Vec<u8>,
+        /// The partial message data.
+        message: Option<Vec<u8>>,
+        /// The partial message iwant.
+        iwant: Option<Vec<u8>>,
+        /// The partial message ihave.
+        ihave: Option<Vec<u8>>,
+    },
     /// A remote subscribed to a topic.
     Subscribed {
         /// Remote that has subscribed.
@@ -1675,7 +1687,14 @@ where
         }
 
         self.events
-            .push_back(ToSwarm::GenerateEvent(Event::Partial(partial_message)));
+            .push_back(ToSwarm::GenerateEvent(Event::Partial {
+                topic_id: partial_message.topic_id,
+                propagation_source: *peer_id,
+                group_id: partial_message.group_id,
+                message: partial_message.message,
+                iwant: partial_message.iwant,
+                ihave: partial_message.ihave,
+            }));
     }
 
     /// Removes the specified peer from the mesh, returning true if it was present.
