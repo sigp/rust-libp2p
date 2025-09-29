@@ -155,9 +155,7 @@ pub enum Event {
         /// The partial message data.
         message: Option<Vec<u8>>,
         /// The partial message iwant.
-        iwant: Option<Vec<u8>>,
-        /// The partial message ihave.
-        ihave: Option<Vec<u8>>,
+        metadata: Option<Vec<u8>>,
     },
     /// A remote subscribed to a topic.
     Subscribed {
@@ -808,15 +806,12 @@ where
     ) -> Result<(), PublishError> {
         let topic_id = topic.into();
 
-        let available_parts = partial_message
-            .available_parts()
-            .map(|p| p.as_ref().to_vec());
-        let missing_parts = partial_message.missing_parts().map(|p| p.as_ref().to_vec());
+        let metadata = partial_message.parts_metadata().as_ref().to_vec();
+
         let group_id = partial_message.group_id().as_ref().to_vec();
 
         // TODO: should we construct a recipient list just for partials?
         let recipient_peers = self.get_publish_peers(&topic_id);
-        let mut publish_failed = true;
         for peer_id in recipient_peers.iter() {
             // TODO: this can be optimized, we are going to get the peer again on `send_message`
             let Some(peer) = &mut self.connected_peers.get_mut(peer_id) else {
@@ -829,7 +824,7 @@ where
             let peer_partial = peer_partials.entry(group_id.clone()).or_default();
 
             let Ok((message_data, rest_wanted)) = partial_message
-                .partial_message_bytes_from_metadata(&peer_partial.wanted)
+                .partial_message_bytes_from_metadata(&peer_partial.metadata)
                 .map(|(m, r)| (m.as_ref().to_vec(), r.map(|r| r.as_ref().to_vec())))
             else {
                 tracing::error!(peer = %peer_id, group_id = ?group_id,
@@ -840,10 +835,10 @@ where
 
             match rest_wanted {
                 // No new data to send peer.
-                Some(r) if r == peer_partial.wanted => {
+                Some(r) if r == peer_partial.metadata => {
                     continue;
                 }
-                Some(r) => peer_partial.wanted = r,
+                Some(r) => peer_partial.metadata = r,
                 // Peer partial is now complete
                 // remove it from the list
                 None => {
@@ -851,25 +846,19 @@ where
                 }
             };
 
-            let rpc = PartialMessage {
-                topic_id: topic_id.clone(),
-                group_id: group_id.clone(),
-                iwant: missing_parts.clone(),
-                ihave: available_parts.clone(),
-                message: Some(message_data),
-            };
-
-            if self.send_message(*peer_id, RpcOut::PartialMessage(rpc.clone())) {
-                publish_failed = false;
-            }
+            self.send_message(
+                *peer_id,
+                RpcOut::PartialMessage {
+                    message: message_data,
+                    metadata: metadata.clone(),
+                    group_id: group_id.clone(),
+                    topic_id: topic_id.clone(),
+                },
+            );
         }
 
         if recipient_peers.is_empty() {
             return Err(PublishError::NoPeersSubscribedToTopic);
-        }
-
-        if publish_failed {
-            return Err(PublishError::AllQueuesFull(recipient_peers.len()));
         }
 
         Ok(())
@@ -1673,17 +1662,12 @@ where
             .or_default();
 
         // Noop if the received partial is the same we already have.
-        if partial_message.ihave.as_ref() == Some(&peer_partial.has)
-            && partial_message.iwant.as_ref() == Some(&peer_partial.wanted)
-        {
+        if partial_message.metadata.as_ref() == Some(&peer_partial.metadata) {
             return;
         }
 
-        if let Some(ref iwant) = partial_message.iwant {
-            peer_partial.wanted = iwant.clone();
-        }
-        if let Some(ref ihave) = partial_message.ihave {
-            peer_partial.has = ihave.clone();
+        if let Some(ref metadata) = partial_message.metadata {
+            peer_partial.metadata = metadata.clone();
         }
 
         self.events
@@ -1692,8 +1676,7 @@ where
                 propagation_source: *peer_id,
                 group_id: partial_message.group_id,
                 message: partial_message.message,
-                iwant: partial_message.iwant,
-                ihave: partial_message.ihave,
+                metadata: partial_message.metadata,
             }));
     }
 

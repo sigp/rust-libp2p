@@ -667,9 +667,8 @@ impl<'a> From<&'a str> for EncMode {
 pub struct PartialMessagesExtension {
     pub topicID: Option<Vec<u8>>,
     pub groupID: Option<Vec<u8>>,
-    pub message: Option<gossipsub::pb::PartialMessage>,
-    pub iwant: Option<gossipsub::pb::PartialIWANT>,
-    pub ihave: Option<gossipsub::pb::PartialIHAVE>,
+    pub partialMessage: Option<Vec<u8>>,
+    pub partsMetadata: Option<Vec<u8>>,
 }
 
 impl<'a> MessageRead<'a> for PartialMessagesExtension {
@@ -679,9 +678,8 @@ impl<'a> MessageRead<'a> for PartialMessagesExtension {
             match r.next_tag(bytes) {
                 Ok(10) => msg.topicID = Some(r.read_bytes(bytes)?.to_owned()),
                 Ok(18) => msg.groupID = Some(r.read_bytes(bytes)?.to_owned()),
-                Ok(26) => msg.message = Some(r.read_message::<gossipsub::pb::PartialMessage>(bytes)?),
-                Ok(34) => msg.iwant = Some(r.read_message::<gossipsub::pb::PartialIWANT>(bytes)?),
-                Ok(42) => msg.ihave = Some(r.read_message::<gossipsub::pb::PartialIHAVE>(bytes)?),
+                Ok(26) => msg.partialMessage = Some(r.read_bytes(bytes)?.to_owned()),
+                Ok(34) => msg.partsMetadata = Some(r.read_bytes(bytes)?.to_owned()),
                 Ok(t) => { r.read_unknown(bytes, t)?; }
                 Err(e) => return Err(e),
             }
@@ -695,126 +693,15 @@ impl MessageWrite for PartialMessagesExtension {
         0
         + self.topicID.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
         + self.groupID.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
-        + self.message.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
-        + self.iwant.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
-        + self.ihave.as_ref().map_or(0, |m| 1 + sizeof_len((m).get_size()))
+        + self.partialMessage.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
+        + self.partsMetadata.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
     }
 
     fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
         if let Some(ref s) = self.topicID { w.write_with_tag(10, |w| w.write_bytes(&**s))?; }
         if let Some(ref s) = self.groupID { w.write_with_tag(18, |w| w.write_bytes(&**s))?; }
-        if let Some(ref s) = self.message { w.write_with_tag(26, |w| w.write_message(s))?; }
-        if let Some(ref s) = self.iwant { w.write_with_tag(34, |w| w.write_message(s))?; }
-        if let Some(ref s) = self.ihave { w.write_with_tag(42, |w| w.write_message(s))?; }
-        Ok(())
-    }
-}
-
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Debug, Default, PartialEq, Clone)]
-pub struct PartialMessage {
-    pub data: Option<Vec<u8>>,
-}
-
-impl<'a> MessageRead<'a> for PartialMessage {
-    fn from_reader(r: &mut BytesReader, bytes: &'a [u8]) -> Result<Self> {
-        let mut msg = Self::default();
-        while !r.is_eof() {
-            match r.next_tag(bytes) {
-                Ok(10) => msg.data = Some(r.read_bytes(bytes)?.to_owned()),
-                Ok(t) => { r.read_unknown(bytes, t)?; }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(msg)
-    }
-}
-
-impl MessageWrite for PartialMessage {
-    fn get_size(&self) -> usize {
-        0
-        + self.data.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
-    }
-
-    fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
-        if let Some(ref s) = self.data { w.write_with_tag(10, |w| w.write_bytes(&**s))?; }
-        Ok(())
-    }
-}
-
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Debug, Default, PartialEq, Clone)]
-pub struct PartialIWANT {
-    pub metadata: Option<Vec<u8>>,
-}
-
-impl<'a> MessageRead<'a> for PartialIWANT {
-    fn from_reader(r: &mut BytesReader, bytes: &'a [u8]) -> Result<Self> {
-        let mut msg = Self::default();
-        while !r.is_eof() {
-            match r.next_tag(bytes) {
-                Ok(10) => msg.metadata = Some(r.read_bytes(bytes)?.to_owned()),
-                Ok(t) => { r.read_unknown(bytes, t)?; }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(msg)
-    }
-}
-
-impl MessageWrite for PartialIWANT {
-    fn get_size(&self) -> usize {
-        0
-        + self.metadata.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
-    }
-
-    fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
-        if let Some(ref s) = self.metadata { w.write_with_tag(10, |w| w.write_bytes(&**s))?; }
-        Ok(())
-    }
-}
-
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Debug, Default, PartialEq, Clone)]
-pub struct PartialIDONTWANT { }
-
-impl<'a> MessageRead<'a> for PartialIDONTWANT {
-    fn from_reader(r: &mut BytesReader, _: &[u8]) -> Result<Self> {
-        r.read_to_end();
-        Ok(Self::default())
-    }
-}
-
-impl MessageWrite for PartialIDONTWANT { }
-
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Debug, Default, PartialEq, Clone)]
-pub struct PartialIHAVE {
-    pub metadata: Option<Vec<u8>>,
-}
-
-impl<'a> MessageRead<'a> for PartialIHAVE {
-    fn from_reader(r: &mut BytesReader, bytes: &'a [u8]) -> Result<Self> {
-        let mut msg = Self::default();
-        while !r.is_eof() {
-            match r.next_tag(bytes) {
-                Ok(10) => msg.metadata = Some(r.read_bytes(bytes)?.to_owned()),
-                Ok(t) => { r.read_unknown(bytes, t)?; }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(msg)
-    }
-}
-
-impl MessageWrite for PartialIHAVE {
-    fn get_size(&self) -> usize {
-        0
-        + self.metadata.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
-    }
-
-    fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
-        if let Some(ref s) = self.metadata { w.write_with_tag(10, |w| w.write_bytes(&**s))?; }
+        if let Some(ref s) = self.partialMessage { w.write_with_tag(26, |w| w.write_bytes(&**s))?; }
+        if let Some(ref s) = self.partsMetadata { w.write_with_tag(34, |w| w.write_bytes(&**s))?; }
         Ok(())
     }
 }

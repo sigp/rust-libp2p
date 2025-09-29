@@ -75,7 +75,7 @@ impl Queue {
             | RpcOut::Forward { .. }
             | RpcOut::IHave(_)
             | RpcOut::Extensions(_)
-            | RpcOut::PartialMessage(_)
+            | RpcOut::PartialMessage { .. }
             | RpcOut::TestExtension
             | RpcOut::IWant(_) => self.non_priority.try_push(message),
         }

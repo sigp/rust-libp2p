@@ -29,15 +29,16 @@ use libp2p_identity::{PeerId, PublicKey};
 use libp2p_swarm::StreamProtocol;
 use quick_protobuf::{MessageWrite, Writer};
 
+#[cfg(feature = "partial_messages")]
+use crate::types::PartialMessage;
 use crate::{
     config::ValidationMode,
     handler::HandlerEvent,
     rpc_proto::proto,
     topic::TopicHash,
     types::{
-        ControlAction, Extensions, Graft, IDontWant, IHave, IWant, MessageId, PartialMessage,
-        PeerInfo, PeerKind, Prune, RawMessage, RpcIn, Subscription, SubscriptionAction,
-        TestExtension,
+        ControlAction, Extensions, Graft, IDontWant, IHave, IWant, MessageId, PeerInfo, PeerKind,
+        Prune, RawMessage, RpcIn, Subscription, SubscriptionAction, TestExtension,
     },
     ValidationError,
 };
@@ -576,6 +577,7 @@ impl Decoder for GossipsubCodec {
             control_msgs.push(ControlAction::Extensions(extensions_msg));
         }
 
+        #[cfg(feature = "partial_messages")]
         let partial_message = rpc.partial.and_then(|partial_proto| {
             // Extract topic and group context
             let Some(topic_id_bytes) = partial_proto.topicID else {
@@ -592,9 +594,8 @@ impl Decoder for GossipsubCodec {
             Some(PartialMessage {
                 topic_id,
                 group_id,
-                iwant: partial_proto.iwant.and_then(|iwant| iwant.metadata),
-                ihave: partial_proto.ihave.and_then(|ihave| ihave.metadata),
-                message: partial_proto.message.and_then(|message| message.data),
+                metadata: partial_proto.partsMetadata,
+                message: partial_proto.partialMessage,
             })
         });
 
@@ -615,6 +616,7 @@ impl Decoder for GossipsubCodec {
                     .collect(),
                 control_msgs,
                 test_extension: rpc.testExtension.map(|_test_extension| TestExtension {}),
+                #[cfg(feature = "partial_messages")]
                 partial_message,
             },
             invalid_messages,

@@ -114,10 +114,8 @@ pub(crate) struct PeerDetails {
 #[cfg(feature = "partial_messages")]
 #[derive(Debug)]
 pub(crate) struct PartialData {
-    /// The remaining metada needed by the peer
-    pub(crate) wanted: Vec<u8>,
-    /// The last partial IHAVE received from the peer.
-    pub(crate) has: Vec<u8>,
+    /// The current peer partial metadata.
+    pub(crate) metadata: Vec<u8>,
     /// The remaining heartbeats for this message to be deleted.
     pub(crate) ttl: usize,
 }
@@ -126,8 +124,7 @@ pub(crate) struct PartialData {
 impl Default for PartialData {
     fn default() -> Self {
         Self {
-            wanted: Default::default(),
-            has: Default::default(),
+            metadata: Default::default(),
             ttl: 5,
         }
     }
@@ -335,17 +332,16 @@ pub struct IDontWant {
 }
 
 /// A received partial message.
+#[cfg(feature = "partial_messages")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PartialMessage {
     /// The topic ID this partial message belongs to.
     pub topic_id: TopicHash,
     /// The group ID that identifies the complete logical message.
     pub group_id: Vec<u8>,
-    /// The partial parts we want.
-    pub iwant: Option<Vec<u8>>,
-    /// The partial parts we have.
-    pub ihave: Option<Vec<u8>>,
-    /// The partial message itself
+    /// The partial metadata we have and we want.
+    pub metadata: Option<Vec<u8>>,
+    /// The partial message itself.
     pub message: Option<Vec<u8>>,
 }
 
@@ -396,7 +392,16 @@ pub enum RpcOut {
     /// Send a test extension message.
     TestExtension,
     /// Send a partial messages extension.
-    PartialMessage(PartialMessage),
+    PartialMessage {
+        /// The group ID that identifies the complete logical message.
+        group_id: Vec<u8>,
+        /// The topic ID this partial message belongs to.
+        topic_id: TopicHash,
+        /// The partial message itself.
+        message: Vec<u8>,
+        /// The partial metadata we have and want.
+        metadata: Vec<u8>,
+    },
 }
 
 impl RpcOut {
@@ -583,13 +588,12 @@ impl From<RpcOut> for proto::RPC {
                 testExtension: Some(proto::TestExtension {}),
                 partial: None,
             },
-            RpcOut::PartialMessage(PartialMessage {
+            RpcOut::PartialMessage {
                 topic_id,
                 group_id,
-                iwant,
-                ihave,
+                metadata,
                 message,
-            }) => proto::RPC {
+            } => proto::RPC {
                 subscriptions: vec![],
                 publish: vec![],
                 control: None,
@@ -597,13 +601,8 @@ impl From<RpcOut> for proto::RPC {
                 partial: Some(proto::PartialMessagesExtension {
                     topicID: Some(topic_id.as_str().as_bytes().to_vec()),
                     groupID: Some(group_id),
-                    message: message.map(|data| proto::PartialMessage { data: Some(data) }),
-                    iwant: iwant.map(|metadata| proto::PartialIWANT {
-                        metadata: Some(metadata),
-                    }),
-                    ihave: ihave.map(|metadata| proto::PartialIHAVE {
-                        metadata: Some(metadata),
-                    }),
+                    partialMessage: Some(message),
+                    partsMetadata: Some(metadata),
                 }),
             },
         }
@@ -622,6 +621,7 @@ pub struct RpcIn {
     /// Gossipsub test extension.
     pub test_extension: Option<TestExtension>,
     /// Partial messages extension.
+    #[cfg(feature = "partial_messages")]
     pub partial_message: Option<PartialMessage>,
 }
 
@@ -637,6 +637,7 @@ impl fmt::Debug for RpcIn {
         if !self.control_msgs.is_empty() {
             b.field("control_msgs", &self.control_msgs);
         }
+        #[cfg(feature = "partial_messages")]
         b.field("partial_messages", &self.partial_message);
 
         b.finish()

@@ -40,25 +40,13 @@ pub trait Partial {
     /// during reconstruction.
     fn group_id(&self) -> impl AsRef<[u8]>;
 
-    /// Returns metadata describing which parts of the message are missing.
+    /// Returns metadata describing which parts of the message are available and which parts we want.
     ///
     /// This metadata is application-defined and should encode information about
-    /// what parts need to be requested from other peers. Returns `None` if the
-    /// message is complete or if no specific parts can be identified as missing.
     ///
-    /// The returned bytes will be sent in PartialIWANT messages to request
-    /// missing parts from peers.
-    fn missing_parts(&self) -> Option<impl AsRef<[u8]>>;
-
-    /// Returns metadata describing which parts of the message are available.
-    ///
-    /// This metadata is application-defined and should encode information about
-    /// what parts this peer can provide to others. Returns `None` if no parts
-    /// are available.
-    ///
-    /// The returned bytes will be sent in PartialIHAVE messages to advertise
-    /// available parts to peers.
-    fn available_parts(&self) -> Option<impl AsRef<[u8]>>;
+    /// The returned bytes will be sent in partsMetadata field to advertise
+    /// available and wanted parts to peers.
+    fn parts_metadata(&self) -> impl AsRef<[u8]>;
 
     /// Generates partial message bytes from the given metadata.
     ///
