@@ -9,6 +9,10 @@ message RPC {
 	message SubOpts {
 		optional bool subscribe = 1; // subscribe or unsubscribe
 		optional string topic_id = 2;
+        // Used with Partial Messages extension.
+        // If set, the receiver of this message MUST send partial messages to the
+        // sender instead of full messages.
+        optional bool partial = 3;
 	}
 
 	optional ControlMessage control = 3;

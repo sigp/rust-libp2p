@@ -447,6 +447,7 @@ impl From<RpcOut> for proto::RPC {
                 subscriptions: vec![proto::SubOpts {
                     subscribe: Some(true),
                     topic_id: Some(topic.into_string()),
+                    partial: None,
                 }],
                 control: None,
                 testExtension: None,
@@ -457,6 +458,7 @@ impl From<RpcOut> for proto::RPC {
                 subscriptions: vec![proto::SubOpts {
                     subscribe: Some(false),
                     topic_id: Some(topic.into_string()),
+                    partial: None,
                 }],
                 control: None,
                 testExtension: None,
