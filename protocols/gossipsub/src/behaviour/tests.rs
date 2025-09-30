@@ -1082,15 +1082,18 @@ fn test_get_random_peers() {
                 kind: PeerKind::Gossipsubv1_1,
                 connections: vec![ConnectionId::new_unchecked(0)],
                 outbound: false,
-                topics: topics.iter().map(|t| {
-                let mut st = SubscribedTopic::default();
-                st.topic = t.clone();
-                #[cfg(feature = "partial_messages")]
-                {
-                    st.partial = false;
-                }
-                st
-            }).collect(),
+                topics: topics
+                    .iter()
+                    .map(|t| {
+                        let mut st = SubscribedTopic::default();
+                        st.topic = t.clone();
+                        #[cfg(feature = "partial_messages")]
+                        {
+                            st.partial = false;
+                        }
+                        st
+                    })
+                    .collect(),
                 messages: Queue::new(gs.config.connection_handler_queue_len()),
                 dont_send: LinkedHashMap::new(),
                 extensions: None,
@@ -1100,26 +1103,26 @@ fn test_get_random_peers() {
         );
     }
 
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, false, |_| true);
     assert_eq!(random_peers.len(), 5, "Expected 5 peers to be returned");
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 30, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 30, false, |_| true);
     assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
     assert!(
         random_peers == peers.iter().cloned().collect(),
         "Expected no shuffling"
     );
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 20, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 20, false, |_| true);
     assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
     assert!(
         random_peers == peers.iter().cloned().collect(),
         "Expected no shuffling"
     );
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 0, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 0, false, |_| true);
     assert!(random_peers.is_empty(), "Expected 0 peers to be returned");
     // test the filter
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_| false);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, false, |_| false);
     assert!(random_peers.is_empty(), "Expected 0 peers to be returned");
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 10, {
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 10, false, {
         |peer| peers.contains(peer)
     });
     assert!(random_peers.len() == 10, "Expected 10 peers to be returned");
@@ -5628,15 +5631,18 @@ fn test_all_queues_full() {
             kind: PeerKind::Gossipsubv1_1,
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
-            topics: topics.iter().map(|t| {
-                let mut st = SubscribedTopic::default();
-                st.topic = t.clone();
-                #[cfg(feature = "partial_messages")]
-                {
-                    st.partial = false;
-                }
-                st
-            }).collect(),
+            topics: topics
+                .iter()
+                .map(|t| {
+                    let mut st = SubscribedTopic::default();
+                    st.topic = t.clone();
+                    #[cfg(feature = "partial_messages")]
+                    {
+                        st.partial = false;
+                    }
+                    st
+                })
+                .collect(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
             extensions: None,
@@ -5676,15 +5682,18 @@ fn test_slow_peer_returns_failed_publish() {
             kind: PeerKind::Gossipsubv1_1,
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
-            topics: topics.iter().map(|t| {
-                let mut st = SubscribedTopic::default();
-                st.topic = t.clone();
-                #[cfg(feature = "partial_messages")]
-                {
-                    st.partial = false;
-                }
-                st
-            }).collect(),
+            topics: topics
+                .iter()
+                .map(|t| {
+                    let mut st = SubscribedTopic::default();
+                    st.topic = t.clone();
+                    #[cfg(feature = "partial_messages")]
+                    {
+                        st.partial = false;
+                    }
+                    st
+                })
+                .collect(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
             extensions: None,
@@ -5700,15 +5709,18 @@ fn test_slow_peer_returns_failed_publish() {
             kind: PeerKind::Gossipsubv1_1,
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
-            topics: topics.iter().map(|t| {
-                let mut st = SubscribedTopic::default();
-                st.topic = t.clone();
-                #[cfg(feature = "partial_messages")]
-                {
-                    st.partial = false;
-                }
-                st
-            }).collect(),
+            topics: topics
+                .iter()
+                .map(|t| {
+                    let mut st = SubscribedTopic::default();
+                    st.topic = t.clone();
+                    #[cfg(feature = "partial_messages")]
+                    {
+                        st.partial = false;
+                    }
+                    st
+                })
+                .collect(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
             extensions: None,
@@ -5763,15 +5775,18 @@ fn test_slow_peer_returns_failed_ihave_handling() {
             kind: PeerKind::Gossipsubv1_1,
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
-            topics: topics.iter().map(|t| {
-                let mut st = SubscribedTopic::default();
-                st.topic = t.clone();
-                #[cfg(feature = "partial_messages")]
-                {
-                    st.partial = false;
-                }
-                st
-            }).collect(),
+            topics: topics
+                .iter()
+                .map(|t| {
+                    let mut st = SubscribedTopic::default();
+                    st.topic = t.clone();
+                    #[cfg(feature = "partial_messages")]
+                    {
+                        st.partial = false;
+                    }
+                    st
+                })
+                .collect(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
             extensions: None,
@@ -5791,15 +5806,18 @@ fn test_slow_peer_returns_failed_ihave_handling() {
             kind: PeerKind::Gossipsubv1_1,
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
-            topics: topics.iter().map(|t| {
-                let mut st = SubscribedTopic::default();
-                st.topic = t.clone();
-                #[cfg(feature = "partial_messages")]
-                {
-                    st.partial = false;
-                }
-                st
-            }).collect(),
+            topics: topics
+                .iter()
+                .map(|t| {
+                    let mut st = SubscribedTopic::default();
+                    st.topic = t.clone();
+                    #[cfg(feature = "partial_messages")]
+                    {
+                        st.partial = false;
+                    }
+                    st
+                })
+                .collect(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
             extensions: None,
@@ -5890,15 +5908,18 @@ fn test_slow_peer_returns_failed_iwant_handling() {
             kind: PeerKind::Gossipsubv1_1,
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
-            topics: topics.iter().map(|t| {
-                let mut st = SubscribedTopic::default();
-                st.topic = t.clone();
-                #[cfg(feature = "partial_messages")]
-                {
-                    st.partial = false;
-                }
-                st
-            }).collect(),
+            topics: topics
+                .iter()
+                .map(|t| {
+                    let mut st = SubscribedTopic::default();
+                    st.topic = t.clone();
+                    #[cfg(feature = "partial_messages")]
+                    {
+                        st.partial = false;
+                    }
+                    st
+                })
+                .collect(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
             extensions: None,
@@ -5918,15 +5939,18 @@ fn test_slow_peer_returns_failed_iwant_handling() {
             kind: PeerKind::Gossipsubv1_1,
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
-            topics: topics.iter().map(|t| {
-                let mut st = SubscribedTopic::default();
-                st.topic = t.clone();
-                #[cfg(feature = "partial_messages")]
-                {
-                    st.partial = false;
-                }
-                st
-            }).collect(),
+            topics: topics
+                .iter()
+                .map(|t| {
+                    let mut st = SubscribedTopic::default();
+                    st.topic = t.clone();
+                    #[cfg(feature = "partial_messages")]
+                    {
+                        st.partial = false;
+                    }
+                    st
+                })
+                .collect(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
             extensions: None,
@@ -5997,15 +6021,18 @@ fn test_slow_peer_returns_failed_forward() {
             kind: PeerKind::Gossipsubv1_1,
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
-            topics: topics.iter().map(|t| {
-                let mut st = SubscribedTopic::default();
-                st.topic = t.clone();
-                #[cfg(feature = "partial_messages")]
-                {
-                    st.partial = false;
-                }
-                st
-            }).collect(),
+            topics: topics
+                .iter()
+                .map(|t| {
+                    let mut st = SubscribedTopic::default();
+                    st.topic = t.clone();
+                    #[cfg(feature = "partial_messages")]
+                    {
+                        st.partial = false;
+                    }
+                    st
+                })
+                .collect(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
             extensions: None,
@@ -6025,15 +6052,18 @@ fn test_slow_peer_returns_failed_forward() {
             kind: PeerKind::Gossipsubv1_1,
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
-            topics: topics.iter().map(|t| {
-                let mut st = SubscribedTopic::default();
-                st.topic = t.clone();
-                #[cfg(feature = "partial_messages")]
-                {
-                    st.partial = false;
-                }
-                st
-            }).collect(),
+            topics: topics
+                .iter()
+                .map(|t| {
+                    let mut st = SubscribedTopic::default();
+                    st.topic = t.clone();
+                    #[cfg(feature = "partial_messages")]
+                    {
+                        st.partial = false;
+                    }
+                    st
+                })
+                .collect(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
             extensions: None,
@@ -6109,15 +6139,18 @@ fn test_slow_peer_is_downscored_on_publish() {
             kind: PeerKind::Gossipsubv1_1,
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
-            topics: topics.iter().map(|t| {
-                let mut st = SubscribedTopic::default();
-                st.topic = t.clone();
-                #[cfg(feature = "partial_messages")]
-                {
-                    st.partial = false;
-                }
-                st
-            }).collect(),
+            topics: topics
+                .iter()
+                .map(|t| {
+                    let mut st = SubscribedTopic::default();
+                    st.topic = t.clone();
+                    #[cfg(feature = "partial_messages")]
+                    {
+                        st.partial = false;
+                    }
+                    st
+                })
+                .collect(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
             extensions: None,
@@ -6134,15 +6167,18 @@ fn test_slow_peer_is_downscored_on_publish() {
             kind: PeerKind::Gossipsubv1_1,
             connections: vec![ConnectionId::new_unchecked(0)],
             outbound: false,
-            topics: topics.iter().map(|t| {
-                let mut st = SubscribedTopic::default();
-                st.topic = t.clone();
-                #[cfg(feature = "partial_messages")]
-                {
-                    st.partial = false;
-                }
-                st
-            }).collect(),
+            topics: topics
+                .iter()
+                .map(|t| {
+                    let mut st = SubscribedTopic::default();
+                    st.topic = t.clone();
+                    #[cfg(feature = "partial_messages")]
+                    {
+                        st.partial = false;
+                    }
+                    st
+                })
+                .collect(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
             extensions: None,
