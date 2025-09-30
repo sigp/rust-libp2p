@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use web_time::Instant;
 
-use crate::{queue::Queue, rpc_proto::proto, TopicHash};
+use crate::{queue::Queue, rpc_proto::proto, topic::SubscribedTopic, TopicHash};
 
 /// Messages that have expired while attempting to be sent to a peer.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -100,7 +100,7 @@ pub(crate) struct PeerDetails {
     /// Its current connections.
     pub(crate) connections: Vec<ConnectionId>,
     /// Subscribed topics.
-    pub(crate) topics: BTreeSet<TopicHash>,
+    pub(crate) topics: BTreeSet<SubscribedTopic>,
     /// Don't send messages.
     pub(crate) dont_send: LinkedHashMap<MessageId, Instant>,
     /// Peer Partial messages.
@@ -252,6 +252,9 @@ pub struct Subscription {
     pub action: SubscriptionAction,
     /// The topic from which to subscribe or unsubscribe.
     pub topic_hash: TopicHash,
+    /// Peer only wants to receive partial messages instead of full messages.
+    #[cfg(feature = "partial_messages")]
+    pub partial: bool,
 }
 
 /// Action that a subscription wants to perform.

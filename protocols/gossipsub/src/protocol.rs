@@ -612,6 +612,8 @@ impl Decoder for GossipsubCodec {
                             SubscriptionAction::Unsubscribe
                         },
                         topic_hash: TopicHash::from_raw(sub.topic_id.unwrap_or_default()),
+                        #[cfg(feature = "partial_messages")]
+                        partial: sub.partial.unwrap_or_default(),
                     })
                     .collect(),
                 control_msgs,
