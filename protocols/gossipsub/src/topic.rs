@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-use std::{borrow::Borrow, fmt};
+use std::fmt;
 
 use base64::prelude::*;
 use quick_protobuf::Writer;
@@ -62,20 +62,6 @@ impl Hasher for Sha256Hash {
             .expect("Encoding to succeed");
         let hash = BASE64_STANDARD.encode(Sha256::digest(&bytes));
         TopicHash { hash }
-    }
-}
-
-/// Topic subscribed by a peer.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct SubscribedTopic {
-    pub(crate) topic: TopicHash,
-    #[cfg(feature = "partial_messages")]
-    pub(crate) partial: bool,
-}
-
-impl Borrow<TopicHash> for SubscribedTopic {
-    fn borrow(&self) -> &TopicHash {
-        &self.topic
     }
 }
 

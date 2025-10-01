@@ -65,7 +65,7 @@ use crate::{
     rpc_proto::proto,
     subscription_filter::{AllowAllSubscriptionFilter, TopicSubscriptionFilter},
     time_cache::DuplicateCache,
-    topic::{Hasher, SubscribedTopic, Topic, TopicHash},
+    topic::{Hasher, Topic, TopicHash},
     transform::{DataTransform, IdentityTransform},
     types::{
         ControlAction, Extensions, Graft, IDontWant, IHave, IWant, Message, MessageAcceptance,
@@ -509,7 +509,7 @@ where
     pub fn all_peers(&self) -> impl Iterator<Item = (&PeerId, Vec<&TopicHash>)> {
         self.connected_peers
             .iter()
-            .map(|(peer_id, peer)| (peer_id, peer.topics.iter().map(|s| &s.topic).collect()))
+            .map(|(peer_id, peer)| (peer_id, peer.topics.iter().collect()))
     }
 
     /// Lists all known peers and their associated protocol.
@@ -589,11 +589,10 @@ where
         let peers_on_topic = self
             .connected_peers
             .iter()
-            .filter_map(|(peer_id, peer)| {
-                let _subscribed_topic = peer.topics.get(topic_hash)?;
+            .filter_map(|(peer_id, _peer)| {
                 #[cfg(feature = "partial_messages")]
                 {
-                    if partial && _subscribed_topic.partial {
+                    if partial && _peer.partial_only_topics.contains(topic_hash) {
                         return None;
                     }
                 }
@@ -1473,9 +1472,7 @@ where
         // For each topic, if a peer has grafted us, then we necessarily must be in their mesh
         // and they must be subscribed to the topic. Ensure we have recorded the mapping.
         for topic in &topics {
-            let mut subscribed = SubscribedTopic::default();
-            subscribed.topic = topic.clone();
-            if connected_peer.topics.insert(subscribed) {
+            if connected_peer.topics.insert(topic.clone()) {
                 #[cfg(feature = "metrics")]
                 if let Some(m) = self.metrics.as_mut() {
                     m.inc_topic_peers(topic);
@@ -2091,10 +2088,10 @@ where
         // Notify the application about the subscription, after the grafts are sent.
         let mut application_event = Vec::new();
 
-        let filtered_topics = match self.subscription_filter.filter_incoming_subscriptions(
-            subscriptions,
-            &peer.topics.iter().map(|s| s.topic.clone()).collect(),
-        ) {
+        let filtered_topics = match self
+            .subscription_filter
+            .filter_incoming_subscriptions(subscriptions, &peer.topics.iter().cloned().collect())
+        {
             Ok(topics) => topics,
             Err(s) => {
                 tracing::error!(
@@ -2112,13 +2109,13 @@ where
 
             match subscription.action {
                 SubscriptionAction::Subscribe => {
-                    let mut subscribed_topic = SubscribedTopic::default();
-                    subscribed_topic.topic = topic_hash.clone();
                     #[cfg(feature = "partial_messages")]
                     {
-                        subscribed_topic.partial = subscription.partial;
+                        if subscription.partial {
+                            peer.partial_only_topics.insert(topic_hash.clone());
+                        }
                     }
-                    if peer.topics.insert(subscribed_topic) {
+                    if peer.topics.insert(topic_hash.clone()) {
                         tracing::debug!(
                             peer=%propagation_source,
                             topic=%topic_hash,
@@ -3190,8 +3187,8 @@ where
                 // If there are more connections and this peer is in a mesh, inform the first
                 // connection handler.
                 if !peer.connections.is_empty() {
-                    for subscribed_topic in &peer.topics {
-                        if let Some(mesh_peers) = self.mesh.get(&subscribed_topic.topic) {
+                    for topic in &peer.topics {
+                        if let Some(mesh_peers) = self.mesh.get(&topic) {
                             if mesh_peers.contains(&peer_id) {
                                 self.events.push_back(ToSwarm::NotifyHandler {
                                     peer_id,
@@ -3213,27 +3210,27 @@ where
             };
 
             // remove peer from all mappings
-            for subscribed_topic in &connected_peer.topics {
+            for topic in &connected_peer.topics {
                 // check the mesh for the topic
-                if let Some(mesh_peers) = self.mesh.get_mut(&subscribed_topic.topic) {
+                if let Some(mesh_peers) = self.mesh.get_mut(&topic) {
                     // check if the peer is in the mesh and remove it
                     if mesh_peers.remove(&peer_id) {
                         #[cfg(feature = "metrics")]
                         if let Some(m) = self.metrics.as_mut() {
-                            m.peers_removed(&subscribed_topic.topic, Churn::Dc, 1);
-                            m.set_mesh_peers(&subscribed_topic.topic, mesh_peers.len());
+                            m.peers_removed(&topic, Churn::Dc, 1);
+                            m.set_mesh_peers(&topic, mesh_peers.len());
                         }
                     };
                 }
 
                 #[cfg(feature = "metrics")]
                 if let Some(m) = self.metrics.as_mut() {
-                    m.dec_topic_peers(&subscribed_topic.topic);
+                    m.dec_topic_peers(&topic);
                 }
 
                 // remove from fanout
                 self.fanout
-                    .get_mut(&subscribed_topic.topic)
+                    .get_mut(&topic)
                     .map(|peers| peers.remove(&peer_id));
             }
 
@@ -3333,6 +3330,8 @@ where
             extensions: None,
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         });
         // Add the new connection
         connected_peer.connections.push(connection_id);
@@ -3378,6 +3377,8 @@ where
             extensions: None,
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         });
         // Add the new connection
         connected_peer.connections.push(connection_id);
@@ -3662,9 +3663,9 @@ fn peer_added_to_mesh(
     };
 
     if let Some(peer) = connections.get(&peer_id) {
-        for subscribed_topic in &peer.topics {
-            if !new_topics.contains(&&subscribed_topic.topic) {
-                if let Some(mesh_peers) = mesh.get(&subscribed_topic.topic) {
+        for topic in &peer.topics {
+            if !new_topics.contains(&topic) {
+                if let Some(mesh_peers) = mesh.get(&topic) {
                     if mesh_peers.contains(&peer_id) {
                         // the peer is already in a mesh for another topic
                         return;
@@ -3704,9 +3705,9 @@ fn peer_removed_from_mesh(
     };
 
     if let Some(peer) = connections.get(&peer_id) {
-        for subscribed_topic in &peer.topics {
-            if &subscribed_topic.topic != old_topic {
-                if let Some(mesh_peers) = mesh.get(&subscribed_topic.topic) {
+        for topic in &peer.topics {
+            if topic != old_topic {
+                if let Some(mesh_peers) = mesh.get(&topic) {
                     if mesh_peers.contains(&peer_id) {
                         // the peer exists in another mesh still
                         return;
@@ -3739,10 +3740,9 @@ fn get_random_peers_dynamic(
     let mut gossip_peers = connected_peers
         .iter()
         .filter_map(|(peer_id, peer)| {
-            let subscribed_topic = peer.topics.get(topic_hash)?;
             #[cfg(feature = "partial_messages")]
             {
-                if partial && subscribed_topic.partial {
+                if partial && peer.partial_only_topics.contains(topic_hash) {
                     return None;
                 }
             }
