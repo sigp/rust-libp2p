@@ -379,7 +379,11 @@ pub enum RpcOut {
         timeout: Delay,
     },
     /// Subscribe a topic.
-    Subscribe(TopicHash),
+    Subscribe {
+        topic: TopicHash,
+        #[cfg(feature = "partial_messages")]
+        partial_only: bool,
+    },
     /// Unsubscribe a topic.
     Unsubscribe(TopicHash),
     /// Send a GRAFT control message.
@@ -421,7 +425,7 @@ impl RpcOut {
     pub(crate) fn priority(&self) -> bool {
         matches!(
             self,
-            RpcOut::Subscribe(_)
+            RpcOut::Subscribe { .. }
                 | RpcOut::Unsubscribe(_)
                 | RpcOut::Graft(_)
                 | RpcOut::Prune(_)
@@ -448,12 +452,19 @@ impl From<RpcOut> for proto::RPC {
                 testExtension: None,
                 partial: None,
             },
-            RpcOut::Subscribe(topic) => proto::RPC {
+            RpcOut::Subscribe {
+                topic,
+                #[cfg(feature = "partial_messages")]
+                partial_only,
+            } => proto::RPC {
                 publish: Vec::new(),
                 subscriptions: vec![proto::SubOpts {
                     subscribe: Some(true),
                     topic_id: Some(topic.into_string()),
+                    #[cfg(not(feature = "partial_messages"))]
                     partial: None,
+                    #[cfg(feature = "partial_messages")]
+                    partial: Some(partial_only),
                 }],
                 control: None,
                 testExtension: None,

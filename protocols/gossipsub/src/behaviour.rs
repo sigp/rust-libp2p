@@ -303,6 +303,10 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     /// Overlay network of connected peers - Maps topics to connected gossipsub peers.
     mesh: HashMap<TopicHash, BTreeSet<PeerId>>,
 
+    /// Partial only subscribed topics.
+    #[cfg(feature = "partial_messages")]
+    partial_only_topics: BTreeSet<TopicHash>,
+
     /// Map of topics to list of peers that we publish to, but don't subscribe to.
     fanout: HashMap<TopicHash, BTreeSet<PeerId>>,
 
@@ -466,6 +470,8 @@ where
             data_transform,
             failed_messages: Default::default(),
             gossip_promises: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         })
     }
 
@@ -529,7 +535,11 @@ where
     ///
     /// Returns [`Ok(true)`] if the subscription worked. Returns [`Ok(false)`] if we were already
     /// subscribed.
-    pub fn subscribe<H: Hasher>(&mut self, topic: &Topic<H>) -> Result<bool, SubscriptionError> {
+    pub fn subscribe<H: Hasher>(
+        &mut self,
+        topic: &Topic<H>,
+        #[cfg(feature = "partial_messages")] partial_only: bool,
+    ) -> Result<bool, SubscriptionError> {
         let topic_hash = topic.hash();
         if !self.subscription_filter.can_subscribe(&topic_hash) {
             return Err(SubscriptionError::NotAllowed);
@@ -543,13 +553,24 @@ where
         // send subscription request to all peers
         for peer_id in self.connected_peers.keys().copied().collect::<Vec<_>>() {
             tracing::debug!(%peer_id, "Sending SUBSCRIBE to peer");
-            let event = RpcOut::Subscribe(topic_hash.clone());
+            let event = RpcOut::Subscribe {
+                topic: topic_hash.clone(),
+                #[cfg(feature = "partial_messages")]
+                partial_only,
+            };
             self.send_message(peer_id, event);
         }
 
         // call JOIN(topic)
         // this will add new peers to the mesh for the topic
         self.join(&topic_hash);
+        #[cfg(feature = "partial_messages")]
+        {
+            if partial_only {
+                self.partial_only_topics.insert(topic_hash.clone());
+            }
+        }
+
         tracing::debug!(%topic, "Subscribed to topic");
         Ok(true)
     }
@@ -576,6 +597,10 @@ where
         // call LEAVE(topic)
         // this will remove the topic from the mesh
         self.leave(&topic_hash);
+        #[cfg(feature = "partial_messages")]
+        {
+            self.partial_only_topics.insert(topic_hash.clone());
+        }
 
         tracing::debug!(topic=%topic_hash, "Unsubscribed from topic");
         true
@@ -589,15 +614,17 @@ where
         let peers_on_topic = self
             .connected_peers
             .iter()
-            .filter_map(|(peer_id, _peer)| {
+            .filter(|(_, peer)| {
                 #[cfg(feature = "partial_messages")]
                 {
-                    if partial && _peer.partial_only_topics.contains(topic_hash) {
-                        return None;
+                    if partial && peer.partial_only_topics.contains(topic_hash) {
+                        return false;
                     }
                 }
-                Some(peer_id)
+                let _ = peer;
+                true
             })
+            .map(|(peer_id, _)| peer_id)
             .peekable();
 
         let mut recipient_peers = HashSet::new();
@@ -3147,7 +3174,14 @@ where
         tracing::debug!(peer=%peer_id, "New peer connected");
         // We need to send our subscriptions to the newly-connected node.
         for topic_hash in self.mesh.clone().into_keys() {
-            self.send_message(peer_id, RpcOut::Subscribe(topic_hash));
+            self.send_message(
+                peer_id,
+                RpcOut::Subscribe {
+                    topic: topic_hash.clone(),
+                    #[cfg(feature = "partial_messages")]
+                    partial_only: self.partial_only_topics.contains(&topic_hash),
+                },
+            );
         }
     }
 
