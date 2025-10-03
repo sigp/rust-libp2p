@@ -147,6 +147,7 @@ pub enum Event {
     /// A new partial message has been received.
     #[cfg(feature = "partial_messages")]
     Partial {
+        /// The topic of the partial message.
         topic_id: TopicHash,
         /// The peer that forwarded us this message.
         propagation_source: PeerId,
@@ -154,7 +155,7 @@ pub enum Event {
         group_id: Vec<u8>,
         /// The partial message data.
         message: Option<Vec<u8>>,
-        /// The partial message iwant.
+        /// The partial message metadata, what peer has and wants.
         metadata: Option<Vec<u8>>,
     },
     /// A remote subscribed to a topic.
@@ -845,11 +846,8 @@ where
     ) -> Result<(), PublishError> {
         let topic_id = topic.into();
 
-        let metadata = partial_message.parts_metadata().as_ref().to_vec();
-
         let group_id = partial_message.group_id().as_ref().to_vec();
 
-        // TODO: should we construct a recipient list just for partials?
         let recipient_peers = self.get_publish_peers(&topic_id, false);
         for peer_id in recipient_peers.iter() {
             // TODO: this can be optimized, we are going to get the peer again on `send_message`
@@ -863,7 +861,7 @@ where
             let peer_partial = peer_partials.entry(group_id.clone()).or_default();
 
             let Ok((message_data, rest_wanted)) = partial_message
-                .partial_message_bytes_from_metadata(&peer_partial.metadata)
+                .partial_message_bytes_from_metadata(peer_partial.metadata.as_ref())
                 .map(|(m, r)| (m.as_ref().to_vec(), r.map(|r| r.as_ref().to_vec())))
             else {
                 tracing::error!(peer = %peer_id, group_id = ?group_id,
@@ -873,11 +871,13 @@ where
             };
 
             match rest_wanted {
-                // No new data to send peer.
-                Some(r) if r == peer_partial.metadata => {
-                    continue;
+                r @ Some(_) => {
+                    // No new data to send peer.
+                    if r == peer_partial.metadata {
+                        continue;
+                    }
+                    peer_partial.metadata = r;
                 }
-                Some(r) => peer_partial.metadata = r,
                 // Peer partial is now complete
                 // remove it from the list
                 None => {
@@ -889,7 +889,7 @@ where
                 *peer_id,
                 RpcOut::PartialMessage {
                     message: message_data,
-                    metadata: metadata.clone(),
+                    metadata: partial_message.parts_metadata().as_ref().to_vec(),
                     group_id: group_id.clone(),
                     topic_id: topic_id.clone(),
                 },
@@ -1676,7 +1676,7 @@ where
         }
     }
 
-    /// Handle incoming partial message from a peer
+    /// Handle incoming partial message from a peer.
     #[cfg(feature = "partial_messages")]
     fn handle_partial_message(&mut self, peer_id: &PeerId, partial_message: PartialMessage) {
         tracing::debug!(
@@ -1686,7 +1686,7 @@ where
             "Received partial message"
         );
 
-        // Check if peer exists
+        // Check if peer exists.
         let Some(peer) = self.connected_peers.get_mut(peer_id) else {
             tracing::error!(
                 peer=%peer_id,
@@ -1703,13 +1703,11 @@ where
             .or_default();
 
         // Noop if the received partial is the same we already have.
-        if partial_message.metadata.as_ref() == Some(&peer_partial.metadata) {
+        if partial_message.metadata == peer_partial.metadata {
             return;
         }
 
-        if let Some(ref metadata) = partial_message.metadata {
-            peer_partial.metadata = metadata.clone();
-        }
+        peer_partial.metadata = partial_message.metadata.clone();
 
         self.events
             .push_back(ToSwarm::GenerateEvent(Event::Partial {
@@ -2117,7 +2115,7 @@ where
 
         let filtered_topics = match self
             .subscription_filter
-            .filter_incoming_subscriptions(subscriptions, &peer.topics.iter().cloned().collect())
+            .filter_incoming_subscriptions(subscriptions, &peer.topics)
         {
             Ok(topics) => topics,
             Err(s) => {
@@ -3246,25 +3244,25 @@ where
             // remove peer from all mappings
             for topic in &connected_peer.topics {
                 // check the mesh for the topic
-                if let Some(mesh_peers) = self.mesh.get_mut(&topic) {
+                if let Some(mesh_peers) = self.mesh.get_mut(topic) {
                     // check if the peer is in the mesh and remove it
                     if mesh_peers.remove(&peer_id) {
                         #[cfg(feature = "metrics")]
                         if let Some(m) = self.metrics.as_mut() {
-                            m.peers_removed(&topic, Churn::Dc, 1);
-                            m.set_mesh_peers(&topic, mesh_peers.len());
+                            m.peers_removed(topic, Churn::Dc, 1);
+                            m.set_mesh_peers(topic, mesh_peers.len());
                         }
                     };
                 }
 
                 #[cfg(feature = "metrics")]
                 if let Some(m) = self.metrics.as_mut() {
-                    m.dec_topic_peers(&topic);
+                    m.dec_topic_peers(topic);
                 }
 
                 // remove from fanout
                 self.fanout
-                    .get_mut(&topic)
+                    .get_mut(topic)
                     .map(|peers| peers.remove(&peer_id));
             }
 
@@ -3371,20 +3369,20 @@ where
         connected_peer.connections.push(connection_id);
         let queue = connected_peer.messages.clone();
 
-        // if connected_peer.connections.len() <= 1 {
         // If this is the first connection send extensions message.
-        self.send_message(
-            peer_id,
-            RpcOut::Extensions(Extensions {
-                test_extension: Some(true),
-                partial_messages: if cfg!(feature = "partial_messages") {
-                    Some(true)
-                } else {
-                    None
-                },
-            }),
-        );
-        // }
+        if connected_peer.connections.len() <= 1 {
+            self.send_message(
+                peer_id,
+                RpcOut::Extensions(Extensions {
+                    test_extension: Some(true),
+                    partial_messages: if cfg!(feature = "partial_messages") {
+                        Some(true)
+                    } else {
+                        None
+                    },
+                }),
+            );
+        }
 
         // This clones a reference to the Queue so any new handlers reference the same underlying
         // queue. No data is actually cloned here.
@@ -3418,8 +3416,8 @@ where
         connected_peer.connections.push(connection_id);
         let queue = connected_peer.messages.clone();
 
+        // If this is the first connection send extensions message.
         if connected_peer.connections.len() <= 1 {
-            // If this is the first connection send extensions message.
             self.send_message(
                 peer_id,
                 RpcOut::Extensions(Extensions {
@@ -3699,7 +3697,7 @@ fn peer_added_to_mesh(
     if let Some(peer) = connections.get(&peer_id) {
         for topic in &peer.topics {
             if !new_topics.contains(&topic) {
-                if let Some(mesh_peers) = mesh.get(&topic) {
+                if let Some(mesh_peers) = mesh.get(topic) {
                     if mesh_peers.contains(&peer_id) {
                         // the peer is already in a mesh for another topic
                         return;
@@ -3741,7 +3739,7 @@ fn peer_removed_from_mesh(
     if let Some(peer) = connections.get(&peer_id) {
         for topic in &peer.topics {
             if topic != old_topic {
-                if let Some(mesh_peers) = mesh.get(&topic) {
+                if let Some(mesh_peers) = mesh.get(topic) {
                     if mesh_peers.contains(&peer_id) {
                         // the peer exists in another mesh still
                         return;

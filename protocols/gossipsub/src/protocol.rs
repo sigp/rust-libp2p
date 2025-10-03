@@ -579,7 +579,6 @@ impl Decoder for GossipsubCodec {
 
         #[cfg(feature = "partial_messages")]
         let partial_message = rpc.partial.and_then(|partial_proto| {
-            // Extract topic and group context
             let Some(topic_id_bytes) = partial_proto.topicID else {
                 tracing::debug!("Partial message without topic_id, discarding");
                 return None;

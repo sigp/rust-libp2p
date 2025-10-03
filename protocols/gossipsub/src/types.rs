@@ -118,7 +118,7 @@ pub(crate) struct PeerDetails {
 #[derive(Debug)]
 pub(crate) struct PartialData {
     /// The current peer partial metadata.
-    pub(crate) metadata: Vec<u8>,
+    pub(crate) metadata: Option<Vec<u8>>,
     /// The remaining heartbeats for this message to be deleted.
     pub(crate) ttl: usize,
 }

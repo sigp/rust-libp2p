@@ -59,7 +59,7 @@ pub trait Partial {
     /// - Optional remaining metadata if more parts are still available after this one
     fn partial_message_bytes_from_metadata(
         &self,
-        metadata: impl AsRef<[u8]>,
+        metadata: Option<impl AsRef<[u8]>>,
     ) -> Result<(impl AsRef<[u8]>, Option<impl AsRef<[u8]>>), PartialMessageError>;
 
     /// Extends this message with received partial message data.
