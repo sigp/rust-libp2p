@@ -607,6 +607,112 @@ where
         true
     }
 
+    /// Publishes a message with multiple topics to the network.
+    pub fn publish(
+        &mut self,
+        topic: impl Into<TopicHash>,
+        data: impl Into<Vec<u8>>,
+    ) -> Result<MessageId, PublishError> {
+        let data = data.into();
+        let topic = topic.into();
+
+        // Transform the data before building a raw_message.
+        let transformed_data = self
+            .data_transform
+            .outbound_transform(&topic.clone(), data.clone())?;
+
+        let max_transmit_size_for_topic = self
+            .config
+            .protocol_config()
+            .max_transmit_size_for_topic(&topic);
+
+        // check that the size doesn't exceed the max transmission size.
+        if transformed_data.len() > max_transmit_size_for_topic {
+            return Err(PublishError::MessageTooLarge);
+        }
+
+        let raw_message = self.build_raw_message(topic, transformed_data)?;
+
+        // calculate the message id from the un-transformed data
+        let msg_id = self.config.message_id(&Message {
+            source: raw_message.source,
+            data, // the uncompressed form
+            sequence_number: raw_message.sequence_number,
+            topic: raw_message.topic.clone(),
+        });
+
+        // Check the if the message has been published before
+        if self.duplicate_cache.contains(&msg_id) {
+            // This message has already been seen. We don't re-publish messages that have already
+            // been published on the network.
+            tracing::warn!(
+                message_id=%msg_id,
+                "Not publishing a message that has already been published"
+            );
+            return Err(PublishError::Duplicate);
+        }
+
+        tracing::trace!(message_id=%msg_id, "Publishing message");
+
+        let topic_hash = raw_message.topic.clone();
+
+        let recipient_peers = self.get_publish_peers(&topic_hash, true);
+
+        // If the message isn't a duplicate and we have sent it to some peers add it to the
+        // duplicate cache and memcache.
+        self.duplicate_cache.insert(msg_id.clone());
+        self.mcache.put(&msg_id, raw_message.clone());
+
+        // Consider the message as delivered for gossip promises.
+        self.gossip_promises.message_delivered(&msg_id);
+
+        // Send to peers we know are subscribed to the topic.
+        let mut publish_failed = true;
+        for peer_id in recipient_peers.iter() {
+            tracing::trace!(peer=%peer_id, "Sending message to peer");
+            // If enabled, Send first an IDONTWANT so that if we are slower than forwarders
+            // publishing the original message we don't receive it back.
+            if raw_message.raw_protobuf_len() > self.config.idontwant_message_size_threshold()
+                && self.config.idontwant_on_publish()
+            {
+                self.send_message(
+                    *peer_id,
+                    RpcOut::IDontWant(IDontWant {
+                        message_ids: vec![msg_id.clone()],
+                    }),
+                );
+            }
+
+            if self.send_message(
+                *peer_id,
+                RpcOut::Publish {
+                    message_id: msg_id.clone(),
+                    message: raw_message.clone(),
+                    timeout: Delay::new(self.config.publish_queue_duration()),
+                },
+            ) {
+                publish_failed = false
+            }
+        }
+
+        if recipient_peers.is_empty() {
+            return Err(PublishError::NoPeersSubscribedToTopic);
+        }
+
+        if publish_failed {
+            return Err(PublishError::AllQueuesFull(recipient_peers.len()));
+        }
+
+        tracing::debug!(message_id=%msg_id, "Published message");
+
+        #[cfg(feature = "metrics")]
+        if let Some(metrics) = self.metrics.as_mut() {
+            metrics.register_published_message(&topic_hash);
+        }
+
+        Ok(msg_id)
+    }
+
     // Get Peers from the mesh or fanout to publish a message to.
     // If partial set, filter out peers who only want partial messages for the topic.
     fn get_publish_peers(&mut self, topic_hash: &TopicHash, partial: bool) -> HashSet<PeerId> {
@@ -730,112 +836,6 @@ where
         }
 
         recipient_peers
-    }
-
-    /// Publishes a message with multiple topics to the network.
-    pub fn publish(
-        &mut self,
-        topic: impl Into<TopicHash>,
-        data: impl Into<Vec<u8>>,
-    ) -> Result<MessageId, PublishError> {
-        let data = data.into();
-        let topic = topic.into();
-
-        // Transform the data before building a raw_message.
-        let transformed_data = self
-            .data_transform
-            .outbound_transform(&topic.clone(), data.clone())?;
-
-        let max_transmit_size_for_topic = self
-            .config
-            .protocol_config()
-            .max_transmit_size_for_topic(&topic);
-
-        // check that the size doesn't exceed the max transmission size.
-        if transformed_data.len() > max_transmit_size_for_topic {
-            return Err(PublishError::MessageTooLarge);
-        }
-
-        let raw_message = self.build_raw_message(topic, transformed_data)?;
-
-        // calculate the message id from the un-transformed data
-        let msg_id = self.config.message_id(&Message {
-            source: raw_message.source,
-            data, // the uncompressed form
-            sequence_number: raw_message.sequence_number,
-            topic: raw_message.topic.clone(),
-        });
-
-        // Check the if the message has been published before
-        if self.duplicate_cache.contains(&msg_id) {
-            // This message has already been seen. We don't re-publish messages that have already
-            // been published on the network.
-            tracing::warn!(
-                message_id=%msg_id,
-                "Not publishing a message that has already been published"
-            );
-            return Err(PublishError::Duplicate);
-        }
-
-        tracing::trace!(message_id=%msg_id, "Publishing message");
-
-        let topic_hash = raw_message.topic.clone();
-
-        let recipient_peers = self.get_publish_peers(&topic_hash, true);
-
-        // If the message isn't a duplicate and we have sent it to some peers add it to the
-        // duplicate cache and memcache.
-        self.duplicate_cache.insert(msg_id.clone());
-        self.mcache.put(&msg_id, raw_message.clone());
-
-        // Consider the message as delivered for gossip promises.
-        self.gossip_promises.message_delivered(&msg_id);
-
-        // Send to peers we know are subscribed to the topic.
-        let mut publish_failed = true;
-        for peer_id in recipient_peers.iter() {
-            tracing::trace!(peer=%peer_id, "Sending message to peer");
-            // If enabled, Send first an IDONTWANT so that if we are slower than forwarders
-            // publishing the original message we don't receive it back.
-            if raw_message.raw_protobuf_len() > self.config.idontwant_message_size_threshold()
-                && self.config.idontwant_on_publish()
-            {
-                self.send_message(
-                    *peer_id,
-                    RpcOut::IDontWant(IDontWant {
-                        message_ids: vec![msg_id.clone()],
-                    }),
-                );
-            }
-
-            if self.send_message(
-                *peer_id,
-                RpcOut::Publish {
-                    message_id: msg_id.clone(),
-                    message: raw_message.clone(),
-                    timeout: Delay::new(self.config.publish_queue_duration()),
-                },
-            ) {
-                publish_failed = false
-            }
-        }
-
-        if recipient_peers.is_empty() {
-            return Err(PublishError::NoPeersSubscribedToTopic);
-        }
-
-        if publish_failed {
-            return Err(PublishError::AllQueuesFull(recipient_peers.len()));
-        }
-
-        tracing::debug!(message_id=%msg_id, "Published message");
-
-        #[cfg(feature = "metrics")]
-        if let Some(metrics) = self.metrics.as_mut() {
-            metrics.register_published_message(&topic_hash);
-        }
-
-        Ok(msg_id)
     }
 
     #[cfg(feature = "partial_messages")]
