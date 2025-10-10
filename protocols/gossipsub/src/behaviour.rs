@@ -715,7 +715,11 @@ where
 
     // Get Peers from the mesh or fanout to publish a message to.
     // If partial set, filter out peers who only want partial messages for the topic.
-    fn get_publish_peers(&mut self, topic_hash: &TopicHash, partial: bool) -> HashSet<PeerId> {
+    fn get_publish_peers(
+        &mut self,
+        topic_hash: &TopicHash,
+        filter_partial: bool,
+    ) -> HashSet<PeerId> {
         let mesh_n = self.config.mesh_n_for_topic(topic_hash);
 
         let peers_on_topic = self
@@ -724,7 +728,7 @@ where
             .filter(|(_, peer)| {
                 #[cfg(feature = "partial_messages")]
                 {
-                    if partial && peer.partial_only_topics.contains(topic_hash) {
+                    if filter_partial && peer.partial_only_topics.contains(topic_hash) {
                         return false;
                     }
                 }
@@ -761,7 +765,7 @@ where
                             &self.connected_peers,
                             topic_hash,
                             needed_extra_peers,
-                            partial,
+                            filter_partial,
                             |peer| {
                                 !mesh_peers.contains(peer)
                                     && !self.explicit_peers.contains(peer)
@@ -795,7 +799,7 @@ where
                             &self.connected_peers,
                             topic_hash,
                             mesh_n,
-                            partial,
+                            filter_partial,
                             |p| {
                                 !self.explicit_peers.contains(p)
                                     && !self
@@ -849,6 +853,7 @@ where
         let group_id = partial_message.group_id().as_ref().to_vec();
 
         let recipient_peers = self.get_publish_peers(&topic_id, false);
+        let metadata = partial_message.parts_metadata().as_ref().to_vec();
         for peer_id in recipient_peers.iter() {
             // TODO: this can be optimized, we are going to get the peer again on `send_message`
             let Some(peer) = &mut self.connected_peers.get_mut(peer_id) else {
@@ -889,7 +894,7 @@ where
                 *peer_id,
                 RpcOut::PartialMessage {
                     message: message_data,
-                    metadata: partial_message.parts_metadata().as_ref().to_vec(),
+                    metadata: metadata.clone(),
                     group_id: group_id.clone(),
                     topic_id: topic_id.clone(),
                 },

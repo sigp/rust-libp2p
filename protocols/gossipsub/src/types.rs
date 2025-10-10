@@ -364,7 +364,7 @@ pub struct TestExtension {}
 /// A Gossipsub RPC message sent.
 #[derive(Debug)]
 pub enum RpcOut {
-    /// PublishV a Gossipsub message on network.`timeout` limits the duration the message
+    /// Publish a Gossipsub message on network.`timeout` limits the duration the message
     /// can wait to be sent before it is abandoned.
     Publish {
         message_id: MessageId,

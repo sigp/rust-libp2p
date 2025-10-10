@@ -40,9 +40,8 @@ pub trait Partial {
     /// during reconstruction.
     fn group_id(&self) -> impl AsRef<[u8]>;
 
-    /// Returns metadata describing which parts of the message are available and which parts we want.
-    ///
-    /// This metadata is application-defined and should encode information about
+    /// Returns application defined metadata describing which parts of the message
+    /// are available and which parts we want.
     ///
     /// The returned bytes will be sent in partsMetadata field to advertise
     /// available and wanted parts to peers.
