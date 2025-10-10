@@ -76,7 +76,10 @@ use crate::{
 };
 
 #[cfg(feature = "partial_messages")]
-use crate::{partial::Partial, types::PartialMessage};
+use crate::{
+    partial::{Partial, PublishAction},
+    types::PartialMessage,
+};
 
 #[cfg(test)]
 mod tests;
@@ -865,9 +868,8 @@ where
             let peer_partials = peer.partial_messages.entry(topic_id.clone()).or_default();
             let peer_partial = peer_partials.entry(group_id.clone()).or_default();
 
-            let Ok((message_data, rest_wanted)) = partial_message
-                .partial_message_bytes_from_metadata(peer_partial.metadata.as_ref())
-                .map(|(m, r)| (m.as_ref().to_vec(), r.map(|r| r.as_ref().to_vec())))
+            let Ok(action) =
+                partial_message.partial_message_bytes_from_metadata(peer_partial.metadata.as_ref())
             else {
                 tracing::error!(peer = %peer_id, group_id = ?group_id,
                     "Could not reconstruct message bytes for peer metadata");
@@ -875,25 +877,33 @@ where
                 continue;
             };
 
-            match rest_wanted {
-                r @ Some(_) => {
+            let message = match action {
+                PublishAction::NothingToSend => {
                     // No new data to send peer.
-                    if r == peer_partial.metadata {
-                        continue;
-                    }
-                    peer_partial.metadata = r;
+                    continue;
                 }
-                // Peer partial is now complete
-                // remove it from the list
-                None => {
+                PublishAction::PeerHasAllData => {
+                    // Peer partial is now complete
+                    // remove it from the list
                     peer_partials.remove(&group_id);
+                    continue;
+                }
+                PublishAction::Send { metadata, message } => {
+                    peer_partial.metadata = Some(metadata);
+                    message
+                }
+                PublishAction::SendRemaining { message } => {
+                    // Peer partial is complete after sending this message
+                    // remove it from the list
+                    peer_partials.remove(&group_id);
+                    message
                 }
             };
 
             self.send_message(
                 *peer_id,
                 RpcOut::PartialMessage {
-                    message: message_data,
+                    message,
                     metadata: metadata.clone(),
                     group_id: group_id.clone(),
                     topic_id: topic_id.clone(),

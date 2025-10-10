@@ -53,13 +53,11 @@ pub trait Partial {
     /// generates the actual message data to send back. The `metadata` parameter
     /// describes what parts are being requested.
     ///
-    /// Returns a tuple of:
-    /// - The encoded partial message bytes to send over the network
-    /// - Optional remaining metadata if more parts are still available after this one
+    /// Returns a [`PublishAction`] for the given metadata, or an error.
     fn partial_message_bytes_from_metadata(
         &self,
         metadata: Option<impl AsRef<[u8]>>,
-    ) -> Result<(impl AsRef<[u8]>, Option<impl AsRef<[u8]>>), PartialMessageError>;
+    ) -> Result<PublishAction, PartialMessageError>;
 
     /// Extends this message with received partial message data.
     ///
@@ -73,4 +71,20 @@ pub trait Partial {
         &mut self,
         data: &[u8],
     ) -> Result<(), PartialMessageError>;
+}
+
+/// Indicates the action to take for the given metadata.
+pub enum PublishAction {
+    /// The metadata signals that the peer already has all data. Do not keep track of the peer
+    /// anymore.
+    PeerHasAllData,
+    /// While the peer still needs data, we do not have any data it needs, and therefore send
+    /// nothing but keep the metadata.
+    NothingToSend,
+    /// We have something of interest to this peer, but can not send everything it needs. Send a
+    /// message and associate some new metadata to the peer, representing the remaining need.
+    Send { message: Vec<u8>, metadata: Vec<u8> },
+    /// We can send everything this peer needs. Send message, then do not keep track of the peer
+    /// anymore.
+    SendRemaining { message: Vec<u8> },
 }
