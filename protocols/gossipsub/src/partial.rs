@@ -18,6 +18,8 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
+use std::fmt::Debug;
+
 use crate::error::PartialMessageError;
 
 /// PartialMessage is a message that can be broken up into parts.
@@ -33,6 +35,8 @@ use crate::error::PartialMessageError;
 /// 5. Received partial data is integrated using `extend_from_encoded_partial_message()`
 /// 6. The `group_id()` ties all parts of the same logical message together
 pub trait Partial {
+    type Metadata: Metadata;
+
     /// Returns the unique identifier for this message group.
     ///
     /// All partial messages belonging to the same logical message should return
@@ -58,33 +62,27 @@ pub trait Partial {
         &self,
         metadata: Option<impl AsRef<[u8]>>,
     ) -> Result<PublishAction, PartialMessageError>;
+}
 
-    /// Extends this message with received partial message data.
-    ///
-    /// When partial message data is received from a peer, this method integrates
-    /// it into the current message state. The implementation should validate and
-    /// store the received data appropriately.
-    ///
-    /// Returns `Ok(())` if the data was successfully integrated, or `Err`,
-    /// if the data was invalid or couldn't be processed.
-    fn extend_from_encoded_partial_message(
-        &mut self,
-        data: &[u8],
-    ) -> Result<(), PartialMessageError>;
+pub trait Metadata: Debug {
+    /// Return the `Metadata` as a byte slice.
+    fn as_slice(&self) -> &[u8];
+    /// try to Update the `Metadata` with the remote data,
+    /// return true if it was updated.
+    fn update(&self, data: &[u8]) -> bool;
 }
 
 /// Indicates the action to take for the given metadata.
 pub enum PublishAction {
-    /// The metadata signals that the peer already has all data. Do not keep track of the peer
-    /// anymore.
-    PeerHasAllData,
-    /// While the peer still needs data, we do not have any data it needs, and therefore send
-    /// nothing but keep the metadata.
+    /// The provided input metadata is the same as the output,
+    /// this means we have the same data as the peer.
+    SameMetadata,
+    /// We have nothing to send to the peer, but we need parts from the peer.
     NothingToSend,
     /// We have something of interest to this peer, but can not send everything it needs. Send a
     /// message and associate some new metadata to the peer, representing the remaining need.
-    Send { message: Vec<u8>, metadata: Vec<u8> },
-    /// We can send everything this peer needs. Send message, then do not keep track of the peer
-    /// anymore.
-    SendRemaining { message: Vec<u8> },
+    Send {
+        message: Vec<u8>,
+        metadata: Box<dyn Metadata>,
+    },
 }

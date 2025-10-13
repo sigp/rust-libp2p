@@ -878,26 +878,15 @@ where
             };
 
             let message = match action {
-                PublishAction::NothingToSend => {
+                PublishAction::SameMetadata => {
                     // No new data to send peer.
                     continue;
                 }
-                PublishAction::PeerHasAllData => {
-                    // Peer partial is now complete
-                    // remove it from the list
-                    peer_partials.remove(&group_id);
-                    continue;
-                }
                 PublishAction::Send { metadata, message } => {
-                    peer_partial.metadata = Some(metadata);
-                    message
+                    peer_partial.metadata = Some(crate::types::PeerMetadata::Local(metadata));
+                    Some(message)
                 }
-                PublishAction::SendRemaining { message } => {
-                    // Peer partial is complete after sending this message
-                    // remove it from the list
-                    peer_partials.remove(&group_id);
-                    message
-                }
+                PublishAction::NothingToSend => None,
             };
 
             self.send_message(
@@ -1694,6 +1683,8 @@ where
     /// Handle incoming partial message from a peer.
     #[cfg(feature = "partial_messages")]
     fn handle_partial_message(&mut self, peer_id: &PeerId, partial_message: PartialMessage) {
+        use crate::types::PeerMetadata;
+
         tracing::debug!(
             peer=%peer_id,
             topic=%partial_message.topic_id,
@@ -1717,12 +1708,22 @@ where
             .entry(partial_message.group_id.clone())
             .or_default();
 
-        // Noop if the received partial is the same we already have.
-        if partial_message.metadata == peer_partial.metadata {
-            return;
+        match (&peer_partial.metadata, &partial_message.metadata) {
+            (None, Some(remote_metadata)) => {
+                peer_partial.metadata = Some(PeerMetadata::Remote(remote_metadata.clone()))
+            }
+            (Some(PeerMetadata::Remote(ref metadata)), Some(remote_metadata)) => {
+                if metadata != remote_metadata {
+                    peer_partial.metadata = Some(PeerMetadata::Remote(remote_metadata.clone()));
+                }
+            }
+            (Some(PeerMetadata::Local(metadata)), Some(remote_metadata)) => {
+                if !metadata.update(remote_metadata) {
+                    return;
+                }
+            }
+            (Some(_), None) | (None, None) => {}
         }
-
-        peer_partial.metadata = partial_message.metadata.clone();
 
         self.events
             .push_back(ToSwarm::GenerateEvent(Event::Partial {

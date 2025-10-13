@@ -113,12 +113,31 @@ pub(crate) struct PeerDetails {
     pub(crate) messages: Queue,
 }
 
+/// Stored `Metadata` for a peer.
+///
+#[cfg(feature = "partial_messages")]
+#[derive(Debug)]
+pub(crate) enum PeerMetadata {
+    Remote(Vec<u8>),
+    Local(Box<dyn crate::partial::Metadata>),
+}
+
+#[cfg(feature = "partial_messages")]
+impl AsRef<[u8]> for PeerMetadata {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            PeerMetadata::Remote(metadata) => metadata,
+            PeerMetadata::Local(metadata) => metadata.as_slice(),
+        }
+    }
+}
+
 /// The partial message data the peer has.
 #[cfg(feature = "partial_messages")]
 #[derive(Debug)]
 pub(crate) struct PartialData {
     /// The current peer partial metadata.
-    pub(crate) metadata: Option<Vec<u8>>,
+    pub(crate) metadata: Option<PeerMetadata>,
     /// The remaining heartbeats for this message to be deleted.
     pub(crate) ttl: usize,
 }
@@ -408,7 +427,7 @@ pub enum RpcOut {
         /// The topic ID this partial message belongs to.
         topic_id: TopicHash,
         /// The partial message itself.
-        message: Vec<u8>,
+        message: Option<Vec<u8>>,
         /// The partial metadata we have and want.
         metadata: Vec<u8>,
     },
@@ -620,7 +639,7 @@ impl From<RpcOut> for proto::RPC {
                 partial: Some(proto::PartialMessagesExtension {
                     topicID: Some(topic_id.as_str().as_bytes().to_vec()),
                     groupID: Some(group_id),
-                    partialMessage: Some(message),
+                    partialMessage: message,
                     partsMetadata: Some(metadata),
                 }),
             },
