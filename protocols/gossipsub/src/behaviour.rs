@@ -603,7 +603,7 @@ where
         self.leave(&topic_hash);
         #[cfg(feature = "partial_messages")]
         {
-            self.partial_only_topics.insert(topic_hash.clone());
+            self.partial_only_topics.remove(&topic_hash.clone());
         }
 
         tracing::debug!(topic=%topic_hash, "Unsubscribed from topic");
