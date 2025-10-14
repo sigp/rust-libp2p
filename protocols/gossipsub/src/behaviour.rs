@@ -874,6 +874,7 @@ where
                 tracing::error!(peer = %peer_id, group_id = ?group_id,
                     "Could not reconstruct message bytes for peer metadata");
                 peer_partials.remove(&group_id);
+                //TODO: penalize peer.
                 continue;
             };
 
@@ -1718,21 +1719,32 @@ where
                 }
             }
             (Some(PeerMetadata::Local(metadata)), Some(remote_metadata)) => {
-                if !metadata.update(remote_metadata) {
-                    return;
+                match metadata.update(remote_metadata) {
+                    Ok(true) => {
+                        self.events
+                            .push_back(ToSwarm::GenerateEvent(Event::Partial {
+                                topic_id: partial_message.topic_id,
+                                propagation_source: *peer_id,
+                                group_id: partial_message.group_id,
+                                message: partial_message.message,
+                                metadata: partial_message.metadata,
+                            }));
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        tracing::debug!(
+                            peer=%peer_id,
+                            topic=%partial_message.topic_id,
+                            group_id=?partial_message.group_id,
+                            err=%err,
+                            "Error updating Partial metadata"
+                        );
+                        //TODO: penalize peer.
+                    }
                 }
             }
             (Some(_), None) | (None, None) => {}
         }
-
-        self.events
-            .push_back(ToSwarm::GenerateEvent(Event::Partial {
-                topic_id: partial_message.topic_id,
-                propagation_source: *peer_id,
-                group_id: partial_message.group_id,
-                message: partial_message.message,
-                metadata: partial_message.metadata,
-            }));
     }
 
     /// Removes the specified peer from the mesh, returning true if it was present.

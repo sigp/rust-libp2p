@@ -35,8 +35,6 @@ use crate::error::PartialMessageError;
 /// 5. Received partial data is integrated using `extend_from_encoded_partial_message()`
 /// 6. The `group_id()` ties all parts of the same logical message together
 pub trait Partial {
-    type Metadata: Metadata;
-
     /// Returns the unique identifier for this message group.
     ///
     /// All partial messages belonging to the same logical message should return
@@ -69,7 +67,7 @@ pub trait Metadata: Debug {
     fn as_slice(&self) -> &[u8];
     /// try to Update the `Metadata` with the remote data,
     /// return true if it was updated.
-    fn update(&self, data: &[u8]) -> bool;
+    fn update(&self, data: &[u8]) -> Result<bool, PartialMessageError>;
 }
 
 /// Indicates the action to take for the given metadata.
