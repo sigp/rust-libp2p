@@ -19,6 +19,8 @@
 // DEALINGS IN THE SOFTWARE.
 
 //! A collection of types using the Gossipsub system.
+#[cfg(feature = "partial_messages")]
+use std::collections::HashMap;
 use std::{
     collections::BTreeSet,
     fmt::{self, Debug},
@@ -31,8 +33,6 @@ use libp2p_swarm::ConnectionId;
 use quick_protobuf::MessageWrite;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "partial_messages")]
-use std::collections::HashMap;
 use web_time::Instant;
 
 use crate::{queue::Queue, rpc_proto::proto, TopicHash};
@@ -114,7 +114,6 @@ pub(crate) struct PeerDetails {
 }
 
 /// Stored `Metadata` for a peer.
-///
 #[cfg(feature = "partial_messages")]
 #[derive(Debug)]
 pub(crate) enum PeerMetadata {

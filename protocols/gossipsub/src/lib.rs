@@ -119,9 +119,6 @@ pub mod partial;
 #[cfg(feature = "metrics")]
 pub use metrics::Config as MetricsConfig;
 
-#[cfg(feature = "partial_messages")]
-pub use self::{error::PartialMessageError, partial::Partial};
-
 pub use self::{
     behaviour::{Behaviour, Event, MessageAuthenticity},
     config::{Config, ConfigBuilder, ValidationMode, Version},
@@ -139,6 +136,8 @@ pub use self::{
     transform::{DataTransform, IdentityTransform},
     types::{FailedMessages, Message, MessageAcceptance, MessageId, RawMessage},
 };
+#[cfg(feature = "partial_messages")]
+pub use self::{error::PartialMessageError, partial::Partial};
 
 pub type IdentTopic = Topic<self::topic::IdentityHash>;
 pub type Sha256Topic = Topic<self::topic::Sha256Hash>;

@@ -74,7 +74,6 @@ use crate::{
     },
     FailedMessages, PublishError, SubscriptionError, TopicScoreParams, ValidationError,
 };
-
 #[cfg(feature = "partial_messages")]
 use crate::{
     partial::{Partial, PublishAction},

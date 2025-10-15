@@ -85,7 +85,12 @@ where
         // subscribe to the topics
         for t in self.topics {
             let topic = Topic::new(t);
-            gs.subscribe(&topic, #[cfg(feature = "partial_messages")] false).unwrap();
+            gs.subscribe(
+                &topic,
+                #[cfg(feature = "partial_messages")]
+                false,
+            )
+            .unwrap();
             topic_hashes.push(topic.hash().clone());
         }
 
@@ -581,7 +586,12 @@ fn test_join() {
 
     // re-subscribe - there should be peers associated with the topic
     assert!(
-        gs.subscribe(&topics[0], #[cfg(feature = "partial_messages")] false).unwrap(),
+        gs.subscribe(
+            &topics[0],
+            #[cfg(feature = "partial_messages")]
+            false
+        )
+        .unwrap(),
         "should be able to subscribe successfully"
     );
 
@@ -646,8 +656,8 @@ fn test_join() {
                 extensions: None,
                 #[cfg(feature = "partial_messages")]
                 partial_messages: Default::default(),
-            #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+                #[cfg(feature = "partial_messages")]
+                partial_only_topics: Default::default(),
             },
         );
         queues.insert(random_peer, receiver_queue);
@@ -671,7 +681,12 @@ fn test_join() {
     }
 
     // subscribe to topic1
-    gs.subscribe(&topics[1], #[cfg(feature = "partial_messages")] false).unwrap();
+    gs.subscribe(
+        &topics[1],
+        #[cfg(feature = "partial_messages")]
+        false,
+    )
+    .unwrap();
 
     // the three new peers should have been added, along with 3 more from the pool.
     assert!(
@@ -1051,8 +1066,8 @@ fn test_get_random_peers() {
                 extensions: None,
                 #[cfg(feature = "partial_messages")]
                 partial_messages: Default::default(),
-            #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+                #[cfg(feature = "partial_messages")]
+                partial_only_topics: Default::default(),
             },
         );
     }
@@ -1738,7 +1753,12 @@ fn explicit_peers_not_added_to_mesh_on_subscribe() {
     }
 
     // subscribe now to topic
-    gs.subscribe(&topic, #[cfg(feature = "partial_messages")] false).unwrap();
+    gs.subscribe(
+        &topic,
+        #[cfg(feature = "partial_messages")]
+        false,
+    )
+    .unwrap();
 
     // only peer 1 is in the mesh not peer 0 (which is an explicit peer)
     assert_eq!(gs.mesh[&topic_hash], vec![peers[1]].into_iter().collect());
@@ -1791,7 +1811,12 @@ fn explicit_peers_not_added_to_mesh_from_fanout_on_subscribe() {
     gs.publish(topic.clone(), vec![1, 2, 3]).unwrap();
 
     // subscribe now to topic
-    gs.subscribe(&topic, #[cfg(feature = "partial_messages")] false).unwrap();
+    gs.subscribe(
+        &topic,
+        #[cfg(feature = "partial_messages")]
+        false,
+    )
+    .unwrap();
 
     // only peer 1 is in the mesh not peer 0 (which is an explicit peer)
     assert_eq!(gs.mesh[&topic_hash], vec![peers[1]].into_iter().collect());
@@ -2196,7 +2221,11 @@ fn test_unsubscribe_backoff() {
         "Peer should be pruned with `unsubscribe_backoff`."
     );
 
-    let _ = gs.subscribe(&Topic::new(topics[0].to_string()), #[cfg(feature = "partial_messages")] false);
+    let _ = gs.subscribe(
+        &Topic::new(topics[0].to_string()),
+        #[cfg(feature = "partial_messages")]
+        false,
+    );
 
     // forget all events until now
     let queues = flush_events(&mut gs, queues);
@@ -5228,8 +5257,20 @@ fn test_subscribe_to_invalid_topic() {
         .to_subscribe(false)
         .create_network();
 
-    assert!(gs.subscribe(&t1, #[cfg(feature = "partial_messages")] false).is_ok());
-    assert!(gs.subscribe(&t2, #[cfg(feature = "partial_messages")] false).is_err());
+    assert!(gs
+        .subscribe(
+            &t1,
+            #[cfg(feature = "partial_messages")]
+            false
+        )
+        .is_ok());
+    assert!(gs
+        .subscribe(
+            &t2,
+            #[cfg(feature = "partial_messages")]
+            false
+        )
+        .is_err());
 }
 
 #[test]
@@ -5258,7 +5299,12 @@ fn test_subscribe_and_graft_with_negative_score() {
     let original_score = gs1.as_peer_score_mut().score_report(&p2).score;
 
     // subscribe to topic in gs2
-    gs2.subscribe(&topic, #[cfg(feature = "partial_messages")] false).unwrap();
+    gs2.subscribe(
+        &topic,
+        #[cfg(feature = "partial_messages")]
+        false,
+    )
+    .unwrap();
 
     let forward_messages_to_p1 = |gs1: &mut Behaviour<_, _>,
                                   p1: PeerId,
@@ -6364,8 +6410,12 @@ fn test_multiple_topics_with_different_configs() {
 
     // re-subscribe to topic1
     assert!(
-        gs.subscribe(&Topic::new(topic_hashes[0].to_string()), #[cfg(feature = "partial_messages")] false)
-            .unwrap(),
+        gs.subscribe(
+            &Topic::new(topic_hashes[0].to_string()),
+            #[cfg(feature = "partial_messages")]
+            false
+        )
+        .unwrap(),
         "Should subscribe successfully"
     );
 
