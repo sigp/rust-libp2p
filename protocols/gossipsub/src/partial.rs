@@ -67,7 +67,7 @@ pub trait Metadata: Debug {
     fn as_slice(&self) -> &[u8];
     /// try to Update the `Metadata` with the remote data,
     /// return true if it was updated.
-    fn update(&self, data: &[u8]) -> Result<bool, PartialMessageError>;
+    fn update(&mut self, data: &[u8]) -> Result<bool, PartialMessageError>;
 }
 
 /// Indicates the action to take for the given metadata.

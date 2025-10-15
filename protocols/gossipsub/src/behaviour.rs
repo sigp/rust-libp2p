@@ -849,7 +849,7 @@ where
     pub fn publish_partial<P: Partial>(
         &mut self,
         topic: impl Into<TopicHash>,
-        partial_message: P,
+        partial_message: &P,
     ) -> Result<(), PublishError> {
         let topic_id = topic.into();
 
