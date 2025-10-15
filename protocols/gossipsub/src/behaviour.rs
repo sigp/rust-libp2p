@@ -1709,7 +1709,7 @@ where
             .entry(partial_message.group_id.clone())
             .or_default();
 
-        match (&peer_partial.metadata, &partial_message.metadata) {
+        match (&mut peer_partial.metadata, &partial_message.metadata) {
             (None, Some(remote_metadata)) => {
                 peer_partial.metadata = Some(PeerMetadata::Remote(remote_metadata.clone()))
             }
