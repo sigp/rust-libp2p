@@ -851,11 +851,11 @@ where
         topic: impl Into<TopicHash>,
         partial_message: &P,
     ) -> Result<(), PublishError> {
-        let topic_id = topic.into();
+        let topic_hash = topic.into();
 
         let group_id = partial_message.group_id().as_ref().to_vec();
 
-        let recipient_peers = self.get_publish_peers(&topic_id, false);
+        let recipient_peers = self.get_publish_peers(&topic_hash, false);
         let metadata = partial_message.parts_metadata().as_ref().to_vec();
         for peer_id in recipient_peers.iter() {
             // TODO: this can be optimized, we are going to get the peer again on `send_message`
@@ -865,7 +865,7 @@ where
                 continue;
             };
 
-            let peer_partials = peer.partial_messages.entry(topic_id.clone()).or_default();
+            let peer_partials = peer.partial_messages.entry(topic_hash.clone()).or_default();
             let peer_partial = peer_partials.entry(group_id.clone()).or_default();
 
             let Ok(action) =
@@ -874,7 +874,9 @@ where
                 tracing::error!(peer = %peer_id, group_id = ?group_id,
                     "Could not reconstruct message bytes for peer metadata");
                 peer_partials.remove(&group_id);
-                //TODO: penalize peer.
+                if let PeerScoreState::Active(peer_score) = &mut self.peer_score {
+                    peer_score.reject_invalid_partial(peer_id, &topic_hash);
+                }
                 continue;
             };
 
@@ -896,7 +898,7 @@ where
                     message,
                     metadata: metadata.clone(),
                     group_id: group_id.clone(),
-                    topic_id: topic_id.clone(),
+                    topic_id: topic_hash.clone(),
                 },
             );
         }
@@ -1739,7 +1741,9 @@ where
                             err=%err,
                             "Error updating Partial metadata"
                         );
-                        //TODO: penalize peer.
+                        if let PeerScoreState::Active(peer_score) = &mut self.peer_score {
+                            peer_score.reject_invalid_partial(peer_id, &partial_message.topic_id);
+                        }
                     }
                 }
             }
