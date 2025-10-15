@@ -717,11 +717,11 @@ where
     }
 
     // Get Peers from the mesh or fanout to publish a message to.
-    // If partial set, filter out peers who only want partial messages for the topic.
+    // If `exclude_partial_only` set, filter out peers who only want partial messages for the topic.
     fn get_publish_peers(
         &mut self,
         topic_hash: &TopicHash,
-        filter_partial: bool,
+        exclude_partial_only: bool,
     ) -> HashSet<PeerId> {
         let mesh_n = self.config.mesh_n_for_topic(topic_hash);
 
@@ -731,7 +731,7 @@ where
             .filter(|(_, peer)| {
                 #[cfg(feature = "partial_messages")]
                 {
-                    if filter_partial && peer.partial_only_topics.contains(topic_hash) {
+                    if exclude_partial_only && peer.partial_only_topics.contains(topic_hash) {
                         return false;
                     }
                 }
@@ -768,7 +768,7 @@ where
                             &self.connected_peers,
                             topic_hash,
                             needed_extra_peers,
-                            filter_partial,
+                            exclude_partial_only,
                             |peer| {
                                 !mesh_peers.contains(peer)
                                     && !self.explicit_peers.contains(peer)
@@ -802,7 +802,7 @@ where
                             &self.connected_peers,
                             topic_hash,
                             mesh_n,
-                            filter_partial,
+                            exclude_partial_only,
                             |p| {
                                 !self.explicit_peers.contains(p)
                                     && !self
@@ -2777,7 +2777,7 @@ where
             for topics in peer.partial_messages.values_mut() {
                 topics.retain(|_, partial| {
                     partial.ttl -= 1;
-                    partial.ttl <= 0
+                    partial.ttl == 0
                 });
             }
         }
@@ -3795,8 +3795,8 @@ fn peer_removed_from_mesh(
 fn get_random_peers_dynamic(
     connected_peers: &HashMap<PeerId, PeerDetails>,
     topic_hash: &TopicHash,
-    // If we want to filter for partial only peers.
-    partial: bool,
+    // If we want to exclude partial only peers.
+    exclude_partial: bool,
     // maps the number of total peers to the number of selected peers
     n_map: impl Fn(usize) -> usize,
     mut f: impl FnMut(&PeerId) -> bool,
@@ -3806,7 +3806,7 @@ fn get_random_peers_dynamic(
         .filter_map(|(peer_id, peer)| {
             #[cfg(feature = "partial_messages")]
             {
-                if partial && peer.partial_only_topics.contains(topic_hash) {
+                if exclude_partial && peer.partial_only_topics.contains(topic_hash) {
                     return None;
                 }
             }
@@ -3840,10 +3840,10 @@ fn get_random_peers(
     connected_peers: &HashMap<PeerId, PeerDetails>,
     topic_hash: &TopicHash,
     n: usize,
-    partial: bool,
+    exclude_partial: bool,
     f: impl FnMut(&PeerId) -> bool,
 ) -> BTreeSet<PeerId> {
-    get_random_peers_dynamic(connected_peers, topic_hash, partial, |_| n, f)
+    get_random_peers_dynamic(connected_peers, topic_hash, exclude_partial, |_| n, f)
 }
 
 /// Validates the combination of signing, privacy and message validation to ensure the
