@@ -103,14 +103,17 @@ pub(crate) struct PeerDetails {
     pub(crate) topics: BTreeSet<TopicHash>,
     /// Don't send messages.
     pub(crate) dont_send: LinkedHashMap<MessageId, Instant>,
+
+    /// Message queue consumed by the connection handler.
+    pub(crate) messages: Queue,
+
     /// Peer Partial messages.
     #[cfg(feature = "partial_messages")]
     pub(crate) partial_messages: HashMap<TopicHash, HashMap<Vec<u8>, PartialData>>,
+
     /// Partial only subscribed topics.
     #[cfg(feature = "partial_messages")]
     pub(crate) partial_only_topics: BTreeSet<TopicHash>,
-    /// Message queue consumed by the connection handler.
-    pub(crate) messages: Queue,
 }
 
 /// Stored `Metadata` for a peer.
