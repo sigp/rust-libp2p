@@ -62,7 +62,7 @@ pub trait Partial {
     ) -> Result<PublishAction, PartialMessageError>;
 }
 
-pub trait Metadata: Debug {
+pub trait Metadata: Debug + Send + Sync {
     /// Return the `Metadata` as a byte slice.
     fn as_slice(&self) -> &[u8];
     /// try to Update the `Metadata` with the remote data,
