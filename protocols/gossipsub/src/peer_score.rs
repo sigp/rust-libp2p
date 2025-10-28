@@ -533,6 +533,7 @@ impl PeerScore {
     }
 
     /// Indicate that a peer has sent us invalid partial message data.
+    #[cfg(feature = "partial_messages")]
     pub(crate) fn reject_invalid_partial(&mut self, peer_id: &PeerId, topic_hash: &TopicHash) {
         if let Some(peer_stats) = self.peer_stats.get_mut(peer_id) {
             if let Some(topic_stats) =

@@ -1072,27 +1072,27 @@ fn test_get_random_peers() {
         );
     }
 
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, false, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_, _| true);
     assert_eq!(random_peers.len(), 5, "Expected 5 peers to be returned");
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 30, false, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 30, |_, _| true);
     assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
     assert!(
         random_peers == peers.iter().cloned().collect(),
         "Expected no shuffling"
     );
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 20, false, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 20, |_, _| true);
     assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
     assert!(
         random_peers == peers.iter().cloned().collect(),
         "Expected no shuffling"
     );
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 0, false, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 0, |_, _| true);
     assert!(random_peers.is_empty(), "Expected 0 peers to be returned");
     // test the filter
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, false, |_| false);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_, _| false);
     assert!(random_peers.is_empty(), "Expected 0 peers to be returned");
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 10, false, {
-        |peer| peers.contains(peer)
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 10, {
+        |peer_id, _| peers.contains(peer_id)
     });
     assert!(random_peers.len() == 10, "Expected 10 peers to be returned");
 }
