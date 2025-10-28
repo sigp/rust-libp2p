@@ -5,6 +5,10 @@
 - Fix underflow when shuffling peers after prunning.
   See [PR 6183](https://github.com/libp2p/rust-libp2p/pull/6183)
 
+
+- Implement gossipsub 1.3 extensions control message.
+  See [PR 6119](https://github.com/libp2p/rust-libp2p/pull/6119)
+
 - Remove peer penalty for duplicate messages.
   See [PR 6112](https://github.com/libp2p/rust-libp2p/pull/6112)
 
@@ -25,6 +29,9 @@
 
 - Switch the internal `async-channel` used to dispatch messages from `NetworkBehaviour` to the `ConnectionHandler`
   with an internal priority queue. See [PR 6175](https://github.com/libp2p/rust-libp2p/pull/6175)
+
+- Switch the internal `async-channel` used to dispatch messages from `NetworkBehaviour` to the `ConnectionHandler`
+  with an internal priority queue. See [PR XXXX](https://github.com/libp2p/rust-libp2p/pull/XXXX)
 
 ## 0.49.2
 

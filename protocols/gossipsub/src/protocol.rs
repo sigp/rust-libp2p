@@ -29,19 +29,26 @@ use libp2p_identity::{PeerId, PublicKey};
 use libp2p_swarm::StreamProtocol;
 use quick_protobuf::{MessageWrite, Writer};
 
+#[cfg(feature = "partial_messages")]
+use crate::types::PartialMessage;
 use crate::{
     config::ValidationMode,
     handler::HandlerEvent,
     rpc_proto::proto,
     topic::TopicHash,
     types::{
-        ControlAction, Graft, IDontWant, IHave, IWant, MessageId, PeerInfo, PeerKind, Prune,
-        RawMessage, RpcIn, Subscription, SubscriptionAction,
+        ControlAction, Extensions, Graft, IDontWant, IHave, IWant, MessageId, PeerInfo, PeerKind,
+        Prune, RawMessage, RpcIn, Subscription, SubscriptionAction, TestExtension,
     },
     ValidationError,
 };
 
 pub(crate) const SIGNING_PREFIX: &[u8] = b"libp2p-pubsub:";
+
+pub(crate) const GOSSIPSUB_1_3_0_PROTOCOL: ProtocolId = ProtocolId {
+    protocol: StreamProtocol::new("/meshsub/1.3.0"),
+    kind: PeerKind::Gossipsubv1_2,
+};
 
 pub(crate) const GOSSIPSUB_1_2_0_PROTOCOL: ProtocolId = ProtocolId {
     protocol: StreamProtocol::new("/meshsub/1.2.0"),
@@ -79,6 +86,7 @@ impl Default for ProtocolConfig {
         Self {
             validation_mode: ValidationMode::Strict,
             protocol_ids: vec![
+                GOSSIPSUB_1_3_0_PROTOCOL,
                 GOSSIPSUB_1_2_0_PROTOCOL,
                 GOSSIPSUB_1_1_0_PROTOCOL,
                 GOSSIPSUB_1_0_0_PROTOCOL,
@@ -556,12 +564,39 @@ impl Decoder for GossipsubCodec {
                 })
                 .collect();
 
+            let extensions_msg = rpc_control.extensions.map(|extensions| Extensions {
+                test_extension: extensions.testExtension,
+                partial_messages: extensions.partialMessages,
+            });
+
             control_msgs.extend(ihave_msgs);
             control_msgs.extend(iwant_msgs);
             control_msgs.extend(graft_msgs);
             control_msgs.extend(prune_msgs);
             control_msgs.extend(idontwant_msgs);
+            control_msgs.push(ControlAction::Extensions(extensions_msg));
         }
+
+        #[cfg(feature = "partial_messages")]
+        let partial_message = rpc.partial.and_then(|partial_proto| {
+            let Some(topic_id_bytes) = partial_proto.topicID else {
+                tracing::debug!("Partial message without topic_id, discarding");
+                return None;
+            };
+            let topic_id = TopicHash::from_raw(String::from_utf8_lossy(&topic_id_bytes));
+
+            let Some(group_id) = partial_proto.groupID else {
+                tracing::debug!("Partial message without group_id, discarding");
+                return None;
+            };
+
+            Some(PartialMessage {
+                topic_id,
+                group_id,
+                metadata: partial_proto.partsMetadata,
+                message: partial_proto.partialMessage,
+            })
+        });
 
         Ok(Some(HandlerEvent::Message {
             rpc: RpcIn {
@@ -576,9 +611,14 @@ impl Decoder for GossipsubCodec {
                             SubscriptionAction::Unsubscribe
                         },
                         topic_hash: TopicHash::from_raw(sub.topic_id.unwrap_or_default()),
+                        #[cfg(feature = "partial_messages")]
+                        partial: sub.partial.unwrap_or_default(),
                     })
                     .collect(),
                 control_msgs,
+                test_extension: rpc.testExtension.map(|_test_extension| TestExtension {}),
+                #[cfg(feature = "partial_messages")]
+                partial_message,
             },
             invalid_messages,
         }))

@@ -62,7 +62,7 @@ impl Queue {
     /// which will only happen for control and non priority messages.
     pub(crate) fn try_push(&mut self, message: RpcOut) -> Result<(), Box<RpcOut>> {
         match message {
-            RpcOut::Subscribe(_) | RpcOut::Unsubscribe(_) => {
+            RpcOut::Extensions(_) | RpcOut::Subscribe { .. } | RpcOut::Unsubscribe(_) => {
                 self.priority
                     .try_push(message)
                     .expect("Shared is unbounded");
@@ -74,6 +74,8 @@ impl Queue {
             RpcOut::Publish { .. }
             | RpcOut::Forward { .. }
             | RpcOut::IHave(_)
+            | RpcOut::PartialMessage { .. }
+            | RpcOut::TestExtension
             | RpcOut::IWant(_) => self.non_priority.try_push(message),
         }
     }

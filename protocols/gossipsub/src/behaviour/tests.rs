@@ -33,7 +33,7 @@ use crate::{
     config::{ConfigBuilder, TopicMeshConfig},
     protocol::GossipsubCodec,
     subscription_filter::WhitelistSubscriptionFilter,
-    types::RpcIn,
+    types::{ControlAction, Extensions, RpcIn, RpcOut},
     IdentTopic as Topic,
 };
 
@@ -85,7 +85,12 @@ where
         // subscribe to the topics
         for t in self.topics {
             let topic = Topic::new(t);
-            gs.subscribe(&topic).unwrap();
+            gs.subscribe(
+                &topic,
+                #[cfg(feature = "partial_messages")]
+                false,
+            )
+            .unwrap();
             topic_hashes.push(topic.hash().clone());
         }
 
@@ -173,8 +178,6 @@ fn inject_nodes1() -> InjectNodes<IdentityTransform, AllowAllSubscriptionFilter>
     InjectNodes::<IdentityTransform, AllowAllSubscriptionFilter>::default()
 }
 
-// helper functions for testing
-
 fn add_peer<D, F>(
     gs: &mut Behaviour<D, F>,
     topic_hashes: &[TopicHash],
@@ -247,6 +250,11 @@ where
             topics: Default::default(),
             messages: queue,
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         },
     );
 
@@ -275,6 +283,8 @@ where
                 .map(|t| Subscription {
                     action: SubscriptionAction::Subscribe,
                     topic_hash: t,
+                    #[cfg(feature = "partial_messages")]
+                    partial: false,
                 })
                 .collect::<Vec<_>>(),
             &peer,
@@ -414,9 +424,14 @@ fn proto_to_message(rpc: &proto::RPC) -> RpcIn {
                     SubscriptionAction::Unsubscribe
                 },
                 topic_hash: TopicHash::from_raw(sub.topic_id.unwrap_or_default()),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             })
             .collect(),
         control_msgs,
+        test_extension: None,
+        #[cfg(feature = "partial_messages")]
+        partial_message: None,
     }
 }
 
@@ -453,7 +468,7 @@ fn test_subscribe() {
         .into_values()
         .fold(0, |mut collected_subscriptions, mut queue| {
             while !queue.is_empty() {
-                if let Some(RpcOut::Subscribe(_)) = queue.try_pop() {
+                if let Some(RpcOut::Subscribe { .. }) = queue.try_pop() {
                     collected_subscriptions += 1
                 }
             }
@@ -513,7 +528,7 @@ fn test_unsubscribe() {
         .into_values()
         .fold(0, |mut collected_subscriptions, mut queue| {
             while !queue.is_empty() {
-                if let Some(RpcOut::Subscribe(_)) = queue.try_pop() {
+                if let Some(RpcOut::Subscribe { .. }) = queue.try_pop() {
                     collected_subscriptions += 1
                 }
             }
@@ -571,7 +586,12 @@ fn test_join() {
 
     // re-subscribe - there should be peers associated with the topic
     assert!(
-        gs.subscribe(&topics[0]).unwrap(),
+        gs.subscribe(
+            &topics[0],
+            #[cfg(feature = "partial_messages")]
+            false
+        )
+        .unwrap(),
         "should be able to subscribe successfully"
     );
 
@@ -633,6 +653,11 @@ fn test_join() {
                 topics: Default::default(),
                 messages: queue,
                 dont_send: LinkedHashMap::new(),
+                extensions: None,
+                #[cfg(feature = "partial_messages")]
+                partial_messages: Default::default(),
+                #[cfg(feature = "partial_messages")]
+                partial_only_topics: Default::default(),
             },
         );
         queues.insert(random_peer, receiver_queue);
@@ -656,7 +681,12 @@ fn test_join() {
     }
 
     // subscribe to topic1
-    gs.subscribe(&topics[1]).unwrap();
+    gs.subscribe(
+        &topics[1],
+        #[cfg(feature = "partial_messages")]
+        false,
+    )
+    .unwrap();
 
     // the three new peers should have been added, along with 3 more from the pool.
     assert!(
@@ -856,7 +886,7 @@ fn test_inject_connected() {
         HashMap::<PeerId, Vec<String>>::new(),
         |mut collected_subscriptions, (peer, mut queue)| {
             while !queue.is_empty() {
-                if let Some(RpcOut::Subscribe(topic)) = queue.try_pop() {
+                if let Some(RpcOut::Subscribe { topic, .. }) = queue.try_pop() {
                     let mut peer_subs = collected_subscriptions.remove(&peer).unwrap_or_default();
                     peer_subs.push(topic.into_string());
                     collected_subscriptions.insert(peer, peer_subs);
@@ -911,12 +941,16 @@ fn test_handle_received_subscriptions() {
         .map(|topic_hash| Subscription {
             action: SubscriptionAction::Subscribe,
             topic_hash: topic_hash.clone(),
+            #[cfg(feature = "partial_messages")]
+            partial: false,
         })
         .collect::<Vec<Subscription>>();
 
     subscriptions.push(Subscription {
         action: SubscriptionAction::Unsubscribe,
         topic_hash: topic_hashes[topic_hashes.len() - 1].clone(),
+        #[cfg(feature = "partial_messages")]
+        partial: false,
     });
 
     let unknown_peer = PeerId::random();
@@ -974,6 +1008,8 @@ fn test_handle_received_subscriptions() {
         &[Subscription {
             action: SubscriptionAction::Unsubscribe,
             topic_hash: topic_hashes[0].clone(),
+            #[cfg(feature = "partial_messages")]
+            partial: false,
         }],
         &peers[0],
     );
@@ -1027,30 +1063,35 @@ fn test_get_random_peers() {
                 topics: topics.clone(),
                 messages: Queue::new(gs.config.connection_handler_queue_len()),
                 dont_send: LinkedHashMap::new(),
+                extensions: None,
+                #[cfg(feature = "partial_messages")]
+                partial_messages: Default::default(),
+                #[cfg(feature = "partial_messages")]
+                partial_only_topics: Default::default(),
             },
         );
     }
 
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, false, |_| true);
     assert_eq!(random_peers.len(), 5, "Expected 5 peers to be returned");
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 30, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 30, false, |_| true);
     assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
     assert!(
         random_peers == peers.iter().cloned().collect(),
         "Expected no shuffling"
     );
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 20, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 20, false, |_| true);
     assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
     assert!(
         random_peers == peers.iter().cloned().collect(),
         "Expected no shuffling"
     );
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 0, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 0, false, |_| true);
     assert!(random_peers.is_empty(), "Expected 0 peers to be returned");
     // test the filter
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_| false);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, false, |_| false);
     assert!(random_peers.is_empty(), "Expected 0 peers to be returned");
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 10, {
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 10, false, {
         |peer| peers.contains(peer)
     });
     assert!(random_peers.len() == 10, "Expected 10 peers to be returned");
@@ -1229,6 +1270,9 @@ fn test_handle_iwant_msg_but_already_sent_idontwant() {
         control_msgs: vec![ControlAction::IDontWant(IDontWant {
             message_ids: vec![msg_id.clone()],
         })],
+        test_extension: None,
+        #[cfg(feature = "partial_messages")]
+        partial_message: None,
     };
     gs.on_connection_handler_event(
         peers[1],
@@ -1701,13 +1745,20 @@ fn explicit_peers_not_added_to_mesh_on_subscribe() {
             &[Subscription {
                 action: SubscriptionAction::Subscribe,
                 topic_hash: topic_hash.clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             }],
             peer,
         );
     }
 
     // subscribe now to topic
-    gs.subscribe(&topic).unwrap();
+    gs.subscribe(
+        &topic,
+        #[cfg(feature = "partial_messages")]
+        false,
+    )
+    .unwrap();
 
     // only peer 1 is in the mesh not peer 0 (which is an explicit peer)
     assert_eq!(gs.mesh[&topic_hash], vec![peers[1]].into_iter().collect());
@@ -1749,6 +1800,8 @@ fn explicit_peers_not_added_to_mesh_from_fanout_on_subscribe() {
             &[Subscription {
                 action: SubscriptionAction::Subscribe,
                 topic_hash: topic_hash.clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             }],
             peer,
         );
@@ -1758,7 +1811,12 @@ fn explicit_peers_not_added_to_mesh_from_fanout_on_subscribe() {
     gs.publish(topic.clone(), vec![1, 2, 3]).unwrap();
 
     // subscribe now to topic
-    gs.subscribe(&topic).unwrap();
+    gs.subscribe(
+        &topic,
+        #[cfg(feature = "partial_messages")]
+        false,
+    )
+    .unwrap();
 
     // only peer 1 is in the mesh not peer 0 (which is an explicit peer)
     assert_eq!(gs.mesh[&topic_hash], vec![peers[1]].into_iter().collect());
@@ -2163,7 +2221,11 @@ fn test_unsubscribe_backoff() {
         "Peer should be pruned with `unsubscribe_backoff`."
     );
 
-    let _ = gs.subscribe(&Topic::new(topics[0].to_string()));
+    let _ = gs.subscribe(
+        &Topic::new(topics[0].to_string()),
+        #[cfg(feature = "partial_messages")]
+        false,
+    );
 
     // forget all events until now
     let queues = flush_events(&mut gs, queues);
@@ -3003,6 +3065,8 @@ fn test_ignore_rpc_from_peers_below_graylist_threshold() {
     let subscription = Subscription {
         action: SubscriptionAction::Subscribe,
         topic_hash: topics[0].clone(),
+        #[cfg(feature = "partial_messages")]
+        partial: false,
     };
 
     let control_action = ControlAction::IHave(IHave {
@@ -3022,6 +3086,9 @@ fn test_ignore_rpc_from_peers_below_graylist_threshold() {
                 messages: vec![raw_message1],
                 subscriptions: vec![subscription.clone()],
                 control_msgs: vec![control_action],
+                test_extension: None,
+                #[cfg(feature = "partial_messages")]
+                partial_message: None,
             },
             invalid_messages: Vec::new(),
         },
@@ -3048,6 +3115,9 @@ fn test_ignore_rpc_from_peers_below_graylist_threshold() {
                 messages: vec![raw_message3],
                 subscriptions: vec![subscription],
                 control_msgs: vec![control_action],
+                test_extension: None,
+                #[cfg(feature = "partial_messages")]
+                partial_message: None,
             },
             invalid_messages: Vec::new(),
         },
@@ -3656,6 +3726,9 @@ fn test_scoring_p4_invalid_signature() {
                 messages: vec![],
                 subscriptions: vec![],
                 control_msgs: vec![],
+                test_extension: None,
+                #[cfg(feature = "partial_messages")]
+                partial_message: None,
             },
             invalid_messages: vec![(m, ValidationError::InvalidSignature)],
         },
@@ -5112,8 +5185,20 @@ fn test_subscribe_to_invalid_topic() {
         .to_subscribe(false)
         .create_network();
 
-    assert!(gs.subscribe(&t1).is_ok());
-    assert!(gs.subscribe(&t2).is_err());
+    assert!(gs
+        .subscribe(
+            &t1,
+            #[cfg(feature = "partial_messages")]
+            false
+        )
+        .is_ok());
+    assert!(gs
+        .subscribe(
+            &t2,
+            #[cfg(feature = "partial_messages")]
+            false
+        )
+        .is_err());
 }
 
 #[test]
@@ -5142,7 +5227,12 @@ fn test_subscribe_and_graft_with_negative_score() {
     let original_score = gs1.as_peer_score_mut().score_report(&p2).score;
 
     // subscribe to topic in gs2
-    gs2.subscribe(&topic).unwrap();
+    gs2.subscribe(
+        &topic,
+        #[cfg(feature = "partial_messages")]
+        false,
+    )
+    .unwrap();
 
     let forward_messages_to_p1 = |gs1: &mut Behaviour<_, _>,
                                   p1: PeerId,
@@ -5410,6 +5500,9 @@ fn parses_idontwant() {
         control_msgs: vec![ControlAction::IDontWant(IDontWant {
             message_ids: vec![message_id.clone()],
         })],
+        test_extension: None,
+        #[cfg(feature = "partial_messages")]
+        partial_message: None,
     };
     gs.on_connection_handler_event(
         peers[1],
@@ -5469,6 +5562,11 @@ fn test_all_queues_full() {
             topics: topics.clone(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         },
     );
 
@@ -5506,6 +5604,11 @@ fn test_slow_peer_returns_failed_publish() {
             topics: topics.clone(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         },
     );
     let peer_id = PeerId::random();
@@ -5519,6 +5622,11 @@ fn test_slow_peer_returns_failed_publish() {
             topics: topics.clone(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         },
     );
 
@@ -5571,6 +5679,11 @@ fn test_slow_peer_returns_failed_ihave_handling() {
             topics: topics.clone(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         },
     );
     peers.push(slow_peer_id);
@@ -5588,6 +5701,11 @@ fn test_slow_peer_returns_failed_ihave_handling() {
             topics: topics.clone(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         },
     );
 
@@ -5676,6 +5794,11 @@ fn test_slow_peer_returns_failed_iwant_handling() {
             topics: topics.clone(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         },
     );
     peers.push(slow_peer_id);
@@ -5693,6 +5816,11 @@ fn test_slow_peer_returns_failed_iwant_handling() {
             topics: topics.clone(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         },
     );
 
@@ -5761,6 +5889,11 @@ fn test_slow_peer_returns_failed_forward() {
             topics: topics.clone(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         },
     );
     peers.push(slow_peer_id);
@@ -5778,6 +5911,11 @@ fn test_slow_peer_returns_failed_forward() {
             topics: topics.clone(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         },
     );
 
@@ -5851,6 +5989,11 @@ fn test_slow_peer_is_downscored_on_publish() {
             topics: topics.clone(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         },
     );
     gs.as_peer_score_mut().add_peer(slow_peer_id);
@@ -5865,6 +6008,11 @@ fn test_slow_peer_is_downscored_on_publish() {
             topics: topics.clone(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
         },
     );
 
@@ -6244,8 +6392,12 @@ fn test_multiple_topics_with_different_configs() {
 
     // re-subscribe to topic1
     assert!(
-        gs.subscribe(&Topic::new(topic_hashes[0].to_string()))
-            .unwrap(),
+        gs.subscribe(
+            &Topic::new(topic_hashes[0].to_string()),
+            #[cfg(feature = "partial_messages")]
+            false
+        )
+        .unwrap(),
         "Should subscribe successfully"
     );
 
@@ -6477,6 +6629,9 @@ fn test_validation_error_message_size_too_large_topic_specific() {
                 messages: vec![raw_message],
                 subscriptions: vec![],
                 control_msgs: vec![],
+                test_extension: None,
+                #[cfg(feature = "partial_messages")]
+                partial_message: None,
             },
             invalid_messages: vec![],
         },
@@ -6521,6 +6676,8 @@ fn test_validation_error_message_size_too_large_topic_specific() {
         }],
         subscriptions: vec![],
         control: None,
+        testExtension: None,
+        partial: None,
     };
     codec.encode(rpc, &mut buf).unwrap();
 
@@ -6581,6 +6738,9 @@ fn test_validation_message_size_within_topic_specific() {
                 messages: vec![raw_message],
                 subscriptions: vec![],
                 control_msgs: vec![],
+                test_extension: None,
+                #[cfg(feature = "partial_messages")]
+                partial_message: None,
             },
             invalid_messages: vec![],
         },
@@ -6625,6 +6785,8 @@ fn test_validation_message_size_within_topic_specific() {
         }],
         subscriptions: vec![],
         control: None,
+        testExtension: None,
+        partial: None,
     };
     codec.encode(rpc, &mut buf).unwrap();
 
@@ -6640,4 +6802,95 @@ fn test_validation_message_size_within_topic_specific() {
         }
         _ => panic!("Unexpected event"),
     }
+}
+
+#[test]
+fn test_extensions_message_creation() {
+    let extensions_rpc = RpcOut::Extensions(Extensions {
+        test_extension: Some(true),
+        partial_messages: None,
+    });
+    let proto_rpc: proto::RPC = extensions_rpc.into();
+
+    assert!(proto_rpc.control.is_some());
+    let control = proto_rpc.control.unwrap();
+    assert!(control.extensions.is_some());
+    let test_extension = control.extensions.unwrap().testExtension.unwrap();
+    assert!(test_extension);
+    assert!(control.ihave.is_empty());
+    assert!(control.iwant.is_empty());
+    assert!(control.graft.is_empty());
+    assert!(control.prune.is_empty());
+    assert!(control.idontwant.is_empty());
+}
+
+#[test]
+fn test_handle_extensions_message() {
+    let mut gs: Behaviour = Behaviour::new(
+        MessageAuthenticity::Anonymous,
+        ConfigBuilder::default()
+            .validation_mode(ValidationMode::None)
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
+
+    let peer_id = PeerId::random();
+    let messages = Queue::new(gs.config.connection_handler_queue_len());
+
+    // Add peer without extensions
+    gs.connected_peers.insert(
+        peer_id,
+        PeerDetails {
+            kind: PeerKind::Gossipsubv1_3,
+            connections: vec![ConnectionId::new_unchecked(0)],
+            outbound: false,
+            topics: BTreeSet::new(),
+            messages,
+            dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_only_topics: Default::default(),
+        },
+    );
+
+    // Simulate receiving extensions message
+    let extensions = Extensions {
+        test_extension: Some(false),
+        partial_messages: None,
+    };
+    gs.handle_extensions(&peer_id, extensions);
+
+    // Verify extensions were stored
+    let peer_details = gs.connected_peers.get(&peer_id).unwrap();
+    assert!(peer_details.extensions.is_some());
+
+    // Simulate receiving duplicate extensions message from another peer
+    let duplicate_rpc = RpcIn {
+        messages: vec![],
+        subscriptions: vec![],
+        control_msgs: vec![ControlAction::Extensions(Some(Extensions {
+            test_extension: Some(true),
+            partial_messages: None,
+        }))],
+        test_extension: None,
+        #[cfg(feature = "partial_messages")]
+        partial_message: None,
+    };
+
+    gs.on_connection_handler_event(
+        peer_id,
+        ConnectionId::new_unchecked(0),
+        HandlerEvent::Message {
+            rpc: duplicate_rpc,
+            invalid_messages: vec![],
+        },
+    );
+
+    // Extensions should still be present (not cleared or changed)
+    let peer_details = gs.connected_peers.get(&peer_id).unwrap();
+    let test_extension = peer_details.extensions.unwrap().test_extension.unwrap();
+    assert!(!test_extension);
 }

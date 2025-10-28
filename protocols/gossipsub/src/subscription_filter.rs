@@ -225,22 +225,32 @@ mod test {
             Subscription {
                 action: Unsubscribe,
                 topic_hash: t1.clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Unsubscribe,
                 topic_hash: t2.clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Subscribe,
                 topic_hash: t2,
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Subscribe,
                 topic_hash: t1.clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Unsubscribe,
                 topic_hash: t1,
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
         ];
 
@@ -262,10 +272,14 @@ mod test {
             Subscription {
                 action: Subscribe,
                 topic_hash: t1,
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Subscribe,
                 topic_hash: t2,
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
         ];
 
@@ -291,14 +305,20 @@ mod test {
             Subscription {
                 action: Subscribe,
                 topic_hash: t1.clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Unsubscribe,
                 topic_hash: t1.clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Subscribe,
                 topic_hash: t1,
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
         ];
 
@@ -324,10 +344,14 @@ mod test {
             Subscription {
                 action: Subscribe,
                 topic_hash: t[2].clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Subscribe,
                 topic_hash: t[3].clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
         ];
 
@@ -353,22 +377,32 @@ mod test {
             Subscription {
                 action: Subscribe,
                 topic_hash: t[4].clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Subscribe,
                 topic_hash: t[2].clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Subscribe,
                 topic_hash: t[3].clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Unsubscribe,
                 topic_hash: t[0].clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Unsubscribe,
                 topic_hash: t[1].clone(),
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
         ];
 
@@ -390,10 +424,14 @@ mod test {
             Subscription {
                 action: Subscribe,
                 topic_hash: t1,
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Subscribe,
                 topic_hash: t2,
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
         ];
 
@@ -416,14 +454,20 @@ mod test {
             Subscription {
                 action: Subscribe,
                 topic_hash: t1,
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Subscribe,
                 topic_hash: t2,
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
             Subscription {
                 action: Subscribe,
                 topic_hash: t3,
+                #[cfg(feature = "partial_messages")]
+                partial: false,
             },
         ];
 
