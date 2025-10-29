@@ -77,7 +77,7 @@ use crate::{
 #[cfg(feature = "partial_messages")]
 use crate::{
     partial::{Partial, PublishAction},
-    types::PartialMessage,
+    types::{PartialMessage, PartialSubOpts},
 };
 
 #[cfg(test)]
@@ -306,9 +306,9 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     /// Overlay network of connected peers - Maps topics to connected gossipsub peers.
     mesh: HashMap<TopicHash, BTreeSet<PeerId>>,
 
-    /// Partial only subscribed topics.
+    /// Partial options when subscribing topics.
     #[cfg(feature = "partial_messages")]
-    partial_only_topics: BTreeSet<TopicHash>,
+    partial_opts: HashMap<TopicHash, PartialSubOpts>,
 
     /// Map of topics to list of peers that we publish to, but don't subscribe to.
     fanout: HashMap<TopicHash, BTreeSet<PeerId>>,
@@ -474,7 +474,7 @@ where
             failed_messages: Default::default(),
             gossip_promises: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         })
     }
 
@@ -541,7 +541,8 @@ where
     pub fn subscribe<H: Hasher>(
         &mut self,
         topic: &Topic<H>,
-        #[cfg(feature = "partial_messages")] partial_only: bool,
+        #[cfg(feature = "partial_messages")] requests_partial: bool,
+        #[cfg(feature = "partial_messages")] supports_partial: bool,
     ) -> Result<bool, SubscriptionError> {
         let topic_hash = topic.hash();
         if !self.subscription_filter.can_subscribe(&topic_hash) {
@@ -559,7 +560,10 @@ where
             let event = RpcOut::Subscribe {
                 topic: topic_hash.clone(),
                 #[cfg(feature = "partial_messages")]
-                partial_only,
+                partial_opts: PartialSubOpts {
+                    requests_partial,
+                    supports_partial,
+                },
             };
             self.send_message(peer_id, event);
         }
@@ -569,9 +573,13 @@ where
         self.join(&topic_hash);
         #[cfg(feature = "partial_messages")]
         {
-            if partial_only {
-                self.partial_only_topics.insert(topic_hash.clone());
-            }
+            self.partial_opts.insert(
+                topic_hash.clone(),
+                PartialSubOpts {
+                    requests_partial,
+                    supports_partial,
+                },
+            );
         }
 
         tracing::debug!(%topic, "Subscribed to topic");
@@ -602,7 +610,7 @@ where
         self.leave(&topic_hash);
         #[cfg(feature = "partial_messages")]
         {
-            self.partial_only_topics.remove(&topic_hash.clone());
+            self.partial_opts.remove(&topic_hash.clone());
         }
 
         tracing::debug!(topic=%topic_hash, "Unsubscribed from topic");
@@ -660,7 +668,10 @@ where
 
         #[cfg(feature = "partial_messages")]
         let recipient_peers = self.get_publish_peers(&topic_hash, |_, peer| {
-            !peer.partial_only_topics.contains(&topic_hash)
+            peer.partial_opts
+                .get(&topic_hash)
+                .map(|opts| !opts.requests_partial)
+                .unwrap_or(true)
         });
 
         #[cfg(not(feature = "partial_messages"))]
@@ -831,19 +842,41 @@ where
         let group_id = partial_message.group_id().as_ref().to_vec();
 
         let recipient_peers = self.get_publish_peers(&topic_hash, |_, peer| {
-            peer.partial_only_topics.contains(&topic_hash)
+            peer.partial_opts
+                .get(&topic_hash)
+                .map(|opts| opts.supports_partial)
+                .unwrap_or_default()
         });
         let metadata = partial_message.parts_metadata().as_ref().to_vec();
         for peer_id in recipient_peers.iter() {
             // TODO: this can be optimized, we are going to get the peer again on `send_message`
             let Some(peer) = &mut self.connected_peers.get_mut(peer_id) else {
                 tracing::error!(peer = %peer_id,
-                    "Could not send rpc to connection handler, peer doesn't exist in connected peer list");
+                    "Could not get peer from connected peers, peer doesn't exist in connected peer list");
+                continue;
+            };
+            let Some(partial_opts) = peer.partial_opts.get(&topic_hash) else {
+                tracing::error!(peer = %peer_id,
+                    "Could not get partial subscripion options from peer which subscribed for partial messages");
                 continue;
             };
 
             let peer_partials = peer.partial_messages.entry(topic_hash.clone()).or_default();
             let peer_partial = peer_partials.entry(group_id.clone()).or_default();
+
+            // Peer `supports_partial` but doesn't `requests_partial`.
+            if !partial_opts.requests_partial {
+                self.send_message(
+                    *peer_id,
+                    RpcOut::PartialMessage {
+                        message: None,
+                        metadata: metadata.clone(),
+                        group_id: group_id.clone(),
+                        topic_id: topic_hash.clone(),
+                    },
+                );
+                continue;
+            }
 
             let Ok(action) =
                 partial_message.partial_message_bytes_from_metadata(peer_partial.metadata.as_ref())
@@ -856,7 +889,6 @@ where
                 }
                 continue;
             };
-
             let message = match action {
                 PublishAction::SameMetadata => {
                     // No new data to send peer.
@@ -2140,9 +2172,8 @@ where
                 SubscriptionAction::Subscribe => {
                     #[cfg(feature = "partial_messages")]
                     {
-                        if subscription.partial {
-                            peer.partial_only_topics.insert(topic_hash.clone());
-                        }
+                        peer.partial_opts
+                            .insert(topic_hash.clone(), subscription.partial_opts);
                     }
                     if peer.topics.insert(topic_hash.clone()) {
                         tracing::debug!(
@@ -3178,12 +3209,17 @@ where
         tracing::debug!(peer=%peer_id, "New peer connected");
         // We need to send our subscriptions to the newly-connected node.
         for topic_hash in self.mesh.clone().into_keys() {
+            #[cfg(feature = "partial_messages")]
+            let Some(partial_opts) = self.partial_opts.get(&topic_hash).copied() else {
+                tracing::error!("Partial subscription options should exist for subscribed topic");
+                return;
+            };
             self.send_message(
                 peer_id,
                 RpcOut::Subscribe {
                     topic: topic_hash.clone(),
                     #[cfg(feature = "partial_messages")]
-                    partial_only: self.partial_only_topics.contains(&topic_hash),
+                    partial_opts,
                 },
             );
         }
@@ -3369,7 +3405,7 @@ where
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         });
         // Add the new connection
         connected_peer.connections.push(connection_id);
@@ -3416,7 +3452,7 @@ where
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         });
         // Add the new connection
         connected_peer.connections.push(connection_id);

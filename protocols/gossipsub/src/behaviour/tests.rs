@@ -89,6 +89,8 @@ where
                 &topic,
                 #[cfg(feature = "partial_messages")]
                 false,
+                #[cfg(feature = "partial_messages")]
+                false,
             )
             .unwrap();
             topic_hashes.push(topic.hash().clone());
@@ -254,7 +256,7 @@ where
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         },
     );
 
@@ -284,7 +286,7 @@ where
                     action: SubscriptionAction::Subscribe,
                     topic_hash: t,
                     #[cfg(feature = "partial_messages")]
-                    partial: false,
+                    partial_opts: Default::default(),
                 })
                 .collect::<Vec<_>>(),
             &peer,
@@ -425,7 +427,7 @@ fn proto_to_message(rpc: &proto::RPC) -> RpcIn {
                 },
                 topic_hash: TopicHash::from_raw(sub.topic_id.unwrap_or_default()),
                 #[cfg(feature = "partial_messages")]
-                partial: false,
+                partial_opts: Default::default(),
             })
             .collect(),
         control_msgs,
@@ -589,6 +591,8 @@ fn test_join() {
         gs.subscribe(
             &topics[0],
             #[cfg(feature = "partial_messages")]
+            false,
+            #[cfg(feature = "partial_messages")]
             false
         )
         .unwrap(),
@@ -657,7 +661,7 @@ fn test_join() {
                 #[cfg(feature = "partial_messages")]
                 partial_messages: Default::default(),
                 #[cfg(feature = "partial_messages")]
-                partial_only_topics: Default::default(),
+                partial_opts: Default::default(),
             },
         );
         queues.insert(random_peer, receiver_queue);
@@ -683,6 +687,8 @@ fn test_join() {
     // subscribe to topic1
     gs.subscribe(
         &topics[1],
+        #[cfg(feature = "partial_messages")]
+        false,
         #[cfg(feature = "partial_messages")]
         false,
     )
@@ -942,7 +948,7 @@ fn test_handle_received_subscriptions() {
             action: SubscriptionAction::Subscribe,
             topic_hash: topic_hash.clone(),
             #[cfg(feature = "partial_messages")]
-            partial: false,
+            partial_opts: Default::default(),
         })
         .collect::<Vec<Subscription>>();
 
@@ -950,7 +956,7 @@ fn test_handle_received_subscriptions() {
         action: SubscriptionAction::Unsubscribe,
         topic_hash: topic_hashes[topic_hashes.len() - 1].clone(),
         #[cfg(feature = "partial_messages")]
-        partial: false,
+        partial_opts: Default::default(),
     });
 
     let unknown_peer = PeerId::random();
@@ -1009,7 +1015,7 @@ fn test_handle_received_subscriptions() {
             action: SubscriptionAction::Unsubscribe,
             topic_hash: topic_hashes[0].clone(),
             #[cfg(feature = "partial_messages")]
-            partial: false,
+            partial_opts: Default::default(),
         }],
         &peers[0],
     );
@@ -1067,7 +1073,7 @@ fn test_get_random_peers() {
                 #[cfg(feature = "partial_messages")]
                 partial_messages: Default::default(),
                 #[cfg(feature = "partial_messages")]
-                partial_only_topics: Default::default(),
+                partial_opts: Default::default(),
             },
         );
     }
@@ -1746,7 +1752,7 @@ fn explicit_peers_not_added_to_mesh_on_subscribe() {
                 action: SubscriptionAction::Subscribe,
                 topic_hash: topic_hash.clone(),
                 #[cfg(feature = "partial_messages")]
-                partial: false,
+                partial_opts: Default::default(),
             }],
             peer,
         );
@@ -1755,6 +1761,8 @@ fn explicit_peers_not_added_to_mesh_on_subscribe() {
     // subscribe now to topic
     gs.subscribe(
         &topic,
+        #[cfg(feature = "partial_messages")]
+        false,
         #[cfg(feature = "partial_messages")]
         false,
     )
@@ -1801,7 +1809,7 @@ fn explicit_peers_not_added_to_mesh_from_fanout_on_subscribe() {
                 action: SubscriptionAction::Subscribe,
                 topic_hash: topic_hash.clone(),
                 #[cfg(feature = "partial_messages")]
-                partial: false,
+                partial_opts: PartialSubOpts::default(),
             }],
             peer,
         );
@@ -1813,6 +1821,8 @@ fn explicit_peers_not_added_to_mesh_from_fanout_on_subscribe() {
     // subscribe now to topic
     gs.subscribe(
         &topic,
+        #[cfg(feature = "partial_messages")]
+        false,
         #[cfg(feature = "partial_messages")]
         false,
     )
@@ -2223,6 +2233,8 @@ fn test_unsubscribe_backoff() {
 
     let _ = gs.subscribe(
         &Topic::new(topics[0].to_string()),
+        #[cfg(feature = "partial_messages")]
+        false,
         #[cfg(feature = "partial_messages")]
         false,
     );
@@ -3066,7 +3078,7 @@ fn test_ignore_rpc_from_peers_below_graylist_threshold() {
         action: SubscriptionAction::Subscribe,
         topic_hash: topics[0].clone(),
         #[cfg(feature = "partial_messages")]
-        partial: false,
+        partial_opts: PartialSubOpts::default(),
     };
 
     let control_action = ControlAction::IHave(IHave {
@@ -5189,12 +5201,16 @@ fn test_subscribe_to_invalid_topic() {
         .subscribe(
             &t1,
             #[cfg(feature = "partial_messages")]
+            false,
+            #[cfg(feature = "partial_messages")]
             false
         )
         .is_ok());
     assert!(gs
         .subscribe(
             &t2,
+            #[cfg(feature = "partial_messages")]
+            false,
             #[cfg(feature = "partial_messages")]
             false
         )
@@ -5229,6 +5245,8 @@ fn test_subscribe_and_graft_with_negative_score() {
     // subscribe to topic in gs2
     gs2.subscribe(
         &topic,
+        #[cfg(feature = "partial_messages")]
+        false,
         #[cfg(feature = "partial_messages")]
         false,
     )
@@ -5566,7 +5584,7 @@ fn test_all_queues_full() {
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         },
     );
 
@@ -5608,7 +5626,7 @@ fn test_slow_peer_returns_failed_publish() {
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         },
     );
     let peer_id = PeerId::random();
@@ -5626,7 +5644,7 @@ fn test_slow_peer_returns_failed_publish() {
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         },
     );
 
@@ -5683,7 +5701,7 @@ fn test_slow_peer_returns_failed_ihave_handling() {
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         },
     );
     peers.push(slow_peer_id);
@@ -5705,7 +5723,7 @@ fn test_slow_peer_returns_failed_ihave_handling() {
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         },
     );
 
@@ -5798,7 +5816,7 @@ fn test_slow_peer_returns_failed_iwant_handling() {
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         },
     );
     peers.push(slow_peer_id);
@@ -5820,7 +5838,7 @@ fn test_slow_peer_returns_failed_iwant_handling() {
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         },
     );
 
@@ -5893,7 +5911,7 @@ fn test_slow_peer_returns_failed_forward() {
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         },
     );
     peers.push(slow_peer_id);
@@ -5915,7 +5933,7 @@ fn test_slow_peer_returns_failed_forward() {
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         },
     );
 
@@ -5993,7 +6011,7 @@ fn test_slow_peer_is_downscored_on_publish() {
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         },
     );
     gs.as_peer_score_mut().add_peer(slow_peer_id);
@@ -6012,7 +6030,7 @@ fn test_slow_peer_is_downscored_on_publish() {
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         },
     );
 
@@ -6394,6 +6412,8 @@ fn test_multiple_topics_with_different_configs() {
     assert!(
         gs.subscribe(
             &Topic::new(topic_hashes[0].to_string()),
+            #[cfg(feature = "partial_messages")]
+            false,
             #[cfg(feature = "partial_messages")]
             false
         )
@@ -6852,7 +6872,7 @@ fn test_handle_extensions_message() {
             #[cfg(feature = "partial_messages")]
             partial_messages: Default::default(),
             #[cfg(feature = "partial_messages")]
-            partial_only_topics: Default::default(),
+            partial_opts: Default::default(),
         },
     );
 

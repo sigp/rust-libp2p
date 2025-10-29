@@ -70,7 +70,8 @@ use super::*;
 pub struct SubOpts {
     pub subscribe: Option<bool>,
     pub topic_id: Option<String>,
-    pub partial: Option<bool>,
+    pub requestsPartial: Option<bool>,
+    pub supportsPartial: Option<bool>,
 }
 
 impl<'a> MessageRead<'a> for SubOpts {
@@ -80,7 +81,8 @@ impl<'a> MessageRead<'a> for SubOpts {
             match r.next_tag(bytes) {
                 Ok(8) => msg.subscribe = Some(r.read_bool(bytes)?),
                 Ok(18) => msg.topic_id = Some(r.read_string(bytes)?.to_owned()),
-                Ok(24) => msg.partial = Some(r.read_bool(bytes)?),
+                Ok(24) => msg.requestsPartial = Some(r.read_bool(bytes)?),
+                Ok(32) => msg.supportsPartial = Some(r.read_bool(bytes)?),
                 Ok(t) => { r.read_unknown(bytes, t)?; }
                 Err(e) => return Err(e),
             }
@@ -94,13 +96,15 @@ impl MessageWrite for SubOpts {
         0
         + self.subscribe.as_ref().map_or(0, |m| 1 + sizeof_varint(*(m) as u64))
         + self.topic_id.as_ref().map_or(0, |m| 1 + sizeof_len((m).len()))
-        + self.partial.as_ref().map_or(0, |m| 1 + sizeof_varint(*(m) as u64))
+        + self.requestsPartial.as_ref().map_or(0, |m| 1 + sizeof_varint(*(m) as u64))
+        + self.supportsPartial.as_ref().map_or(0, |m| 1 + sizeof_varint(*(m) as u64))
     }
 
     fn write_message<W: WriterBackend>(&self, w: &mut Writer<W>) -> Result<()> {
         if let Some(ref s) = self.subscribe { w.write_with_tag(8, |w| w.write_bool(*s))?; }
         if let Some(ref s) = self.topic_id { w.write_with_tag(18, |w| w.write_string(&**s))?; }
-        if let Some(ref s) = self.partial { w.write_with_tag(24, |w| w.write_bool(*s))?; }
+        if let Some(ref s) = self.requestsPartial { w.write_with_tag(24, |w| w.write_bool(*s))?; }
+        if let Some(ref s) = self.supportsPartial { w.write_with_tag(32, |w| w.write_bool(*s))?; }
         Ok(())
     }
 }
