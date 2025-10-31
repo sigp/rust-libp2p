@@ -111,17 +111,9 @@ pub(crate) struct PeerDetails {
     #[cfg(feature = "partial_messages")]
     pub(crate) partial_messages: HashMap<TopicHash, HashMap<Vec<u8>, PartialData>>,
 
-    /// Partial options for subscribed topics
+    /// Partial only subscribed topics.
     #[cfg(feature = "partial_messages")]
-    pub(crate) partial_opts: HashMap<TopicHash, PartialSubOpts>,
-}
-
-/// Partial ptions when subscribing a topic.
-#[cfg(feature = "partial_messages")]
-#[derive(Debug, Clone, Copy, Default, Eq, Hash, PartialEq)]
-pub struct PartialSubOpts {
-    pub(crate) requests_partial: bool,
-    pub(crate) supports_partial: bool,
+    pub(crate) partial_only_topics: BTreeSet<TopicHash>,
 }
 
 /// Stored `Metadata` for a peer.
@@ -284,9 +276,9 @@ pub struct Subscription {
     pub action: SubscriptionAction,
     /// The topic from which to subscribe or unsubscribe.
     pub topic_hash: TopicHash,
-    /// Partial options.
+    /// Peer only wants to receive partial messages instead of full messages.
     #[cfg(feature = "partial_messages")]
-    pub partial_opts: PartialSubOpts,
+    pub partial: bool,
 }
 
 /// Action that a subscription wants to perform.
@@ -411,7 +403,7 @@ pub enum RpcOut {
     Subscribe {
         topic: TopicHash,
         #[cfg(feature = "partial_messages")]
-        partial_opts: PartialSubOpts,
+        requests_partials: bool,
     },
     /// Unsubscribe a topic.
     Unsubscribe(TopicHash),
@@ -484,20 +476,16 @@ impl From<RpcOut> for proto::RPC {
             RpcOut::Subscribe {
                 topic,
                 #[cfg(feature = "partial_messages")]
-                partial_opts,
+                    requests_partials: partial_only,
             } => proto::RPC {
                 publish: Vec::new(),
                 subscriptions: vec![proto::SubOpts {
                     subscribe: Some(true),
                     topic_id: Some(topic.into_string()),
-                    #[cfg(feature = "partial_messages")]
-                    requestsPartial: Some(partial_opts.requests_partial),
                     #[cfg(not(feature = "partial_messages"))]
-                    requestsPartial: None,
+                    partial: None,
                     #[cfg(feature = "partial_messages")]
-                    supportsPartial: Some(partial_opts.supports_partial),
-                    #[cfg(not(feature = "partial_messages"))]
-                    supportsPartial: None,
+                    requestsPartial: Some(partial_only),
                 }],
                 control: None,
                 testExtension: None,
@@ -509,7 +497,6 @@ impl From<RpcOut> for proto::RPC {
                     subscribe: Some(false),
                     topic_id: Some(topic.into_string()),
                     requestsPartial: None,
-                    supportsPartial: None,
                 }],
                 control: None,
                 testExtension: None,

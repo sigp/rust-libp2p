@@ -33,7 +33,7 @@ use crate::{
     config::{ConfigBuilder, TopicMeshConfig},
     protocol::GossipsubCodec,
     subscription_filter::WhitelistSubscriptionFilter,
-    types::RpcIn,
+    types::{ControlAction, Extensions, RpcIn, RpcOut},
     IdentTopic as Topic,
 };
 
@@ -85,7 +85,14 @@ where
         // subscribe to the topics
         for t in self.topics {
             let topic = Topic::new(t);
-            gs.subscribe(&topic).unwrap();
+            gs.subscribe(
+                &topic,
+                #[cfg(feature = "partial_messages")]
+                false,
+                #[cfg(feature = "partial_messages")]
+                false,
+            )
+            .unwrap();
             topic_hashes.push(topic.hash().clone());
         }
 
@@ -173,8 +180,6 @@ fn inject_nodes1() -> InjectNodes<IdentityTransform, AllowAllSubscriptionFilter>
     InjectNodes::<IdentityTransform, AllowAllSubscriptionFilter>::default()
 }
 
-// helper functions for testing
-
 fn add_peer<D, F>(
     gs: &mut Behaviour<D, F>,
     topic_hashes: &[TopicHash],
@@ -247,6 +252,11 @@ where
             topics: Default::default(),
             messages: queue,
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         },
     );
 
@@ -275,6 +285,8 @@ where
                 .map(|t| Subscription {
                     action: SubscriptionAction::Subscribe,
                     topic_hash: t,
+                    #[cfg(feature = "partial_messages")]
+                    partial_opts: Default::default(),
                 })
                 .collect::<Vec<_>>(),
             &peer,
@@ -414,9 +426,14 @@ fn proto_to_message(rpc: &proto::RPC) -> RpcIn {
                     SubscriptionAction::Unsubscribe
                 },
                 topic_hash: TopicHash::from_raw(sub.topic_id.unwrap_or_default()),
+                #[cfg(feature = "partial_messages")]
+                partial_opts: Default::default(),
             })
             .collect(),
         control_msgs,
+        test_extension: None,
+        #[cfg(feature = "partial_messages")]
+        partial_message: None,
     }
 }
 
@@ -453,7 +470,7 @@ fn test_subscribe() {
         .into_values()
         .fold(0, |mut collected_subscriptions, mut queue| {
             while !queue.is_empty() {
-                if let Some(RpcOut::Subscribe(_)) = queue.try_pop() {
+                if let Some(RpcOut::Subscribe { .. }) = queue.try_pop() {
                     collected_subscriptions += 1
                 }
             }
@@ -513,7 +530,7 @@ fn test_unsubscribe() {
         .into_values()
         .fold(0, |mut collected_subscriptions, mut queue| {
             while !queue.is_empty() {
-                if let Some(RpcOut::Subscribe(_)) = queue.try_pop() {
+                if let Some(RpcOut::Subscribe { .. }) = queue.try_pop() {
                     collected_subscriptions += 1
                 }
             }
@@ -571,7 +588,14 @@ fn test_join() {
 
     // re-subscribe - there should be peers associated with the topic
     assert!(
-        gs.subscribe(&topics[0]).unwrap(),
+        gs.subscribe(
+            &topics[0],
+            #[cfg(feature = "partial_messages")]
+            false,
+            #[cfg(feature = "partial_messages")]
+            false
+        )
+        .unwrap(),
         "should be able to subscribe successfully"
     );
 
@@ -633,6 +657,11 @@ fn test_join() {
                 topics: Default::default(),
                 messages: queue,
                 dont_send: LinkedHashMap::new(),
+                extensions: None,
+                #[cfg(feature = "partial_messages")]
+                partial_messages: Default::default(),
+                #[cfg(feature = "partial_messages")]
+                partial_opts: Default::default(),
             },
         );
         queues.insert(random_peer, receiver_queue);
@@ -656,7 +685,14 @@ fn test_join() {
     }
 
     // subscribe to topic1
-    gs.subscribe(&topics[1]).unwrap();
+    gs.subscribe(
+        &topics[1],
+        #[cfg(feature = "partial_messages")]
+        false,
+        #[cfg(feature = "partial_messages")]
+        false,
+    )
+    .unwrap();
 
     // the three new peers should have been added, along with 3 more from the pool.
     assert!(
@@ -856,7 +892,7 @@ fn test_inject_connected() {
         HashMap::<PeerId, Vec<String>>::new(),
         |mut collected_subscriptions, (peer, mut queue)| {
             while !queue.is_empty() {
-                if let Some(RpcOut::Subscribe(topic)) = queue.try_pop() {
+                if let Some(RpcOut::Subscribe { topic, .. }) = queue.try_pop() {
                     let mut peer_subs = collected_subscriptions.remove(&peer).unwrap_or_default();
                     peer_subs.push(topic.into_string());
                     collected_subscriptions.insert(peer, peer_subs);
@@ -911,12 +947,16 @@ fn test_handle_received_subscriptions() {
         .map(|topic_hash| Subscription {
             action: SubscriptionAction::Subscribe,
             topic_hash: topic_hash.clone(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         })
         .collect::<Vec<Subscription>>();
 
     subscriptions.push(Subscription {
         action: SubscriptionAction::Unsubscribe,
         topic_hash: topic_hashes[topic_hashes.len() - 1].clone(),
+        #[cfg(feature = "partial_messages")]
+        partial_opts: Default::default(),
     });
 
     let unknown_peer = PeerId::random();
@@ -974,6 +1014,8 @@ fn test_handle_received_subscriptions() {
         &[Subscription {
             action: SubscriptionAction::Unsubscribe,
             topic_hash: topic_hashes[0].clone(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         }],
         &peers[0],
     );
@@ -1027,31 +1069,36 @@ fn test_get_random_peers() {
                 topics: topics.clone(),
                 messages: Queue::new(gs.config.connection_handler_queue_len()),
                 dont_send: LinkedHashMap::new(),
+                extensions: None,
+                #[cfg(feature = "partial_messages")]
+                partial_messages: Default::default(),
+                #[cfg(feature = "partial_messages")]
+                partial_opts: Default::default(),
             },
         );
     }
 
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_, _| true);
     assert_eq!(random_peers.len(), 5, "Expected 5 peers to be returned");
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 30, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 30, |_, _| true);
     assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
     assert!(
         random_peers == peers.iter().cloned().collect(),
         "Expected no shuffling"
     );
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 20, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 20, |_, _| true);
     assert!(random_peers.len() == 20, "Expected 20 peers to be returned");
     assert!(
         random_peers == peers.iter().cloned().collect(),
         "Expected no shuffling"
     );
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 0, |_| true);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 0, |_, _| true);
     assert!(random_peers.is_empty(), "Expected 0 peers to be returned");
     // test the filter
-    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_| false);
+    let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 5, |_, _| false);
     assert!(random_peers.is_empty(), "Expected 0 peers to be returned");
     let random_peers = get_random_peers(&gs.connected_peers, &topic_hash, 10, {
-        |peer| peers.contains(peer)
+        |peer_id, _| peers.contains(peer_id)
     });
     assert!(random_peers.len() == 10, "Expected 10 peers to be returned");
 }
@@ -1229,6 +1276,9 @@ fn test_handle_iwant_msg_but_already_sent_idontwant() {
         control_msgs: vec![ControlAction::IDontWant(IDontWant {
             message_ids: vec![msg_id.clone()],
         })],
+        test_extension: None,
+        #[cfg(feature = "partial_messages")]
+        partial_message: None,
     };
     gs.on_connection_handler_event(
         peers[1],
@@ -1701,13 +1751,22 @@ fn explicit_peers_not_added_to_mesh_on_subscribe() {
             &[Subscription {
                 action: SubscriptionAction::Subscribe,
                 topic_hash: topic_hash.clone(),
+                #[cfg(feature = "partial_messages")]
+                partial_opts: Default::default(),
             }],
             peer,
         );
     }
 
     // subscribe now to topic
-    gs.subscribe(&topic).unwrap();
+    gs.subscribe(
+        &topic,
+        #[cfg(feature = "partial_messages")]
+        false,
+        #[cfg(feature = "partial_messages")]
+        false,
+    )
+    .unwrap();
 
     // only peer 1 is in the mesh not peer 0 (which is an explicit peer)
     assert_eq!(gs.mesh[&topic_hash], vec![peers[1]].into_iter().collect());
@@ -1749,6 +1808,8 @@ fn explicit_peers_not_added_to_mesh_from_fanout_on_subscribe() {
             &[Subscription {
                 action: SubscriptionAction::Subscribe,
                 topic_hash: topic_hash.clone(),
+                #[cfg(feature = "partial_messages")]
+                partial_opts: PartialSubOpts::default(),
             }],
             peer,
         );
@@ -1758,7 +1819,14 @@ fn explicit_peers_not_added_to_mesh_from_fanout_on_subscribe() {
     gs.publish(topic.clone(), vec![1, 2, 3]).unwrap();
 
     // subscribe now to topic
-    gs.subscribe(&topic).unwrap();
+    gs.subscribe(
+        &topic,
+        #[cfg(feature = "partial_messages")]
+        false,
+        #[cfg(feature = "partial_messages")]
+        false,
+    )
+    .unwrap();
 
     // only peer 1 is in the mesh not peer 0 (which is an explicit peer)
     assert_eq!(gs.mesh[&topic_hash], vec![peers[1]].into_iter().collect());
@@ -2163,7 +2231,13 @@ fn test_unsubscribe_backoff() {
         "Peer should be pruned with `unsubscribe_backoff`."
     );
 
-    let _ = gs.subscribe(&Topic::new(topics[0].to_string()));
+    let _ = gs.subscribe(
+        &Topic::new(topics[0].to_string()),
+        #[cfg(feature = "partial_messages")]
+        false,
+        #[cfg(feature = "partial_messages")]
+        false,
+    );
 
     // forget all events until now
     let queues = flush_events(&mut gs, queues);
@@ -2341,58 +2415,22 @@ fn test_gossip_to_at_most_gossip_factor_peers() {
 }
 
 #[test]
-fn test_accept_only_outbound_peer_grafts_when_mesh_full() {
-    let config: Config = Config::default();
-
-    // enough peers to fill the mesh
-    let (mut gs, peers, _, topics) = inject_nodes1()
-        .peer_no(config.mesh_n_high())
-        .topics(vec!["test".into()])
-        .to_subscribe(true)
-        .create_network();
-
-    // graft all the peers => this will fill the mesh
-    for peer in peers {
-        gs.handle_graft(&peer, topics.clone());
-    }
-
-    // assert current mesh size
-    assert_eq!(gs.mesh[&topics[0]].len(), config.mesh_n_high());
-
-    // create an outbound and an inbound peer
-    let (inbound, _in_queue) = add_peer(&mut gs, &topics, false, false);
-    let (outbound, _out_queue) = add_peer(&mut gs, &topics, true, false);
-
-    // send grafts
-    gs.handle_graft(&inbound, vec![topics[0].clone()]);
-    gs.handle_graft(&outbound, vec![topics[0].clone()]);
-
-    // assert mesh size
-    assert_eq!(gs.mesh[&topics[0]].len(), config.mesh_n_high() + 1);
-
-    // inbound is not in mesh
-    assert!(!gs.mesh[&topics[0]].contains(&inbound));
-
-    // outbound is in mesh
-    assert!(gs.mesh[&topics[0]].contains(&outbound));
-}
-
-#[test]
 fn test_do_not_remove_too_many_outbound_peers() {
     // use an extreme case to catch errors with high probability
-    let m = 50;
-    let n = 2 * m;
+    let mesh_n = 50;
+    let mesh_n_high = 2 * mesh_n;
     let config = ConfigBuilder::default()
-        .mesh_n_high(n)
-        .mesh_n(n)
-        .mesh_n_low(n)
-        .mesh_outbound_min(m)
+        .mesh_n_high(mesh_n_high)
+        .mesh_n(mesh_n)
+        // Irrelevant for this test.
+        .mesh_n_low(mesh_n)
+        .mesh_outbound_min(mesh_n)
         .build()
         .unwrap();
 
     // fill the mesh with inbound connections
     let (mut gs, peers, _queues, topics) = inject_nodes1()
-        .peer_no(n)
+        .peer_no(mesh_n)
         .topics(vec!["test".into()])
         .to_subscribe(true)
         .gs_config(config)
@@ -2405,58 +2443,24 @@ fn test_do_not_remove_too_many_outbound_peers() {
 
     // create m outbound connections and graft (we will accept the graft)
     let mut outbound = HashSet::new();
-    for _ in 0..m {
+    // Go from 50 (mesh_n) to 100 (mesh_n_high) to trigger prunning.
+    for _ in 0..mesh_n {
         let (peer, _) = add_peer(&mut gs, &topics, true, false);
         outbound.insert(peer);
         gs.handle_graft(&peer, topics.clone());
     }
 
     // mesh is overly full
-    assert_eq!(gs.mesh.get(&topics[0]).unwrap().len(), n + m);
+    assert_eq!(gs.mesh.get(&topics[0]).unwrap().len(), mesh_n_high);
 
     // run a heartbeat
     gs.heartbeat();
 
-    // Peers should be removed to reach n
-    assert_eq!(gs.mesh.get(&topics[0]).unwrap().len(), n);
+    // Peers should be removed to reach `mesh_n`
+    assert_eq!(gs.mesh.get(&topics[0]).unwrap().len(), mesh_n);
 
     // all outbound peers are still in the mesh
     assert!(outbound.iter().all(|p| gs.mesh[&topics[0]].contains(p)));
-}
-
-#[test]
-fn test_add_outbound_peers_if_min_is_not_satisfied() {
-    let config: Config = Config::default();
-
-    // Fill full mesh with inbound peers
-    let (mut gs, peers, _, topics) = inject_nodes1()
-        .peer_no(config.mesh_n_high())
-        .topics(vec!["test".into()])
-        .to_subscribe(true)
-        .create_network();
-
-    // graft all the peers
-    for peer in peers {
-        gs.handle_graft(&peer, topics.clone());
-    }
-
-    // create config.mesh_outbound_min() many outbound connections without grafting
-    let mut peers = vec![];
-    for _ in 0..config.mesh_outbound_min() {
-        peers.push(add_peer(&mut gs, &topics, true, false));
-    }
-
-    // Nothing changed in the mesh yet
-    assert_eq!(gs.mesh[&topics[0]].len(), config.mesh_n_high());
-
-    // run a heartbeat
-    gs.heartbeat();
-
-    // The outbound peers got additionally added
-    assert_eq!(
-        gs.mesh[&topics[0]].len(),
-        config.mesh_n_high() + config.mesh_outbound_min()
-    );
 }
 
 #[test]
@@ -3073,6 +3077,8 @@ fn test_ignore_rpc_from_peers_below_graylist_threshold() {
     let subscription = Subscription {
         action: SubscriptionAction::Subscribe,
         topic_hash: topics[0].clone(),
+        #[cfg(feature = "partial_messages")]
+        partial_opts: PartialSubOpts::default(),
     };
 
     let control_action = ControlAction::IHave(IHave {
@@ -3092,6 +3098,9 @@ fn test_ignore_rpc_from_peers_below_graylist_threshold() {
                 messages: vec![raw_message1],
                 subscriptions: vec![subscription.clone()],
                 control_msgs: vec![control_action],
+                test_extension: None,
+                #[cfg(feature = "partial_messages")]
+                partial_message: None,
             },
             invalid_messages: Vec::new(),
         },
@@ -3118,6 +3127,9 @@ fn test_ignore_rpc_from_peers_below_graylist_threshold() {
                 messages: vec![raw_message3],
                 subscriptions: vec![subscription],
                 control_msgs: vec![control_action],
+                test_extension: None,
+                #[cfg(feature = "partial_messages")]
+                partial_message: None,
             },
             invalid_messages: Vec::new(),
         },
@@ -3205,22 +3217,20 @@ fn test_keep_best_scoring_peers_on_oversubscription() {
         .build()
         .unwrap();
 
-    // build mesh with more peers than mesh can hold
-    let n = config.mesh_n_high() + 1;
+    let mesh_n_high = config.mesh_n_high();
+
     let (mut gs, peers, _queues, topics) = inject_nodes1()
-        .peer_no(n)
+        .peer_no(mesh_n_high)
         .topics(vec!["test".into()])
         .to_subscribe(true)
         .gs_config(config.clone())
         .explicit(0)
-        .outbound(n)
         .scoring(Some((
             PeerScoreParams::default(),
             PeerScoreThresholds::default(),
         )))
         .create_network();
 
-    // graft all, will be accepted since the are outbound
     for peer in &peers {
         gs.handle_graft(peer, topics.clone());
     }
@@ -3232,7 +3242,7 @@ fn test_keep_best_scoring_peers_on_oversubscription() {
         gs.set_application_score(peer, index as f64);
     }
 
-    assert_eq!(gs.mesh[&topics[0]].len(), n);
+    assert_eq!(gs.mesh[&topics[0]].len(), mesh_n_high);
 
     // heartbeat to prune some peers
     gs.heartbeat();
@@ -3241,7 +3251,7 @@ fn test_keep_best_scoring_peers_on_oversubscription() {
 
     // mesh contains retain_scores best peers
     assert!(gs.mesh[&topics[0]].is_superset(
-        &peers[(n - config.retain_scores())..]
+        &peers[(mesh_n_high - config.retain_scores())..]
             .iter()
             .cloned()
             .collect()
@@ -3728,6 +3738,9 @@ fn test_scoring_p4_invalid_signature() {
                 messages: vec![],
                 subscriptions: vec![],
                 control_msgs: vec![],
+                test_extension: None,
+                #[cfg(feature = "partial_messages")]
+                partial_message: None,
             },
             invalid_messages: vec![(m, ValidationError::InvalidSignature)],
         },
@@ -4199,7 +4212,7 @@ fn test_scoring_p6() {
 
     // create 5 peers with the same ip
     let addr = Multiaddr::from(Ipv4Addr::new(10, 1, 2, 3));
-    let peers = vec![
+    let peers = [
         add_peer_with_addr(&mut gs, &[], false, false, addr.clone()).0,
         add_peer_with_addr(&mut gs, &[], false, false, addr.clone()).0,
         add_peer_with_addr(&mut gs, &[], true, false, addr.clone()).0,
@@ -4209,7 +4222,7 @@ fn test_scoring_p6() {
 
     // create 4 other peers with other ip
     let addr2 = Multiaddr::from(Ipv4Addr::new(10, 1, 2, 4));
-    let others = vec![
+    let others = [
         add_peer_with_addr(&mut gs, &[], false, false, addr2.clone()).0,
         add_peer_with_addr(&mut gs, &[], false, false, addr2.clone()).0,
         add_peer_with_addr(&mut gs, &[], true, false, addr2.clone()).0,
@@ -5184,8 +5197,24 @@ fn test_subscribe_to_invalid_topic() {
         .to_subscribe(false)
         .create_network();
 
-    assert!(gs.subscribe(&t1).is_ok());
-    assert!(gs.subscribe(&t2).is_err());
+    assert!(gs
+        .subscribe(
+            &t1,
+            #[cfg(feature = "partial_messages")]
+            false,
+            #[cfg(feature = "partial_messages")]
+            false
+        )
+        .is_ok());
+    assert!(gs
+        .subscribe(
+            &t2,
+            #[cfg(feature = "partial_messages")]
+            false,
+            #[cfg(feature = "partial_messages")]
+            false
+        )
+        .is_err());
 }
 
 #[test]
@@ -5214,7 +5243,14 @@ fn test_subscribe_and_graft_with_negative_score() {
     let original_score = gs1.as_peer_score_mut().score_report(&p2).score;
 
     // subscribe to topic in gs2
-    gs2.subscribe(&topic).unwrap();
+    gs2.subscribe(
+        &topic,
+        #[cfg(feature = "partial_messages")]
+        false,
+        #[cfg(feature = "partial_messages")]
+        false,
+    )
+    .unwrap();
 
     let forward_messages_to_p1 = |gs1: &mut Behaviour<_, _>,
                                   p1: PeerId,
@@ -5482,6 +5518,9 @@ fn parses_idontwant() {
         control_msgs: vec![ControlAction::IDontWant(IDontWant {
             message_ids: vec![message_id.clone()],
         })],
+        test_extension: None,
+        #[cfg(feature = "partial_messages")]
+        partial_message: None,
     };
     gs.on_connection_handler_event(
         peers[1],
@@ -5541,6 +5580,11 @@ fn test_all_queues_full() {
             topics: topics.clone(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         },
     );
 
@@ -5578,6 +5622,11 @@ fn test_slow_peer_returns_failed_publish() {
             topics: topics.clone(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         },
     );
     let peer_id = PeerId::random();
@@ -5591,6 +5640,11 @@ fn test_slow_peer_returns_failed_publish() {
             topics: topics.clone(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         },
     );
 
@@ -5643,6 +5697,11 @@ fn test_slow_peer_returns_failed_ihave_handling() {
             topics: topics.clone(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         },
     );
     peers.push(slow_peer_id);
@@ -5660,6 +5719,11 @@ fn test_slow_peer_returns_failed_ihave_handling() {
             topics: topics.clone(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         },
     );
 
@@ -5748,6 +5812,11 @@ fn test_slow_peer_returns_failed_iwant_handling() {
             topics: topics.clone(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         },
     );
     peers.push(slow_peer_id);
@@ -5765,6 +5834,11 @@ fn test_slow_peer_returns_failed_iwant_handling() {
             topics: topics.clone(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         },
     );
 
@@ -5833,6 +5907,11 @@ fn test_slow_peer_returns_failed_forward() {
             topics: topics.clone(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         },
     );
     peers.push(slow_peer_id);
@@ -5850,6 +5929,11 @@ fn test_slow_peer_returns_failed_forward() {
             topics: topics.clone(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         },
     );
 
@@ -5923,6 +6007,11 @@ fn test_slow_peer_is_downscored_on_publish() {
             topics: topics.clone(),
             messages: Queue::new(1),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         },
     );
     gs.as_peer_score_mut().add_peer(slow_peer_id);
@@ -5937,6 +6026,11 @@ fn test_slow_peer_is_downscored_on_publish() {
             topics: topics.clone(),
             messages: Queue::new(gs.config.connection_handler_queue_len()),
             dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
         },
     );
 
@@ -6118,11 +6212,66 @@ fn test_mesh_subtraction_with_topic_config() {
     let topic = String::from("topic1");
     let topic_hash = TopicHash::from_raw(topic.clone());
 
+    let mesh_n = 5;
+    let mesh_n_high = 7;
+
     let topic_config = TopicMeshConfig {
-        mesh_n: 5,
+        mesh_n,
+        mesh_n_high,
         mesh_n_low: 3,
-        mesh_n_high: 7,
         mesh_outbound_min: 2,
+    };
+
+    let config = ConfigBuilder::default()
+        .set_topic_config(topic_hash.clone(), topic_config)
+        .build()
+        .unwrap();
+
+    let (mut gs, peers, _, topics) = inject_nodes1()
+        .peer_no(mesh_n_high)
+        .topics(vec![topic])
+        .to_subscribe(true)
+        .gs_config(config.clone())
+        .outbound(mesh_n_high)
+        .create_network();
+
+    // graft all peers
+    for peer in peers {
+        gs.handle_graft(&peer, topics.clone());
+    }
+
+    assert_eq!(
+        gs.mesh.get(&topics[0]).unwrap().len(),
+        mesh_n_high,
+        "Initially all peers should be in the mesh"
+    );
+
+    // run a heartbeat
+    gs.heartbeat();
+
+    // Peers should be removed to reach mesh_n
+    assert_eq!(
+        gs.mesh.get(&topics[0]).unwrap().len(),
+        5,
+        "After heartbeat, mesh should be reduced to mesh_n 5 peers"
+    );
+}
+
+/// Tests that if a mesh reaches `mesh_n_high`,
+/// but is only composed of outbound peers, it is not reduced to `mesh_n`.
+#[test]
+fn test_mesh_subtraction_with_topic_config_min_outbound() {
+    let topic = String::from("topic1");
+    let topic_hash = TopicHash::from_raw(topic.clone());
+
+    let mesh_n = 5;
+    let mesh_n_high = 7;
+
+    let topic_config = TopicMeshConfig {
+        mesh_n,
+        mesh_n_high,
+        mesh_n_low: 3,
+        mesh_outbound_min: 7,
     };
 
     let config = ConfigBuilder::default()
@@ -6132,7 +6281,7 @@ fn test_mesh_subtraction_with_topic_config() {
 
     let peer_no = 12;
 
-    // make all outbound connections so grafting to all will be allowed
+    // make all outbound connections.
     let (mut gs, peers, _, topics) = inject_nodes1()
         .peer_no(peer_no)
         .topics(vec![topic])
@@ -6148,18 +6297,17 @@ fn test_mesh_subtraction_with_topic_config() {
 
     assert_eq!(
         gs.mesh.get(&topics[0]).unwrap().len(),
-        peer_no,
-        "Initially all peers should be in the mesh"
+        mesh_n_high,
+        "Initially mesh should be {mesh_n_high}"
     );
 
     // run a heartbeat
     gs.heartbeat();
 
-    // Peers should be removed to reach mesh_n
     assert_eq!(
         gs.mesh.get(&topics[0]).unwrap().len(),
-        5,
-        "After heartbeat, mesh should be reduced to mesh_n 5 peers"
+        mesh_n_high,
+        "After heartbeat, mesh should still be {mesh_n_high} as these are all outbound peers"
     );
 }
 
@@ -6262,8 +6410,14 @@ fn test_multiple_topics_with_different_configs() {
 
     // re-subscribe to topic1
     assert!(
-        gs.subscribe(&Topic::new(topic_hashes[0].to_string()))
-            .unwrap(),
+        gs.subscribe(
+            &Topic::new(topic_hashes[0].to_string()),
+            #[cfg(feature = "partial_messages")]
+            false,
+            #[cfg(feature = "partial_messages")]
+            false
+        )
+        .unwrap(),
         "Should subscribe successfully"
     );
 
@@ -6343,7 +6497,7 @@ fn test_publish_message_with_default_transmit_size_config() {
     let topic_hash = topic.hash();
 
     let config = ConfigBuilder::default()
-        .set_topic_max_transmit_size(topic_hash.clone(), Config::default_max_transmit_size())
+        .max_transmit_size_for_topic(Config::default_max_transmit_size(), topic_hash.clone())
         .validation_mode(ValidationMode::Strict)
         .build()
         .unwrap();
@@ -6375,7 +6529,7 @@ fn test_publish_large_message_with_default_transmit_size_config() {
     let topic_hash = topic.hash();
 
     let config = ConfigBuilder::default()
-        .set_topic_max_transmit_size(topic_hash.clone(), Config::default_max_transmit_size())
+        .max_transmit_size_for_topic(Config::default_max_transmit_size(), topic_hash.clone())
         .validation_mode(ValidationMode::Strict)
         .build()
         .unwrap();
@@ -6403,7 +6557,7 @@ fn test_publish_message_with_specific_transmit_size_config() {
 
     let max_topic_transmit_size = 2000;
     let config = ConfigBuilder::default()
-        .set_topic_max_transmit_size(topic_hash.clone(), max_topic_transmit_size)
+        .max_transmit_size_for_topic(max_topic_transmit_size, topic_hash.clone())
         .validation_mode(ValidationMode::Strict)
         .build()
         .unwrap();
@@ -6436,7 +6590,7 @@ fn test_publish_large_message_with_specific_transmit_size_config() {
 
     let max_topic_transmit_size = 2048;
     let config = ConfigBuilder::default()
-        .set_topic_max_transmit_size(topic_hash.clone(), max_topic_transmit_size)
+        .max_transmit_size_for_topic(max_topic_transmit_size, topic_hash.clone())
         .validation_mode(ValidationMode::Strict)
         .build()
         .unwrap();
@@ -6464,7 +6618,7 @@ fn test_validation_error_message_size_too_large_topic_specific() {
     let max_size = 2048;
 
     let config = ConfigBuilder::default()
-        .set_topic_max_transmit_size(topic_hash.clone(), max_size)
+        .max_transmit_size_for_topic(max_size, topic_hash.clone())
         .validation_mode(ValidationMode::None)
         .build()
         .unwrap();
@@ -6495,6 +6649,9 @@ fn test_validation_error_message_size_too_large_topic_specific() {
                 messages: vec![raw_message],
                 subscriptions: vec![],
                 control_msgs: vec![],
+                test_extension: None,
+                #[cfg(feature = "partial_messages")]
+                partial_message: None,
             },
             invalid_messages: vec![],
         },
@@ -6539,6 +6696,8 @@ fn test_validation_error_message_size_too_large_topic_specific() {
         }],
         subscriptions: vec![],
         control: None,
+        testExtension: None,
+        partial: None,
     };
     codec.encode(rpc, &mut buf).unwrap();
 
@@ -6568,7 +6727,7 @@ fn test_validation_message_size_within_topic_specific() {
     let max_size = 2048;
 
     let config = ConfigBuilder::default()
-        .set_topic_max_transmit_size(topic_hash.clone(), max_size)
+        .max_transmit_size_for_topic(max_size, topic_hash.clone())
         .validation_mode(ValidationMode::None)
         .build()
         .unwrap();
@@ -6599,6 +6758,9 @@ fn test_validation_message_size_within_topic_specific() {
                 messages: vec![raw_message],
                 subscriptions: vec![],
                 control_msgs: vec![],
+                test_extension: None,
+                #[cfg(feature = "partial_messages")]
+                partial_message: None,
             },
             invalid_messages: vec![],
         },
@@ -6643,6 +6805,8 @@ fn test_validation_message_size_within_topic_specific() {
         }],
         subscriptions: vec![],
         control: None,
+        testExtension: None,
+        partial: None,
     };
     codec.encode(rpc, &mut buf).unwrap();
 
@@ -6658,4 +6822,95 @@ fn test_validation_message_size_within_topic_specific() {
         }
         _ => panic!("Unexpected event"),
     }
+}
+
+#[test]
+fn test_extensions_message_creation() {
+    let extensions_rpc = RpcOut::Extensions(Extensions {
+        test_extension: Some(true),
+        partial_messages: None,
+    });
+    let proto_rpc: proto::RPC = extensions_rpc.into();
+
+    assert!(proto_rpc.control.is_some());
+    let control = proto_rpc.control.unwrap();
+    assert!(control.extensions.is_some());
+    let test_extension = control.extensions.unwrap().testExtension.unwrap();
+    assert!(test_extension);
+    assert!(control.ihave.is_empty());
+    assert!(control.iwant.is_empty());
+    assert!(control.graft.is_empty());
+    assert!(control.prune.is_empty());
+    assert!(control.idontwant.is_empty());
+}
+
+#[test]
+fn test_handle_extensions_message() {
+    let mut gs: Behaviour = Behaviour::new(
+        MessageAuthenticity::Anonymous,
+        ConfigBuilder::default()
+            .validation_mode(ValidationMode::None)
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
+
+    let peer_id = PeerId::random();
+    let messages = Queue::new(gs.config.connection_handler_queue_len());
+
+    // Add peer without extensions
+    gs.connected_peers.insert(
+        peer_id,
+        PeerDetails {
+            kind: PeerKind::Gossipsubv1_3,
+            connections: vec![ConnectionId::new_unchecked(0)],
+            outbound: false,
+            topics: BTreeSet::new(),
+            messages,
+            dont_send: LinkedHashMap::new(),
+            extensions: None,
+            #[cfg(feature = "partial_messages")]
+            partial_messages: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            partial_opts: Default::default(),
+        },
+    );
+
+    // Simulate receiving extensions message
+    let extensions = Extensions {
+        test_extension: Some(false),
+        partial_messages: None,
+    };
+    gs.handle_extensions(&peer_id, extensions);
+
+    // Verify extensions were stored
+    let peer_details = gs.connected_peers.get(&peer_id).unwrap();
+    assert!(peer_details.extensions.is_some());
+
+    // Simulate receiving duplicate extensions message from another peer
+    let duplicate_rpc = RpcIn {
+        messages: vec![],
+        subscriptions: vec![],
+        control_msgs: vec![ControlAction::Extensions(Some(Extensions {
+            test_extension: Some(true),
+            partial_messages: None,
+        }))],
+        test_extension: None,
+        #[cfg(feature = "partial_messages")]
+        partial_message: None,
+    };
+
+    gs.on_connection_handler_event(
+        peer_id,
+        ConnectionId::new_unchecked(0),
+        HandlerEvent::Message {
+            rpc: duplicate_rpc,
+            invalid_messages: vec![],
+        },
+    );
+
+    // Extensions should still be present (not cleared or changed)
+    let peer_details = gs.connected_peers.get(&peer_id).unwrap();
+    let test_extension = peer_details.extensions.unwrap().test_extension.unwrap();
+    assert!(!test_extension);
 }
