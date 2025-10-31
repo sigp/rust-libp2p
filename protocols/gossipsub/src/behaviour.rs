@@ -1715,28 +1715,22 @@ where
             .entry(partial_message.group_id.clone())
             .or_default();
 
-        match (&mut peer_partial.metadata, &partial_message.metadata) {
+        let metadata_updated = match (&mut peer_partial.metadata, &partial_message.metadata) {
             (None, Some(remote_metadata)) => {
-                peer_partial.metadata = Some(PeerMetadata::Remote(remote_metadata.clone()))
+                peer_partial.metadata = Some(PeerMetadata::Remote(remote_metadata.clone()));
+                true
             }
             (Some(PeerMetadata::Remote(ref metadata)), Some(remote_metadata)) => {
                 if metadata != remote_metadata {
                     peer_partial.metadata = Some(PeerMetadata::Remote(remote_metadata.clone()));
+                    true
+                } else {
+                    false
                 }
             }
             (Some(PeerMetadata::Local(metadata)), Some(remote_metadata)) => {
                 match metadata.update(remote_metadata) {
-                    Ok(true) => {
-                        self.events
-                            .push_back(ToSwarm::GenerateEvent(Event::Partial {
-                                topic_id: partial_message.topic_id,
-                                propagation_source: *peer_id,
-                                group_id: partial_message.group_id,
-                                message: partial_message.message,
-                                metadata: partial_message.metadata,
-                            }));
-                    }
-                    Ok(false) => {}
+                    Ok(updated) => updated,
                     Err(err) => {
                         tracing::debug!(
                             peer=%peer_id,
@@ -1748,10 +1742,22 @@ where
                         if let PeerScoreState::Active(peer_score) = &mut self.peer_score {
                             peer_score.reject_invalid_partial(peer_id, &partial_message.topic_id);
                         }
+                        false
                     }
                 }
             }
-            (Some(_), None) | (None, None) => {}
+            (Some(_), None) | (None, None) => false,
+        };
+
+        if metadata_updated {
+            self.events
+                .push_back(ToSwarm::GenerateEvent(Event::Partial {
+                    topic_id: partial_message.topic_id,
+                    propagation_source: *peer_id,
+                    group_id: partial_message.group_id,
+                    message: partial_message.message,
+                    metadata: partial_message.metadata,
+                }));
         }
     }
 
