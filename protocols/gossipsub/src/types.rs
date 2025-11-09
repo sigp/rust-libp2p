@@ -124,11 +124,14 @@ pub struct PartialSubOpts {
     pub(crate) supports_partial: bool,
 }
 
-/// Stored `Metadata` for a peer.
+/// Stored `Metadata` for a peer,
+/// `Remote` or `Local` depends on who last updated it.
 #[cfg(feature = "partial_messages")]
 #[derive(Debug)]
 pub(crate) enum PeerMetadata {
+    /// The metadata was updated with data from a remote peer.
     Remote(Vec<u8>),
+    /// The metadata was updated by us when publishing a partial message.
     Local(Box<dyn crate::partial::Metadata>),
 }
 

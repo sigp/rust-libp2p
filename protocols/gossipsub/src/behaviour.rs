@@ -310,6 +310,10 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     #[cfg(feature = "partial_messages")]
     partial_opts: HashMap<TopicHash, PartialSubOpts>,
 
+    /// Cached partial messages.
+    #[cfg(feature = "partial_messages")]
+    cached_partials: HashMap<TopicHash, HashMap<Vec<u8>, Box<dyn Partial>>>,
+
     /// Map of topics to list of peers that we publish to, but don't subscribe to.
     fanout: HashMap<TopicHash, BTreeSet<PeerId>>,
 
@@ -475,6 +479,8 @@ where
             gossip_promises: Default::default(),
             #[cfg(feature = "partial_messages")]
             partial_opts: Default::default(),
+            #[cfg(feature = "partial_messages")]
+            cached_partials: Default::default(),
         })
     }
 
@@ -832,14 +838,14 @@ where
     }
 
     #[cfg(feature = "partial_messages")]
-    pub fn publish_partial<P: Partial>(
+    pub fn publish_partial<P: Partial + 'static>(
         &mut self,
         topic: impl Into<TopicHash>,
-        partial_message: &P,
+        partial_message: P,
     ) -> Result<(), PublishError> {
         let topic_hash = topic.into();
 
-        let group_id = partial_message.group_id().as_ref().to_vec();
+        let group_id = partial_message.group_id();
 
         let recipient_peers = self.get_publish_peers(&topic_hash, |_, peer| {
             peer.partial_opts
@@ -847,7 +853,7 @@ where
                 .map(|opts| opts.supports_partial)
                 .unwrap_or_default()
         });
-        let metadata = partial_message.parts_metadata().as_ref().to_vec();
+        let metadata = partial_message.parts_metadata();
         for peer_id in recipient_peers.iter() {
             // TODO: this can be optimized, we are going to get the peer again on `send_message`
             let Some(peer) = &mut self.connected_peers.get_mut(peer_id) else {
@@ -878,9 +884,9 @@ where
                 continue;
             }
 
-            let Ok(action) =
-                partial_message.partial_message_bytes_from_metadata(peer_partial.metadata.as_ref())
-            else {
+            let Ok(action) = partial_message.partial_message_bytes_from_metadata(
+                peer_partial.metadata.as_ref().map(|p| p.as_ref()),
+            ) else {
                 tracing::error!(peer = %peer_id, group_id = ?group_id,
                     "Could not reconstruct message bytes for peer metadata");
                 peer_partials.remove(&group_id);
@@ -916,6 +922,9 @@ where
             return Err(PublishError::NoPeersSubscribedToTopic);
         }
 
+        let cached_topic = self.cached_partials.entry(topic_hash).or_default();
+
+        cached_topic.insert(partial_message.group_id(), Box::new(partial_message));
         Ok(())
     }
 
@@ -1715,6 +1724,7 @@ where
             .entry(partial_message.group_id.clone())
             .or_default();
 
+        // Check if the local partial data we have from the peer is oudated.
         let metadata_updated = match (&mut peer_partial.metadata, &partial_message.metadata) {
             (None, Some(remote_metadata)) => {
                 peer_partial.metadata = Some(PeerMetadata::Remote(remote_metadata.clone()));
@@ -1749,16 +1759,35 @@ where
             (Some(_), None) | (None, None) => false,
         };
 
-        if metadata_updated {
-            self.events
-                .push_back(ToSwarm::GenerateEvent(Event::Partial {
-                    topic_id: partial_message.topic_id,
-                    propagation_source: *peer_id,
-                    group_id: partial_message.group_id,
-                    message: partial_message.message,
-                    metadata: partial_message.metadata,
-                }));
+        if !metadata_updated {
+            return;
         }
+
+        let Some(local_partial) = self
+            .cached_partials
+            .get_mut(&partial_message.topic_id)
+            .and_then(|t| t.get(&partial_message.group_id))
+        else {
+            // Partial should exist in our cache as it exists in the peer details.
+            tracing::debug!(
+                peer=%peer_id,
+                topic=%partial_message.topic_id,
+                group_id=?partial_message.group_id,
+                "partial doesn't exist in the cache"
+            );
+            return;
+        };
+
+        // let local_updated = match local_partial
+
+        self.events
+            .push_back(ToSwarm::GenerateEvent(Event::Partial {
+                topic_id: partial_message.topic_id,
+                propagation_source: *peer_id,
+                group_id: partial_message.group_id,
+                message: partial_message.message,
+                metadata: partial_message.metadata,
+            }));
     }
 
     /// Removes the specified peer from the mesh, returning true if it was present.

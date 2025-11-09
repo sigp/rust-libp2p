@@ -40,14 +40,14 @@ pub trait Partial {
     /// All partial messages belonging to the same logical message should return
     /// the same group ID. This is used to associate partial messages together
     /// during reconstruction.
-    fn group_id(&self) -> impl AsRef<[u8]>;
+    fn group_id(&self) -> Vec<u8>;
 
     /// Returns application defined metadata describing which parts of the message
     /// are available and which parts we want.
     ///
     /// The returned bytes will be sent in partsMetadata field to advertise
     /// available and wanted parts to peers.
-    fn parts_metadata(&self) -> impl AsRef<[u8]>;
+    fn parts_metadata(&self) -> Vec<u8>;
 
     /// Generates partial message bytes from the given metadata.
     ///
@@ -58,7 +58,7 @@ pub trait Partial {
     /// Returns a [`PublishAction`] for the given metadata, or an error.
     fn partial_message_bytes_from_metadata(
         &self,
-        metadata: Option<impl AsRef<[u8]>>,
+        metadata: Option<&[u8]>,
     ) -> Result<PublishAction, PartialMessageError>;
 }
 
