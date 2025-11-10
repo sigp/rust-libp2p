@@ -18,18 +18,8 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-use std::{
-    cmp::{
-        max,
-        Ordering::{self, Equal},
-    },
-    collections::{BTreeSet, HashMap, HashSet, VecDeque},
-    fmt::{self, Debug},
-    net::IpAddr,
-    task::{Context, Poll},
-    time::Duration,
-};
-
+use crate::partial::DynamicPartial;
+use crate::partial::Metadata;
 use futures::FutureExt;
 use futures_timer::Delay;
 use hashlink::LinkedHashMap;
@@ -49,10 +39,24 @@ use libp2p_swarm::{
 use prometheus_client::registry::Registry;
 use quick_protobuf::{MessageWrite, Writer};
 use rand::{seq::SliceRandom, thread_rng};
+use std::any::Any;
+use std::{
+    cmp::{
+        max,
+        Ordering::{self, Equal},
+    },
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
+    fmt::{self, Debug},
+    mem,
+    net::IpAddr,
+    task::{Context, Poll},
+    time::Duration,
+};
 use web_time::{Instant, SystemTime};
 
 #[cfg(feature = "metrics")]
 use crate::metrics::{Churn, Config as MetricsConfig, Inclusion, Metrics, Penalty};
+use crate::types::PeerMetadata;
 use crate::{
     backoff::BackoffStorage,
     config::{Config, ValidationMode},
@@ -72,11 +76,12 @@ use crate::{
         MessageId, PeerDetails, PeerInfo, PeerKind, Prune, RawMessage, RpcOut, Subscription,
         SubscriptionAction,
     },
-    FailedMessages, PublishError, SubscriptionError, TopicScoreParams, ValidationError,
+    FailedMessages, PartialMessageError, PublishError, SubscriptionError, TopicScoreParams,
+    ValidationError,
 };
 #[cfg(feature = "partial_messages")]
 use crate::{
-    partial::{Partial, PublishAction},
+    partial::Partial,
     types::{PartialMessage, PartialSubOpts},
 };
 
@@ -312,7 +317,7 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
 
     /// Cached partial messages.
     #[cfg(feature = "partial_messages")]
-    cached_partials: HashMap<TopicHash, HashMap<Vec<u8>, Box<dyn Partial>>>,
+    cached_partials: HashMap<TopicHash, HashMap<Vec<u8>, Box<dyn DynamicPartial>>>,
 
     /// Map of topics to list of peers that we publish to, but don't subscribe to.
     fanout: HashMap<TopicHash, BTreeSet<PeerId>>,
@@ -853,7 +858,9 @@ where
                 .map(|opts| opts.supports_partial)
                 .unwrap_or_default()
         });
-        let metadata = partial_message.parts_metadata();
+        let metadata = partial_message.metadata();
+        let metadata_bytes = metadata.encode();
+
         for peer_id in recipient_peers.iter() {
             // TODO: this can be optimized, we are going to get the peer again on `send_message`
             let Some(peer) = &mut self.connected_peers.get_mut(peer_id) else {
@@ -876,7 +883,7 @@ where
                     *peer_id,
                     RpcOut::PartialMessage {
                         message: None,
-                        metadata: metadata.clone(),
+                        metadata: metadata_bytes.clone(),
                         group_id: group_id.clone(),
                         topic_id: topic_hash.clone(),
                     },
@@ -884,34 +891,73 @@ where
                 continue;
             }
 
-            let Ok(action) = partial_message.partial_message_bytes_from_metadata(
-                peer_partial.metadata.as_ref().map(|p| p.as_ref()),
-            ) else {
-                tracing::error!(peer = %peer_id, group_id = ?group_id,
-                    "Could not reconstruct message bytes for peer metadata");
-                peer_partials.remove(&group_id);
-                if let PeerScoreState::Active(peer_score) = &mut self.peer_score {
-                    peer_score.reject_invalid_partial(peer_id, &topic_hash);
+            let peer_metadata = match mem::take(&mut peer_partial.metadata) {
+                None => None,
+                Some(PeerMetadata::Local(metadata)) => {
+                    let metadata: Box<dyn Any> = metadata;
+                    Some(
+                        metadata
+                            .downcast::<P::Metadata>()
+                            .map_err(|_| PartialMessageError::InvalidFormat)?,
+                    )
                 }
-                continue;
+                Some(PeerMetadata::Remote(metadata)) => match P::Metadata::decode(&metadata) {
+                    Ok(metadata) => Some(Box::new(metadata)),
+                    Err(err) => {
+                        tracing::error!(peer = %peer_id, group_id = ?group_id, ?err,
+                                "Could not reconstruct message bytes for peer metadata");
+                        peer_partials.remove(&group_id);
+                        if let PeerScoreState::Active(peer_score) = &mut self.peer_score {
+                            peer_score.reject_invalid_partial(peer_id, &topic_hash);
+                        }
+                        continue;
+                    }
+                },
             };
-            let message = match action {
-                PublishAction::SameMetadata => {
-                    // No new data to send peer.
-                    continue;
+
+            let message = if let Some(mut peer_metadata) = peer_metadata {
+                let order = peer_metadata.compare(&metadata);
+
+                match order {
+                    Some(Ordering::Less) => {
+                        // We have strictly less than the peer. Send them our metadata to request data.
+                        peer_partial.metadata = Some(PeerMetadata::Local(peer_metadata));
+                        None
+                    }
+                    Some(Ordering::Equal) => {
+                        // We know the exact same thing as the peer. Send nothing.
+                        peer_partial.metadata = Some(PeerMetadata::Local(peer_metadata));
+                        continue;
+                    }
+                    Some(Ordering::Greater) | None => {
+                        // We know something that the peer does not. Send some data.
+                        let Some(data) =
+                            partial_message.partial_message_bytes_from_metadata(&peer_metadata)? else {
+                            // todo if we are here somethings wrong
+                            continue;
+                        };
+                        if !peer_metadata.update(&metadata)? {
+                            // todo if we are here somethings wrong
+                        }
+                        peer_partial.metadata = Some(PeerMetadata::Local(peer_metadata));
+                        Some(data)
+                    }
                 }
-                PublishAction::Send { metadata, message } => {
-                    peer_partial.metadata = Some(crate::types::PeerMetadata::Local(metadata));
+            } else {
+                // Eager push
+                if let Some((message, metadata)) = partial_message.data_for_eager_push()? {
+                    peer_partial.metadata = Some(PeerMetadata::Local(Box::new(metadata)));
                     Some(message)
+                } else {
+                    None
                 }
-                PublishAction::NothingToSend => None,
             };
 
             self.send_message(
                 *peer_id,
                 RpcOut::PartialMessage {
                     message,
-                    metadata: metadata.clone(),
+                    metadata: metadata_bytes.clone(),
                     group_id: group_id.clone(),
                     topic_id: topic_hash.clone(),
                 },
@@ -1759,26 +1805,42 @@ where
             (Some(_), None) | (None, None) => false,
         };
 
+        if let Some(local_partial) = self
+            .cached_partials
+            .get(&partial_message.topic_id)
+            .and_then(|t| t.get(&partial_message.group_id))
+        {
+            if let Some(peer_metadata) = &mut peer_partial.metadata {
+                if let PeerMetadata::Remote(data) = &peer_metadata {
+                    let Ok(metadata) = local_partial.decode_metadata(data) else {
+                        // todo punish
+                        return;
+                    };
+                    *peer_metadata = PeerMetadata::Local(metadata);
+                }
+
+                if let PeerMetadata::Local(peer_metadata) = peer_metadata {
+                    if let Ok(message) = local_partial.partial_message_bytes_from_metadata(&**peer_metadata) {
+                        let local_metadata = local_partial.metadata();
+
+                        if message.is_some() {
+                            let _ = peer_metadata.update_dynamic(local_metadata);
+                        }
+
+                        self.send_message(*peer_id, RpcOut::PartialMessage {
+                            group_id: partial_message.group_id.clone(),
+                            topic_id: partial_message.topic_id.clone(),
+                            message,
+                            metadata: local_metadata.encode(),
+                        });
+                    }
+                }
+            }
+        }
+
         if !metadata_updated {
             return;
         }
-
-        let Some(local_partial) = self
-            .cached_partials
-            .get_mut(&partial_message.topic_id)
-            .and_then(|t| t.get(&partial_message.group_id))
-        else {
-            // Partial should exist in our cache as it exists in the peer details.
-            tracing::debug!(
-                peer=%peer_id,
-                topic=%partial_message.topic_id,
-                group_id=?partial_message.group_id,
-                "partial doesn't exist in the cache"
-            );
-            return;
-        };
-
-        // let local_updated = match local_partial
 
         self.events
             .push_back(ToSwarm::GenerateEvent(Event::Partial {

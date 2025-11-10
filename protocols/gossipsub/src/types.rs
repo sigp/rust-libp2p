@@ -132,17 +132,7 @@ pub(crate) enum PeerMetadata {
     /// The metadata was updated with data from a remote peer.
     Remote(Vec<u8>),
     /// The metadata was updated by us when publishing a partial message.
-    Local(Box<dyn crate::partial::Metadata>),
-}
-
-#[cfg(feature = "partial_messages")]
-impl AsRef<[u8]> for PeerMetadata {
-    fn as_ref(&self) -> &[u8] {
-        match self {
-            PeerMetadata::Remote(metadata) => metadata,
-            PeerMetadata::Local(metadata) => metadata.as_slice(),
-        }
-    }
+    Local(Box<dyn crate::partial::DynamicMetadata>),
 }
 
 /// The partial message data the peer has.
