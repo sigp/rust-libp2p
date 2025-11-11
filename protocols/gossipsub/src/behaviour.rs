@@ -76,7 +76,7 @@ use crate::{
 };
 #[cfg(feature = "partial_messages")]
 use crate::{
-    partial::{Partial, PublishAction},
+    partial::Partial,
     types::{PartialMessage, PartialSubOpts},
 };
 
@@ -853,7 +853,7 @@ where
                 .map(|opts| opts.supports_partial)
                 .unwrap_or_default()
         });
-        let metadata = partial_message.parts_metadata();
+        let publish_metadata = partial_message.metadata();
         for peer_id in recipient_peers.iter() {
             // TODO: this can be optimized, we are going to get the peer again on `send_message`
             let Some(peer) = &mut self.connected_peers.get_mut(peer_id) else {
@@ -867,8 +867,8 @@ where
                 continue;
             };
 
-            let peer_partials = peer.partial_messages.entry(topic_hash.clone()).or_default();
-            let peer_partial = peer_partials.entry(group_id.clone()).or_default();
+            let topic_partials = peer.partial_messages.entry(topic_hash.clone()).or_default();
+            let group_partials = topic_partials.entry(group_id.clone()).or_default();
 
             // Peer `supports_partial` but doesn't `requests_partial`.
             if !partial_opts.requests_partial {
@@ -876,7 +876,7 @@ where
                     *peer_id,
                     RpcOut::PartialMessage {
                         message: None,
-                        metadata: metadata.clone(),
+                        metadata: publish_metadata.clone(),
                         group_id: group_id.clone(),
                         topic_id: topic_hash.clone(),
                     },
@@ -885,33 +885,30 @@ where
             }
 
             let Ok(action) = partial_message.partial_message_bytes_from_metadata(
-                peer_partial.metadata.as_ref().map(|p| p.as_ref()),
+                group_partials.metadata.as_ref().map(|p| p.as_ref()),
             ) else {
                 tracing::error!(peer = %peer_id, group_id = ?group_id,
                     "Could not reconstruct message bytes for peer metadata");
-                peer_partials.remove(&group_id);
+                topic_partials.remove(&group_id);
                 if let PeerScoreState::Active(peer_score) = &mut self.peer_score {
                     peer_score.reject_invalid_partial(peer_id, &topic_hash);
                 }
                 continue;
             };
-            let message = match action {
-                PublishAction::SameMetadata => {
-                    // No new data to send peer.
-                    continue;
-                }
-                PublishAction::Send { metadata, message } => {
-                    peer_partial.metadata = Some(crate::types::PeerMetadata::Local(metadata));
-                    Some(message)
-                }
-                PublishAction::NothingToSend => None,
+
+            // Check if we have new data for the peer.
+            let Some((message, peer_updated_metadata)) = action.send else {
+                continue;
             };
+
+            group_partials.metadata =
+                Some(crate::types::PeerMetadata::Local(peer_updated_metadata));
 
             self.send_message(
                 *peer_id,
                 RpcOut::PartialMessage {
-                    message,
-                    metadata: metadata.clone(),
+                    message: Some(message),
+                    metadata: publish_metadata.clone(),
                     group_id: group_id.clone(),
                     topic_id: topic_hash.clone(),
                 },
@@ -923,7 +920,6 @@ where
         }
 
         let cached_topic = self.cached_partials.entry(topic_hash).or_default();
-
         cached_topic.insert(partial_message.group_id(), Box::new(partial_message));
         Ok(())
     }
@@ -1717,22 +1713,24 @@ where
             return;
         };
 
-        let peer_partial = peer
+        let topic_partials = peer
             .partial_messages
             .entry(partial_message.topic_id.clone())
-            .or_default()
+            .or_default();
+
+        let group_partials = topic_partials
             .entry(partial_message.group_id.clone())
             .or_default();
 
         // Check if the local partial data we have from the peer is oudated.
-        let metadata_updated = match (&mut peer_partial.metadata, &partial_message.metadata) {
+        let metadata_updated = match (&mut group_partials.metadata, &partial_message.metadata) {
             (None, Some(remote_metadata)) => {
-                peer_partial.metadata = Some(PeerMetadata::Remote(remote_metadata.clone()));
+                group_partials.metadata = Some(PeerMetadata::Remote(remote_metadata.clone()));
                 true
             }
             (Some(PeerMetadata::Remote(ref metadata)), Some(remote_metadata)) => {
                 if metadata != remote_metadata {
-                    peer_partial.metadata = Some(PeerMetadata::Remote(remote_metadata.clone()));
+                    group_partials.metadata = Some(PeerMetadata::Remote(remote_metadata.clone()));
                     true
                 } else {
                     false
@@ -1763,31 +1761,68 @@ where
             return;
         }
 
+        // We may have already received other partials from this and other peers,
+        // but haven't responded to them yet, in those situations just return
+        // the partial to the application layer.
         let Some(local_partial) = self
             .cached_partials
             .get_mut(&partial_message.topic_id)
             .and_then(|t| t.get(&partial_message.group_id))
         else {
-            // Partial should exist in our cache as it exists in the peer details.
-            tracing::debug!(
-                peer=%peer_id,
-                topic=%partial_message.topic_id,
-                group_id=?partial_message.group_id,
-                "partial doesn't exist in the cache"
-            );
+            self.events
+                .push_back(ToSwarm::GenerateEvent(Event::Partial {
+                    topic_id: partial_message.topic_id,
+                    propagation_source: *peer_id,
+                    group_id: partial_message.group_id,
+                    message: partial_message.message,
+                    metadata: partial_message.metadata,
+                }));
             return;
         };
 
-        // let local_updated = match local_partial
+        let action = match local_partial
+            .partial_message_bytes_from_metadata(partial_message.metadata.as_deref())
+        {
+            Ok(action) => action,
+            Err(err) => {
+                tracing::debug!(peer = %peer_id, group_id = ?partial_message.group_id,err = %err,
+                    "Could not reconstruct message bytes for peer metadata from a received partial");
+                // Should we remove the partial from the peer?
+                topic_partials.remove(&partial_message.group_id);
+                if let PeerScoreState::Active(peer_score) = &mut self.peer_score {
+                    peer_score.reject_invalid_partial(peer_id, &partial_message.topic_id);
+                }
+                return;
+            }
+        };
 
-        self.events
-            .push_back(ToSwarm::GenerateEvent(Event::Partial {
-                topic_id: partial_message.topic_id,
-                propagation_source: *peer_id,
-                group_id: partial_message.group_id,
-                message: partial_message.message,
-                metadata: partial_message.metadata,
-            }));
+        // We have new data for that peer.
+        if let Some((message, peer_updated_metadata)) = action.send {
+            group_partials.metadata =
+                Some(crate::types::PeerMetadata::Local(peer_updated_metadata));
+
+            let cached_metadata = local_partial.metadata().as_slice().to_vec();
+            self.send_message(
+                *peer_id,
+                RpcOut::PartialMessage {
+                    message: Some(message),
+                    metadata: cached_metadata,
+                    group_id: partial_message.group_id.clone(),
+                    topic_id: partial_message.topic_id.clone(),
+                },
+            );
+        }
+
+        if action.need {
+            self.events
+                .push_back(ToSwarm::GenerateEvent(Event::Partial {
+                    topic_id: partial_message.topic_id,
+                    propagation_source: *peer_id,
+                    group_id: partial_message.group_id,
+                    message: partial_message.message,
+                    metadata: partial_message.metadata,
+                }));
+        }
     }
 
     /// Removes the specified peer from the mesh, returning true if it was present.

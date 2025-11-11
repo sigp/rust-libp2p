@@ -34,7 +34,7 @@ use crate::error::PartialMessageError;
 /// 4. When requests are received, `partial_message_bytes_from_metadata()` generates the response
 /// 5. Received partial data is integrated using `extend_from_encoded_partial_message()`
 /// 6. The `group_id()` ties all parts of the same logical message together
-pub trait Partial {
+pub trait Partial: Send + Sync {
     /// Returns the unique identifier for this message group.
     ///
     /// All partial messages belonging to the same logical message should return
@@ -47,7 +47,7 @@ pub trait Partial {
     ///
     /// The returned bytes will be sent in partsMetadata field to advertise
     /// available and wanted parts to peers.
-    fn parts_metadata(&self) -> Vec<u8>;
+    fn metadata(&self) -> Vec<u8>;
 
     /// Generates partial message bytes from the given metadata.
     ///
@@ -71,16 +71,9 @@ pub trait Metadata: Debug + Send + Sync {
 }
 
 /// Indicates the action to take for the given metadata.
-pub enum PublishAction {
-    /// The provided input metadata is the same as the output,
-    /// this means we have the same data as the peer.
-    SameMetadata,
-    /// We have nothing to send to the peer, but we need parts from the peer.
-    NothingToSend,
-    /// We have something of interest to this peer, but can not send everything it needs. Send a
-    /// message and associate some new metadata to the peer, representing the remaining need.
-    Send {
-        message: Vec<u8>,
-        metadata: Box<dyn Metadata>,
-    },
+pub struct PublishAction {
+    /// Indicate if we want remote data from the peer.
+    pub need: bool,
+    /// Indicate if we have data to send for that peer
+    pub send: Option<(Vec<u8>, Box<dyn Metadata>)>,
 }
