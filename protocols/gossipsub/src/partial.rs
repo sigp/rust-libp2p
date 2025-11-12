@@ -36,7 +36,7 @@ use crate::error::PartialMessageError;
 /// 4. When requests are received, `partial_message_bytes_from_metadata()` generates the response
 /// 5. Received partial data is integrated using `extend_from_encoded_partial_message()`
 /// 6. The `group_id()` ties all parts of the same logical message together
-pub trait Partial: Send + Sync {
+pub trait Partial {
     type Metadata: Metadata;
 
     /// Returns the unique identifier for this message group.
@@ -69,7 +69,7 @@ pub trait Partial: Send + Sync {
         -> Result<Option<(Vec<u8>, Self::Metadata)>, PartialMessageError>;
 }
 
-pub(crate) trait DynamicPartial: Send + Sync {
+pub(crate) trait DynamicPartial {
     fn decode_metadata(&self, metadata: &[u8]) -> Result<Box<dyn DynamicMetadata>, PartialMessageError>;
 
     fn metadata(&self) -> &dyn DynamicMetadata;
