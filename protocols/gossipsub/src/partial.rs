@@ -18,8 +18,6 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-use std::any::Any;
-use std::cmp::Ordering;
 use std::fmt::Debug;
 
 use crate::error::PartialMessageError;
@@ -37,8 +35,6 @@ use crate::error::PartialMessageError;
 /// 5. Received partial data is integrated using `extend_from_encoded_partial_message()`
 /// 6. The `group_id()` ties all parts of the same logical message together
 pub trait Partial {
-    type Metadata: Metadata;
-
     /// Returns the unique identifier for this message group.
     ///
     /// All partial messages belonging to the same logical message should return
@@ -51,7 +47,7 @@ pub trait Partial {
     ///
     /// The returned bytes will be sent in partsMetadata field to advertise
     /// available and wanted parts to peers.
-    fn metadata(&self) -> &Self::Metadata;
+    fn parts_metadata(&self) -> Vec<u8>;
 
     /// Generates partial message bytes from the given metadata.
     ///
@@ -62,89 +58,29 @@ pub trait Partial {
     /// Returns a [`PublishAction`] for the given metadata, or an error.
     fn partial_message_bytes_from_metadata(
         &self,
-        metadata: &Self::Metadata,
-    ) -> Result<Option<Vec<u8>>, PartialMessageError>;
-
-    fn data_for_eager_push(&self)
-        -> Result<Option<(Vec<u8>, Self::Metadata)>, PartialMessageError>;
+        metadata: Option<&[u8]>,
+    ) -> Result<PublishAction, PartialMessageError>;
 }
 
-pub(crate) trait DynamicPartial {
-    fn decode_metadata(&self, metadata: &[u8]) -> Result<Box<dyn DynamicMetadata>, PartialMessageError>;
-
-    fn metadata(&self) -> &dyn DynamicMetadata;
-
-    /// Generates partial message bytes from the given metadata.
-    ///
-    /// When a peer requests specific parts (via PartialIWANT), this method
-    /// generates the actual message data to send back. The `metadata` parameter
-    /// describes what parts are being requested.
-    ///
-    /// Returns a [`PublishAction`] for the given metadata, or an error.
-    fn partial_message_bytes_from_metadata(
-        &self,
-        metadata: &dyn DynamicMetadata,
-    ) -> Result<Option<Vec<u8>>, PartialMessageError>;
-}
-
-impl<P: Partial> DynamicPartial for P {
-    fn decode_metadata(&self, metadata: &[u8]) -> Result<Box<dyn DynamicMetadata>, PartialMessageError> {
-        Ok(Box::new(P::Metadata::decode(metadata)?))
-    }
-
-    fn metadata(&self) -> &dyn DynamicMetadata {
-        self.metadata()
-    }
-
-    fn partial_message_bytes_from_metadata(
-        &self,
-        metadata: &dyn DynamicMetadata,
-    ) -> Result<Option<Vec<u8>>, PartialMessageError> {
-        let metadata: &dyn Any = metadata;
-        let Some(metadata) = metadata.downcast_ref::<P::Metadata>() else {
-            return Err(PartialMessageError::InvalidFormat)
-        };
-        self.partial_message_bytes_from_metadata(metadata)
-    }
-}
-
-pub trait Metadata: Debug + Send + Sync + Any {
-    fn decode(bytes: &[u8]) -> Result<Self, PartialMessageError>
-    where
-        Self: Sized;
-
-    fn compare(&self, other: &Self) -> Option<Ordering>;
-    // Return the `Metadata` as a byte slice.
-    fn encode(&self) -> Vec<u8>;
-    /// try to Update the `Metadata` with the remote data,
-    /// return true if it was updated.
-    fn update(&mut self, data: &Self) -> Result<bool, PartialMessageError>;
-}
-
-pub(crate) trait DynamicMetadata: Debug + Send + Sync + Any {
+pub trait Metadata: Debug + Send + Sync {
+    /// Return the `Metadata` as a byte slice.
+    fn as_slice(&self) -> &[u8];
     /// try to Update the `Metadata` with the remote data,
     /// return true if it was updated.
     fn update(&mut self, data: &[u8]) -> Result<bool, PartialMessageError>;
-    /// try to Update the `Metadata` with the remote data,
-    /// return true if it was updated.
-    fn update_dynamic(&mut self, data: &dyn DynamicMetadata) -> Result<bool, PartialMessageError>;
-    fn encode(&self) -> Vec<u8>;
 }
 
-impl<M: Metadata> DynamicMetadata for M {
-    fn update(&mut self, metadata: &[u8]) -> Result<bool, PartialMessageError> {
-        self.update(&M::decode(metadata)?)
-    }
-
-    fn update_dynamic(&mut self, metadata: &dyn DynamicMetadata) -> Result<bool, PartialMessageError> {
-        let metadata: &dyn Any = metadata;
-        let Some(metadata) = metadata.downcast_ref::<M>() else {
-            return Err(PartialMessageError::InvalidFormat)
-        };
-        self.update(metadata)
-    }
-
-    fn encode(&self) -> Vec<u8> {
-        self.encode()
-    }
+/// Indicates the action to take for the given metadata.
+pub enum PublishAction {
+    /// The provided input metadata is the same as the output,
+    /// this means we have the same data as the peer.
+    SameMetadata,
+    /// We have nothing to send to the peer, but we need parts from the peer.
+    NothingToSend,
+    /// We have something of interest to this peer, but can not send everything it needs. Send a
+    /// message and associate some new metadata to the peer, representing the remaining need.
+    Send {
+        message: Vec<u8>,
+        metadata: Box<dyn Metadata>,
+    },
 }

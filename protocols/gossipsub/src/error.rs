@@ -91,12 +91,6 @@ impl From<SigningError> for PublishError {
     }
 }
 
-impl From<PartialMessageError> for PublishError {
-    fn from(error: PartialMessageError) -> Self {
-        PublishError::Partial(error)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ValidationError {
     /// The message has an invalid signature,
