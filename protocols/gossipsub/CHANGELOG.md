@@ -1,4 +1,14 @@
 ## 0.50.0
+- Prevent mesh exceeding mesh_n_high.
+  See [PR 6184](https://github.com/libp2p/rust-libp2p/pull/6184)
+
+- Fix underflow when shuffling peers after prunning.
+  See [PR 6183](https://github.com/libp2p/rust-libp2p/pull/6183)
+
+
+- Implement gossipsub 1.3 extensions control message.
+  See [PR 6119](https://github.com/libp2p/rust-libp2p/pull/6119)
+
 - Remove peer penalty for duplicate messages.
   See [PR 6112](https://github.com/libp2p/rust-libp2p/pull/6112)
 
@@ -13,6 +23,12 @@
 
 - Fix incorrect default values in ConfigBuilder
   See [PR 6113](https://github.com/libp2p/rust-libp2p/pull/6113)
+  
+- Remove duplicated config `set_topic_max_transmit_size` method, prefer `max_transmit_size_for_topic`.
+  See [PR 6173](https://github.com/libp2p/rust-libp2p/pull/6173).
+
+- Switch the internal `async-channel` used to dispatch messages from `NetworkBehaviour` to the `ConnectionHandler`
+  with an internal priority queue. See [PR 6175](https://github.com/libp2p/rust-libp2p/pull/6175)
 
 - Switch the internal `async-channel` used to dispatch messages from `NetworkBehaviour` to the `ConnectionHandler`
   with an internal priority queue. See [PR XXXX](https://github.com/libp2p/rust-libp2p/pull/XXXX)
