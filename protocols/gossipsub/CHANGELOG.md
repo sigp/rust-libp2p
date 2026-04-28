@@ -1,5 +1,11 @@
 ## 0.50.0
 
+- Bound IWANT and IDONTWANT `message_ids` at decode time so the codec
+  applies `max_iwant_length` / `max_idontwant_messages` before allocating
+  the full `Vec<MessageId>`. The behaviour-layer `truncate` now acts as a
+  defense-in-depth safety net rather than the only cap.
+  See [PR 578](https://github.com/sigp/rust-libp2p/pull/578)
+
 - Rename metric `topic_msg_sent_bytes` to `topic_msg_last_sent_bytes` for accuracy.
   See [PR 6283](https://github.com/libp2p/rust-libp2p/pull/6283)
 
