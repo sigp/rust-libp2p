@@ -123,11 +123,9 @@ pub struct Config {
     opportunistic_graft_ticks: u64,
     opportunistic_graft_peers: usize,
     gossip_retransimission: u32,
-    max_messages_per_rpc: Option<usize>,
-    max_ihave_length: usize,
-    max_iwant_length: usize,
-    max_ihave_messages: usize,
-    max_idontwant_messages: usize,
+    max_publish_messages: usize,
+    max_control_messages: usize,
+    max_ihave_messages_heartbeat: usize,
     iwant_followup_time: Duration,
     connection_handler_queue_len: usize,
     connection_handler_publish_duration: Duration,
@@ -412,30 +410,16 @@ impl Config {
         self.opportunistic_graft_peers
     }
 
-    /// The maximum number of messages we will process in a given RPC. If this is unset, there is
+    /// The maximum number of publish messages we will process in a given RPC. If this is unset, there is
     /// no limit. The default is None.
-    pub fn max_messages_per_rpc(&self) -> Option<usize> {
-        self.max_messages_per_rpc
+    pub fn max_publish_messages(&self) -> usize {
+        self.max_publish_messages
     }
 
-    /// The maximum number of messages to include in an IHAVE message.
-    /// Also controls the maximum number of IHAVE ids we will accept and request with IWANT from a
-    /// peer within a heartbeat, to protect from IHAVE floods. You should adjust this value from the
-    /// default if your system is pushing more than 5000 messages in GossipSubHistoryGossip
-    /// heartbeats; with the defaults this is 1666 messages/s. The default is 5000.
-    pub fn max_ihave_length(&self) -> usize {
-        self.max_ihave_length
-    }
-
-    /// The maximum number of `message_ids` that we accept in a single IWANT message.
-    pub fn max_iwant_length(&self) -> usize {
-        self.max_iwant_length
-    }
-
-    /// GossipSubMaxIHaveMessages is the maximum number of IHAVE messages to accept from a peer
-    /// within a heartbeat.
-    pub fn max_ihave_messages(&self) -> usize {
-        self.max_ihave_messages
+    /// The maximum number of control messages per type we will process in a given RPC. If this is unset, there is
+    /// no limit. The default is None.
+    pub fn max_control_messages(&self) -> usize {
+        self.max_control_messages
     }
 
     /// Time to wait for a message requested through IWANT following an IHAVE advertisement.
@@ -484,9 +468,10 @@ impl Config {
         self.idontwant_on_publish
     }
 
-    /// The maximum number of `message_ids` that we accept in a single IDONTWANT message.
-    pub fn max_idontwant_messages(&self) -> usize {
-        self.max_idontwant_messages
+    /// GossipSubMaxIHaveMessages is the maximum number of IHAVE messages to accept from a peer
+    /// within a heartbeat.
+    pub fn max_ihave_messages_heartbeat(&self) -> usize {
+        self.max_ihave_messages_heartbeat
     }
 }
 
@@ -548,16 +533,14 @@ impl Default for ConfigBuilder {
                 opportunistic_graft_ticks: 60,
                 opportunistic_graft_peers: 2,
                 gossip_retransimission: 3,
-                max_messages_per_rpc: None,
-                max_ihave_length: 5000,
-                max_iwant_length: 5000,
-                max_ihave_messages: 10,
+                max_publish_messages: 5000,
+                max_control_messages: 5000,
+                max_ihave_messages_heartbeat: 10,
                 iwant_followup_time: Duration::from_secs(3),
                 connection_handler_queue_len: 5000,
                 connection_handler_publish_duration: Duration::from_secs(5),
                 connection_handler_forward_duration: Duration::from_secs(1),
                 idontwant_message_size_threshold: 1000,
-                max_idontwant_messages: 1000,
                 idontwant_on_publish: false,
                 topic_configuration: TopicConfigs::default(),
             },
@@ -969,27 +952,17 @@ impl ConfigBuilder {
         self
     }
 
-    /// The maximum number of messages we will process in a given RPC. If this is unset, there is
-    /// no limit. The default is None.
-    pub fn max_messages_per_rpc(&mut self, max: Option<usize>) -> &mut Self {
-        self.config.max_messages_per_rpc = max;
-        self
-    }
-
-    /// The maximum number of messages to include in an IHAVE message.
-    /// Also controls the maximum number of IHAVE ids we will accept and request with IWANT from a
-    /// peer within a heartbeat, to protect from IHAVE floods. You should adjust this value from the
-    /// default if your system is pushing more than 5000 messages in GossipSubHistoryGossip
-    /// heartbeats; with the defaults this is 1666 messages/s. The default is 5000.
-    pub fn max_ihave_length(&mut self, max_ihave_length: usize) -> &mut Self {
-        self.config.max_ihave_length = max_ihave_length;
+    /// The maximum number of messages we will process in a given RPC. The default is 5000.
+    pub fn max_messages_per_rpc(&mut self, max: usize) -> &mut Self {
+        self.config.max_publish_messages = max;
+        self.config.protocol.max_publish_messages = max;
         self
     }
 
     /// GossipSubMaxIHaveMessages is the maximum number of IHAVE messages to accept from a peer
     /// within a heartbeat.
-    pub fn max_ihave_messages(&mut self, max_ihave_messages: usize) -> &mut Self {
-        self.config.max_ihave_messages = max_ihave_messages;
+    pub fn max_ihave_messages_heartbeat(&mut self, max_ihave_messages: usize) -> &mut Self {
+        self.config.max_ihave_messages_heartbeat = max_ihave_messages;
         self
     }
 
@@ -1063,17 +1036,10 @@ impl ConfigBuilder {
         self
     }
 
-    /// The maximum number of `message_ids` that we accept in a single IDONTWANT message.
-    pub fn max_idontwant_messages(&mut self, size: usize) -> &mut Self {
-        self.config.max_idontwant_messages = size;
-        self.config.protocol.max_idontwant_messages = size;
-        self
-    }
-
-    /// The maximum number of `message_ids` that we accept in a single IWANT message.
-    pub fn max_iwant_messages(&mut self, size: usize) -> &mut Self {
-        self.config.max_iwant_length = size;
-        self.config.protocol.max_iwant_length = size;
+    /// The max number of control messages to decode in a single RPC. The default is 5000.
+    pub fn max_control_messages(&mut self, size: usize) -> &mut Self {
+        self.config.max_control_messages = size;
+        self.config.protocol.max_control_messages = size;
         self
     }
 
@@ -1185,9 +1151,12 @@ impl std::fmt::Debug for Config {
         );
         let _ = builder.field("opportunistic_graft_ticks", &self.opportunistic_graft_ticks);
         let _ = builder.field("opportunistic_graft_peers", &self.opportunistic_graft_peers);
-        let _ = builder.field("max_messages_per_rpc", &self.max_messages_per_rpc);
-        let _ = builder.field("max_ihave_length", &self.max_ihave_length);
-        let _ = builder.field("max_ihave_messages", &self.max_ihave_messages);
+        let _ = builder.field("max_messages_per_rpc", &self.max_publish_messages);
+        let _ = builder.field("max_control_messages", &self.max_control_messages);
+        let _ = builder.field(
+            "max_ihave_messages_heartbeat",
+            &self.max_ihave_messages_heartbeat,
+        );
         let _ = builder.field("iwant_followup_time", &self.iwant_followup_time);
         let _ = builder.field(
             "idontwant_message_size_threshold",

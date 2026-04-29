@@ -1,10 +1,9 @@
 ## 0.50.0
 
-- Bound IWANT and IDONTWANT `message_ids` at decode time so the codec
-  applies `max_iwant_length` / `max_idontwant_messages` before allocating
-  the full `Vec<MessageId>`. The behaviour-layer `truncate` now acts as a
-  defense-in-depth safety net rather than the only cap.
-  See [PR 578](https://github.com/sigp/rust-libp2p/pull/578)
+- Unify gossipsub control-message limits under max_control_messages (replacing per-type control ID caps),
+  and truncate control vectors immediately after RPC decode.
+  rename `max_ihave_messages` to `max_ihave_messages_heartbeat`.
+  See PR XXXX (https://github.com/libp2p/rust-libp2p/pull/XXXX)
 
 - Rename metric `topic_msg_sent_bytes` to `topic_msg_last_sent_bytes` for accuracy.
   See [PR 6283](https://github.com/libp2p/rust-libp2p/pull/6283)

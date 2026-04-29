@@ -72,13 +72,10 @@ pub struct ProtocolConfig {
     pub(crate) default_max_transmit_size: usize,
     /// The max transmit sizes for a topic.
     pub(crate) max_transmit_sizes: HashMap<TopicHash, usize>,
-    /// Cap on `message_ids` decoded per IWANT control message. Mirrored from
-    /// `Config::max_iwant_length` so the codec can bound allocations before
-    /// the full RPC reaches the behaviour layer.
-    pub(crate) max_iwant_length: usize,
-    /// Cap on `message_ids` decoded per IDONTWANT control message. Mirrored
-    /// from `Config::max_idontwant_messages`.
-    pub(crate) max_idontwant_messages: usize,
+    /// The max number of publish messages to decode in a single RPC.
+    pub(crate) max_publish_messages: usize,
+    /// The max number of control messages per type to decode in a single RPC.
+    pub(crate) max_control_messages: usize,
 }
 
 impl Default for ProtocolConfig {
@@ -92,8 +89,8 @@ impl Default for ProtocolConfig {
             ],
             default_max_transmit_size: 65536,
             max_transmit_sizes: HashMap::new(),
-            max_iwant_length: 5000,
-            max_idontwant_messages: 1000,
+            max_publish_messages: 500,
+            max_control_messages: 500,
         }
     }
 }
@@ -148,8 +145,8 @@ where
                     self.default_max_transmit_size,
                     self.validation_mode,
                     self.max_transmit_sizes,
-                    self.max_iwant_length,
-                    self.max_idontwant_messages,
+                    self.max_publish_messages,
+                    self.max_control_messages,
                 ),
             ),
             protocol_id.kind,
@@ -173,8 +170,8 @@ where
                     self.default_max_transmit_size,
                     self.validation_mode,
                     self.max_transmit_sizes,
-                    self.max_iwant_length,
-                    self.max_idontwant_messages,
+                    self.max_publish_messages,
+                    self.max_control_messages,
                 ),
             ),
             protocol_id.kind,
@@ -191,10 +188,10 @@ pub struct GossipsubCodec {
     codec: quick_protobuf_codec::Codec<proto::RPC>,
     /// Maximum transmit sizes per topic, with a default if not specified.
     max_transmit_sizes: HashMap<TopicHash, usize>,
-    /// Cap on `message_ids` decoded per IWANT control message.
-    max_iwant_length: usize,
-    /// Cap on `message_ids` decoded per IDONTWANT control message.
-    max_idontwant_messages: usize,
+    /// The max number of publish messages to decode in a single RPC.
+    max_publish_messages: usize,
+    /// The max number of control messages per type to decode in a single RPC.
+    max_control_messages: usize,
 }
 
 impl GossipsubCodec {
@@ -202,16 +199,16 @@ impl GossipsubCodec {
         max_length: usize,
         validation_mode: ValidationMode,
         max_transmit_sizes: HashMap<TopicHash, usize>,
-        max_iwant_length: usize,
-        max_idontwant_messages: usize,
+        max_publish_messages: usize,
+        max_control_messages: usize,
     ) -> GossipsubCodec {
         let codec = quick_protobuf_codec::Codec::new(max_length);
         GossipsubCodec {
             validation_mode,
             codec,
             max_transmit_sizes,
-            max_iwant_length,
-            max_idontwant_messages,
+            max_publish_messages,
+            max_control_messages,
         }
     }
 
@@ -291,9 +288,19 @@ impl Decoder for GossipsubCodec {
     type Error = quick_protobuf_codec::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let Some(rpc) = self.codec.decode(src)? else {
+        let Some(mut rpc) = self.codec.decode(src)? else {
             return Ok(None);
         };
+
+        // Limit messages
+        rpc.publish.truncate(self.max_publish_messages);
+        let mut control = rpc.control.take().unwrap_or_default();
+        control.ihave.truncate(self.max_control_messages);
+        control.iwant.truncate(self.max_control_messages);
+        control.graft.truncate(self.max_control_messages);
+        control.prune.truncate(self.max_control_messages);
+        control.idontwant.truncate(self.max_control_messages);
+
         // Store valid messages.
         let mut messages = Vec::with_capacity(rpc.publish.len());
         // Store any invalid messages.
@@ -495,96 +502,87 @@ impl Decoder for GossipsubCodec {
 
         let mut control_msgs = Vec::new();
 
-        if let Some(rpc_control) = rpc.control {
-            // Collect the gossipsub control messages
-            let ihave_msgs: Vec<ControlAction> = rpc_control
-                .ihave
-                .into_iter()
-                .map(|ihave| {
-                    ControlAction::IHave(IHave {
-                        topic_hash: TopicHash::from_raw(ihave.topic_id.unwrap_or_default()),
-                        message_ids: ihave
-                            .message_ids
-                            .into_iter()
-                            .map(MessageId::from)
-                            .collect::<Vec<_>>(),
-                    })
+        // Collect the gossipsub control messages
+        let ihave_msgs: Vec<ControlAction> = control
+            .ihave
+            .into_iter()
+            .map(|ihave| {
+                ControlAction::IHave(IHave {
+                    topic_hash: TopicHash::from_raw(ihave.topic_id.unwrap_or_default()),
+                    message_ids: ihave
+                        .message_ids
+                        .into_iter()
+                        .map(MessageId::from)
+                        .collect::<Vec<_>>(),
                 })
-                .collect();
+            })
+            .collect();
+        control_msgs.extend(ihave_msgs);
 
-            let iwant_msgs: Vec<ControlAction> = rpc_control
-                .iwant
-                .into_iter()
-                .map(|iwant| {
-                    ControlAction::IWant(IWant {
-                        message_ids: iwant
-                            .message_ids
-                            .into_iter()
-                            .take(self.max_iwant_length)
-                            .map(MessageId::from)
-                            .collect::<Vec<_>>(),
-                    })
+        let iwant_msgs: Vec<ControlAction> = control
+            .iwant
+            .into_iter()
+            .map(|iwant| {
+                ControlAction::IWant(IWant {
+                    message_ids: iwant
+                        .message_ids
+                        .into_iter()
+                        .map(MessageId::from)
+                        .collect::<Vec<_>>(),
                 })
-                .collect();
+            })
+            .collect();
+        control_msgs.extend(iwant_msgs);
 
-            let graft_msgs: Vec<ControlAction> = rpc_control
-                .graft
-                .into_iter()
-                .map(|graft| {
-                    ControlAction::Graft(Graft {
-                        topic_hash: TopicHash::from_raw(graft.topic_id.unwrap_or_default()),
-                    })
+        let graft_msgs: Vec<ControlAction> = control
+            .graft
+            .into_iter()
+            .map(|graft| {
+                ControlAction::Graft(Graft {
+                    topic_hash: TopicHash::from_raw(graft.topic_id.unwrap_or_default()),
                 })
-                .collect();
+            })
+            .collect();
+        control_msgs.extend(graft_msgs);
 
-            let mut prune_msgs = Vec::new();
-
-            for prune in rpc_control.prune {
-                // filter out invalid peers
-                let peers = prune
-                    .peers
-                    .into_iter()
-                    .filter_map(|info| {
-                        info.peer_id
-                            .as_ref()
-                            .and_then(|id| PeerId::from_bytes(id).ok())
-                            .map(|peer_id|
+        let mut prune_messages = Vec::new();
+        for prune in control.prune {
+            // filter out invalid peers
+            let peers = prune
+                .peers
+                .into_iter()
+                .filter_map(|info| {
+                    info.peer_id
+                        .as_ref()
+                        .and_then(|id| PeerId::from_bytes(id).ok())
+                        .map(|peer_id|
                                     //TODO signedPeerRecord, see https://github.com/libp2p/specs/pull/217
                                     PeerInfo {
                                         peer_id: Some(peer_id),
                                     })
-                    })
-                    .collect::<Vec<PeerInfo>>();
-
-                let topic_hash = TopicHash::from_raw(prune.topic_id.unwrap_or_default());
-                prune_msgs.push(ControlAction::Prune(Prune {
-                    topic_hash,
-                    peers,
-                    backoff: prune.backoff,
-                }));
-            }
-
-            let idontwant_msgs: Vec<ControlAction> = rpc_control
-                .idontwant
-                .into_iter()
-                .map(|idontwant| {
-                    ControlAction::IDontWant(IDontWant {
-                        message_ids: idontwant
-                            .message_ids
-                            .into_iter()
-                            .take(self.max_idontwant_messages)
-                            .map(MessageId::from)
-                            .collect::<Vec<_>>(),
-                    })
                 })
-                .collect();
+                .collect::<Vec<PeerInfo>>();
 
-            control_msgs.extend(ihave_msgs);
-            control_msgs.extend(iwant_msgs);
-            control_msgs.extend(graft_msgs);
-            control_msgs.extend(prune_msgs);
-            control_msgs.extend(idontwant_msgs);
+            let topic_hash = TopicHash::from_raw(prune.topic_id.unwrap_or_default());
+            prune_messages.push(ControlAction::Prune(Prune {
+                topic_hash,
+                peers,
+                backoff: prune.backoff,
+            }));
         }
+        control_msgs.extend(prune_messages);
+
+        let mut idontwant_messages = Vec::new();
+        for idontwant in control.idontwant {
+            idontwant_messages.push(ControlAction::IDontWant(IDontWant {
+                message_ids: idontwant
+                    .message_ids
+                    .into_iter()
+                    .map(MessageId::from)
+                    .collect::<Vec<_>>(),
+            }));
+        }
+        control_msgs.extend(idontwant_messages);
 
         Ok(Some(HandlerEvent::Message {
             rpc: RpcIn {
