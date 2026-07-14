@@ -1519,7 +1519,7 @@ where
 
     /// Handles GRAFT control messages. If subscribed to the topic, adds the peer to mesh, if not,
     /// responds with PRUNE messages.
-    fn handle_graft(&mut self, peer_id: &PeerId, topics: Vec<TopicHash>) {
+    fn handle_graft(&mut self, peer_id: &PeerId, mut topics: Vec<TopicHash>) {
         tracing::debug!(peer=%peer_id, "Handling GRAFT message for peer");
 
         let mut to_prune_topics = HashSet::new();
@@ -1531,16 +1531,19 @@ where
             return;
         };
 
-        // For each topic, if a peer has grafted us, then we necessarily must be in their mesh
-        // and they must be subscribed to the topic. Ensure we have recorded the mapping.
-        for topic in &topics {
-            if connected_peer.topics.insert(topic.clone()) {
-                #[cfg(feature = "metrics")]
-                if let Some(m) = self.metrics.as_mut() {
-                    m.inc_topic_peers(topic);
-                }
+        topics.retain(|topic_hash| {
+            let is_subscribed = connected_peer.topics.contains(topic_hash);
+            if !is_subscribed {
+                // don't do PX when there is an unknown topic to avoid leaking our peers
+                do_px = false;
+                tracing::debug!(
+                    peer=%peer_id,
+                    topic=%topic_hash,
+                   "GRAFT: Received graft for unsubscribed topic from peer"
+                );
             }
-        }
+            is_subscribed
+        });
 
         // we don't GRAFT to/from explicit peers; complain loudly if this happens
         if self.explicit_peers.contains(peer_id) {
