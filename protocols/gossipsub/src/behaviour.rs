@@ -1764,6 +1764,10 @@ where
             .peer_score
             .below_threshold(peer_id, |ts| ts.accept_px_threshold);
         for (topic_hash, px, backoff) in prune_data {
+            if !self.mesh.contains_key(&topic_hash) {
+                tracing::debug!(peer=%peer_id,topic=%topic_hash,"PRUNE: Received prune for unknown topic from peer");
+                continue;
+            }
             if self.remove_peer_from_mesh(peer_id, &topic_hash, backoff, true) {
                 #[cfg(feature = "metrics")]
                 if let Some(m) = self.metrics.as_mut() {
@@ -1771,29 +1775,27 @@ where
                 }
             }
 
-            if self.mesh.contains_key(&topic_hash) {
-                // connect to px peers
-                if !px.is_empty() {
-                    // we ignore PX from peers with insufficient score
-                    if below_threshold {
-                        tracing::debug!(
-                            peer=%peer_id,
-                            %score,
-                            topic=%topic_hash,
-                            "PRUNE: ignoring PX from peer with insufficient score"
-                        );
-                        continue;
-                    }
+            // connect to px peers
+            if !px.is_empty() {
+                // we ignore PX from peers with insufficient score
+                if below_threshold {
+                    tracing::debug!(
+                        peer=%peer_id,
+                        %score,
+                        topic=%topic_hash,
+                        "PRUNE: ignoring PX from peer with insufficient score"
+                    );
+                    continue;
+                }
 
-                    // NOTE: We cannot dial any peers from PX currently as we typically will not
-                    // know their multiaddr. Until SignedRecords are spec'd this
-                    // remains a stub. By default `config.prune_peers()` is set to zero and
-                    // this is skipped. If the user modifies this, this will only be able to
-                    // dial already known peers (from an external discovery mechanism for
-                    // example).
-                    if self.config.prune_peers() > 0 {
-                        self.px_connect(px);
-                    }
+                // NOTE: We cannot dial any peers from PX currently as we typically will not
+                // know their multiaddr. Until SignedRecords are spec'd this
+                // remains a stub. By default `config.prune_peers()` is set to zero and
+                // this is skipped. If the user modifies this, this will only be able to
+                // dial already known peers (from an external discovery mechanism for
+                // example).
+                if self.config.prune_peers() > 0 {
+                    self.px_connect(px);
                 }
             }
         }
