@@ -1,4 +1,8 @@
 ## 0.51.0
+- Act on received IDONTWANT control messages in the `ConnectionHandler`, on the connection's own
+  task, instead of in the behaviour.
+  See [PR XXXX](https://github.com/libp2p/rust-libp2p/pull/XXXX).
+
 - Remove the partial message state of a disconnected peer that never subscribed to a topic, and
   remove the state of a topic once no peer has any.
 - Do not cache or score messages for topics the node is not subscribed to.
