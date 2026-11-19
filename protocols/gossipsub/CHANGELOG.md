@@ -1,4 +1,8 @@
 ## 0.51.0
+- Reconcile cached partial messages for fresh and reconnected recipients when
+  identical data is republished, retaining the cached superset and suppressing
+  redundant transfers to synchronized peers.
+
 - Act on received IDONTWANT control messages in the `ConnectionHandler`, on the connection's own
   task, instead of in the behaviour.
   See [PR XXXX](https://github.com/libp2p/rust-libp2p/pull/XXXX).
