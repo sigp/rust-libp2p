@@ -2118,3 +2118,107 @@ fn test_handle_publish_skips_stale_partial() {
         "Response should serve all cached parts, not the stale subset"
     );
 }
+
+#[test]
+fn test_republish_cached_partial_reconciles_reconnected_mesh_peer() {
+    let topic = TopicHash::from_raw("reconnected-mesh");
+    let peer = PeerId::random();
+    let group_id = [42; 8];
+    let mut state = State::default();
+    state.enable_partials_for_topic(topic.clone(), true);
+    let opts = SubscriptionOpts {
+        requests_partial: true,
+        supports_partial: true,
+    };
+    state.peer_subscribed(&peer, topic.clone(), opts);
+    let mut complete = Bitmap::new(group_id);
+    complete.fill_parts(0xff);
+    assert_eq!(
+        state
+            .handle_publish(topic.clone(), complete.clone(), HashSet::from([peer]))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        state
+            .handle_publish(topic.clone(), complete.clone(), HashSet::from([peer]))
+            .unwrap()
+            .is_empty()
+    );
+
+    state.peer_disconnected(peer);
+    state.peer_subscribed(&peer, topic.clone(), opts);
+    // Ordinary gossip excludes a mesh peer, so it cannot repair an identical
+    // publish that is incorrectly suppressed before per-peer reconciliation.
+    let mesh = HashMap::from([(topic.clone(), BTreeSet::from([peer]))]);
+    assert!(
+        state
+            .heartbeat(&mesh, &HashMap::new(), 10, 1.0, 100)
+            .is_empty()
+    );
+    let actions = state
+        .handle_publish(topic.clone(), complete.clone(), HashSet::from([peer]))
+        .unwrap();
+    let [
+        PublishAction::SendMessage {
+            peer_id,
+            rpc: RpcOut::PartialMessage(message),
+        },
+    ] = actions.as_slice()
+    else {
+        panic!("cached data was not reconciled for the fresh mesh subscription")
+    };
+    assert_eq!(*peer_id, peer);
+    assert_eq!(message.metadata, Some(vec![0xff]));
+    assert_eq!(message.body.as_ref().unwrap()[0], 0xff);
+    assert!(
+        state
+            .handle_publish(topic, complete, HashSet::from([peer]))
+            .unwrap()
+            .is_empty(),
+        "a synchronized peer must still suppress redundant data"
+    );
+}
+
+#[test]
+fn test_stale_republish_keeps_cached_superset_for_a_fresh_peer() {
+    let topic = TopicHash::from_raw("fresh-peer-cached-superset");
+    let old = PeerId::random();
+    let fresh = PeerId::random();
+    let group_id = [43; 8];
+    let mut state = State::default();
+    state.enable_partials_for_topic(topic.clone(), true);
+    let opts = SubscriptionOpts {
+        requests_partial: true,
+        supports_partial: true,
+    };
+    state.peer_subscribed(&old, topic.clone(), opts);
+    let mut complete = Bitmap::new(group_id);
+    complete.fill_parts(0xff);
+    state
+        .handle_publish(topic.clone(), complete, HashSet::from([old]))
+        .unwrap();
+    state.peer_subscribed(&fresh, topic.clone(), opts);
+    let mut stale = Bitmap::new(group_id);
+    stale.fill_parts(0x01);
+    let actions = state
+        .handle_publish(topic, stale, HashSet::from([old, fresh]))
+        .unwrap();
+    let [
+        PublishAction::SendMessage {
+            peer_id,
+            rpc: RpcOut::PartialMessage(message),
+        },
+    ] = actions.as_slice()
+    else {
+        panic!("fresh recipient did not receive the cached superset")
+    };
+    assert_eq!(*peer_id, fresh);
+    assert_eq!(message.metadata, Some(vec![0xff]));
+    assert_eq!(
+        message.body.as_ref().unwrap()[0],
+        0xff,
+        "stale content must not replace the cached superset"
+    );
+}

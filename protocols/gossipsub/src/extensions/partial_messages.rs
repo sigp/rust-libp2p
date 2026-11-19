@@ -501,31 +501,33 @@ impl State {
         let group_id = partial_message.group_id();
         let metadata = partial_message.metadata();
         let cached = topic_partials.partial_messages.entry(group_id.clone());
-        if let Entry::Occupied(cached) = &cached {
-            let mut old_metadata = cached.get().content.metadata();
-            if !old_metadata
+        let updated = match &cached {
+            Entry::Occupied(cached) => cached
+                .get()
+                .content
+                .metadata()
                 .update(metadata.as_slice())
-                .map_err(PublishError::Partial)?
-            {
-                tracing::debug!(
-                    ?metadata,
-                    ?old_metadata,
-                    ?group_id,
-                    ?topic_hash,
-                    "Partial was not updated due to stale data; skipping publish"
-                );
-                // Metadata was not updated, so we do not need to send anything and keep the
-                // previously sent message in cache.
-                return Ok(vec![]);
-            }
-        }
+                .map_err(PublishError::Partial)?,
+            Entry::Vacant(_) => true,
+        };
 
-        // Cache the sent partial before publishing, so the local node retains what it
-        // published even when there are currently no recipients to send it to.
-        let partial_message = &cached.insert_entry(LocalPartial {
-            content: Box::new(partial_message),
-            ttl: DEFAULT_PARTIAL_TTL,
-        });
+        // Unchanged local data can still be new to a fresh or reconnected
+        // recipient. Keep the cached superset and TTL, then reconcile each peer.
+        let cached_message = match cached {
+            Entry::Occupied(mut cached) => {
+                if updated {
+                    cached.insert(LocalPartial {
+                        content: Box::new(partial_message),
+                        ttl: DEFAULT_PARTIAL_TTL,
+                    });
+                }
+                cached.into_mut()
+            }
+            Entry::Vacant(cached) => cached.insert(LocalPartial {
+                content: Box::new(partial_message),
+                ttl: DEFAULT_PARTIAL_TTL,
+            }),
+        };
 
         if recipients.is_empty() {
             tracing::debug!(topic = %topic_hash, "Recipient list for publishing partial message is empty");
@@ -549,7 +551,7 @@ impl State {
                 peer_id,
                 &topic_hash,
                 &group_id,
-                partial_message.get().content.as_ref(),
+                cached_message.content.as_ref(),
                 remote_subscription,
             ) {
                 Some(message @ PublishAction::SendMessage { .. }) => {
